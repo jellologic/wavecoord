@@ -19,6 +19,7 @@ wavecoord runs agents that edit code and push branches. The coordinator is a con
 - The server keeps only sha256 digests in `~/.wavecoord/tokens.json` (mode 600). `wavecoord tokens provision --role agent --host <name>` (alias `tokens issue`) prints a new token once; `--out <file>` writes it to a mode-600 file instead. `WAVECOORD_TOKENS_FILE` overrides the path of the tokens file.
 - Clients read the token from the plugin option `token` (sensitive: stored in the OS credential store, never in `settings.json`), else `WAVECOORD_TOKEN_FILE`, else `~/.wavecoord/token`. Tokens never go in git, in `.claude/wavecoord.json`, in logs, or in `coord/log` events.
 - The launcher copies an agent token to a host over SSH into a mode-600 file. It never passes a token on a command line.
+- On the lead machine, keep the lead token in `~/.wavecoord/token` and each host's agent token in `~/.wavecoord/hosts/<host>.token`. The launcher copies the file of an SSH host to that host's `~/.wavecoord/token`. Workers on a local host (no `ssh`) share the lead's `~/.wavecoord`, so they get `WAVECOORD_TOKEN_FILE=~/.wavecoord/hosts/<host>.token` instead, and the plugin option token is removed from their environment: a local worker never acts with the lead token. Without that file, local workers fall back to `~/.wavecoord/token`.
 
 ## Content
 

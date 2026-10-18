@@ -32,6 +32,22 @@ Environment:
   FAKE_CLAUDE_STDERR=<s>   write <s> as a line to stderr first (like a provider's model warning)
   FAKE_CLAUDE_EXPECT_ENV=<p>  a JSON object {KEY: value}; a null value means KEY must be absent.
                            On a mismatch: print the KEY names to stderr and exit 3 (is_error)
+  FAKE_CLAUDE_MODES=<p>    a JSON file of per-run modes, read at each run (so a test can change it
+                           between runs). The first key that exists wins:
+                             "<task>:resolve"     when the prompt is a resolver brief
+                             "<task>@<provider>"  provider: $FAKE_PROVIDER (set it in a provider env
+                                                  file), else "anthropic"
+                             "<task>", "*"
+                           A mode is an object with any of:
+                             "commit": {"<path>": "<text>", ...}  write the files, one commit
+                             "merge": "<ref>"     as FAKE_CLAUDE_MERGE (before "commit")
+                             "report": {...}      keys merged over the default report
+                             "rate_limit": true   a rejected rate_limit_event, then exit 1
+                             "wait_for": "<path>" wait (at most 120 s) until the file exists
+                             "send": "<text>"     POST /api/messages to the lead as this worker
+                                                  ($WAVECOORD_URL, $WAVECOORD_TOKEN_FILE, $WAVECOORD_AGENT_ID)
+                             "sleep", "exit", "cost"  as the variables above
+  FAKE_CLAUDE_RUNS=<p>     append one JSON line per run: {task, attempt, provider, mode, cwd, branch}
 """
 
 import argparse
@@ -111,7 +127,54 @@ def git_commit(session_id):
     return sha, name
 
 
-def report_for(prompt, session_id):
+def mode_for(prompt):
+    """(key, mode) from FAKE_CLAUDE_MODES, or (None, {})."""
+    path = os.environ.get("FAKE_CLAUDE_MODES")
+    if not path:
+        return None, {}
+    with open(path, encoding="utf-8") as f:
+        modes = json.load(f)
+    task = os.environ.get("WAVECOORD_TASK", "task")
+    provider = os.environ.get("FAKE_PROVIDER") or "anthropic"
+    keys = []
+    if prompt.lstrip().startswith("# Resolve merge conflicts"):
+        keys.append(task + ":resolve")
+    keys += [task + "@" + provider, task, "*"]
+    for k in keys:
+        if k in modes:
+            return k, modes[k]
+    return None, {}
+
+
+def send_to_lead(text):
+    import urllib.request
+    url = os.environ["WAVECOORD_URL"].rstrip("/") + "/api/messages"
+    with open(os.environ["WAVECOORD_TOKEN_FILE"], encoding="utf-8") as f:
+        token = f.read().strip()
+    req = urllib.request.Request(url, data=json.dumps({"to": {"kind": "lead"}, "body": text}).encode("utf-8"),
+                                 method="POST", headers={"Content-Type": "application/json",
+                                                         "Authorization": "Bearer " + token,
+                                                         "X-Wavecoord-Agent": os.environ["WAVECOORD_AGENT_ID"]})
+    with urllib.request.urlopen(req, timeout=10) as r:
+        r.read()
+
+
+def commit_files(files, session_id):
+    env = git_env()
+    for name, text in sorted(files.items()):
+        if os.path.dirname(name):
+            os.makedirs(os.path.dirname(name), exist_ok=True)
+        with open(name, "w", encoding="utf-8") as f:
+            f.write(text)
+        subprocess.run(["git", "add", "--", name], check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", "fake claude: %s (%s)" % (", ".join(sorted(files)), session_id[:8])],
+                   check=True, env=env)
+    return subprocess.run(["git", "rev-parse", "HEAD"], check=True, env=env,
+                          stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+
+
+def report_for(prompt, session_id, mode=None):
+    mode = mode or {}
     path = os.environ.get("FAKE_CLAUDE_REPORT")
     if path:
         with open(path, encoding="utf-8") as f:
@@ -129,8 +192,15 @@ def report_for(prompt, session_id):
         "plan_feedback": "",
         "risks_hit": [],
     }
-    if os.environ.get("FAKE_CLAUDE_MERGE"):
-        rep["commits"].append(git_merge(os.environ["FAKE_CLAUDE_MERGE"]))
+    if mode.get("status"):
+        rep["status"] = mode["status"]
+    merge = mode.get("merge") or os.environ.get("FAKE_CLAUDE_MERGE")
+    if merge:
+        rep["commits"].append(git_merge(merge))
+    if mode.get("commit"):
+        rep["commits"].append(commit_files(mode["commit"], session_id))
+        rep["files"] += sorted(mode["commit"])
+    rep.update(mode.get("report") or {})
     if os.environ.get("FAKE_CLAUDE_COMMIT") == "1":
         sha, name = git_commit(session_id)
         rep["commits"].append(sha)
@@ -175,11 +245,26 @@ def main(argv):
         if env_errors:
             sys.stderr.write("fake claude: unexpected env: %s\n" % ", ".join(sorted(env_errors)))
 
+    mode_key, mode = mode_for(prompt)
+    if os.environ.get("FAKE_CLAUDE_RUNS"):
+        with open(os.environ["FAKE_CLAUDE_RUNS"], "a", encoding="utf-8") as f:
+            f.write(json.dumps({"task": os.environ.get("WAVECOORD_TASK"), "attempt": os.environ.get("WAVECOORD_ATTEMPT"),
+                                "provider": os.environ.get("FAKE_PROVIDER") or "anthropic", "mode": mode_key,
+                                "cwd": os.getcwd(), "branch": os.environ.get("WAVECOORD_BRANCH")}) + "\n")
     started = time.time()
-    if os.environ.get("FAKE_CLAUDE_SLEEP"):
-        time.sleep(float(os.environ["FAKE_CLAUDE_SLEEP"]))
-    exit_code = 3 if env_errors else int(os.environ.get("FAKE_CLAUDE_EXIT", "0"))
-    structured = report_for(prompt, session_id)
+    if mode.get("send"):
+        send_to_lead(mode["send"])
+    if mode.get("wait_for"):
+        end = time.time() + 120
+        while not os.path.exists(mode["wait_for"]) and time.time() < end:
+            time.sleep(0.1)
+    sleep = mode.get("sleep") or os.environ.get("FAKE_CLAUDE_SLEEP")
+    if sleep:
+        time.sleep(float(sleep))
+    exit_code = 3 if env_errors else int(mode.get("exit") or os.environ.get("FAKE_CLAUDE_EXIT", "0"))
+    if mode.get("rate_limit") and not exit_code:
+        exit_code = 1
+    structured = report_for(prompt, session_id, mode)
     text = str(structured.get("summary") or "fake claude done")
     usage = {"input_tokens": len(prompt.split()), "output_tokens": len(text.split()),
              "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
@@ -192,7 +277,7 @@ def main(argv):
         "num_turns": 1,
         "result": text,
         "session_id": session_id,
-        "total_cost_usd": float(os.environ.get("FAKE_CLAUDE_COST", "0")),
+        "total_cost_usd": float(mode.get("cost") or os.environ.get("FAKE_CLAUDE_COST", "0")),
         "usage": usage,
         "modelUsage": {args.model: {"inputTokens": usage["input_tokens"], "outputTokens": usage["output_tokens"],
                                     "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0, "costUSD": 0.0}},
@@ -213,6 +298,9 @@ def main(argv):
         if os.environ.get("FAKE_CLAUDE_EVENTS"):
             with open(os.environ["FAKE_CLAUDE_EVENTS"], encoding="utf-8") as f:
                 lines += [json.loads(l) for l in f if l.strip()]
+        if mode.get("rate_limit"):
+            lines.append({"type": "rate_limit_event", "session_id": session_id,
+                          "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"}})
         lines.append(result)
         for obj in lines:
             out.write(json.dumps(obj) + "\n")

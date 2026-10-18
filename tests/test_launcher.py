@@ -202,6 +202,28 @@ class LocalEndToEnd(LauncherTestCase):
             L.launch(self.opts(attempt=1, no_claim=True, **{"continue": True}))
         self.assertIn("already checked out", str(cm.exception))
 
+    def test_local_host_uses_its_own_agent_token(self):
+        # the lead's token and the local host's agent token share ~/.wavecoord on one machine
+        wc = os.environ["WAVECOORD_HOME"]
+        os.makedirs(os.path.join(wc, "hosts"))
+        with open(os.path.join(wc, "token"), "w") as f:
+            f.write("lead-token\n")
+        host_tok = os.path.join(wc, "hosts", "local.token")
+        with open(host_tok, "w") as f:
+            f.write("agent-token\n")
+        os.environ["CLAUDE_PLUGIN_OPTION_TOKEN"] = "lead-token"
+        dump = os.path.join(self.tmp, "dump.json")
+        os.environ["FAKE_CLAUDE_DUMP"] = dump
+        L = self.launcher()
+        L.launch(self.opts())
+        self.wait_state(L, "t1-1", ("reported", "failed", "timed_out"))
+        env = load(dump)["env"]
+        self.assertEqual(env.get("WAVECOORD_TOKEN_FILE"), host_tok)
+        self.assertNotIn("CLAUDE_PLUGIN_OPTION_TOKEN", env)
+        auth = {r["headers"].get("Authorization") for r in self.coord.requests if r["path"] != "/api/leases"
+                and r["headers"].get("X-Wavecoord-Agent", "").startswith("worker-")}
+        self.assertEqual(auth, {"Bearer agent-token"})  # the wrapper's own posts too
+
     def test_continue_resumes_session(self):
         os.environ["FAKE_CLAUDE_COMMIT"] = "1"
         L = self.launcher()

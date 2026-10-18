@@ -173,6 +173,14 @@ class Launcher(object):
             if not out.get("ok"):
                 raise LauncherError("%s: plugin upload failed: %s" % (h.name, out.get("error")))
 
+    def local_token_file(self, name):
+        """A local host's agent token file (~/.wavecoord/hosts/<name>.token), or None.
+
+        A local host shares ~/.wavecoord/token with the lead's own CLI, so its workers
+        get their agent token by path instead of a copy (security.md, "Tokens")."""
+        p = os.path.join(wc_home(), "hosts", name + ".token")
+        return p if os.path.isfile(p) else None
+
     def ensure_token(self, h, probe):
         """Copy this host's agent token (~/.wavecoord/hosts/<name>.token) when the host lacks it."""
         if h.local:
@@ -274,6 +282,10 @@ class Launcher(object):
                      "lease_id": lease_id, "lease_epoch": epoch, "provider": provider, "provider_fallback": fallback,
                      "provider_profile": self.cfg.profile(provider),
                      "cost_basis": cost_basis(provider, self.cfg.profile(provider))})
+        if h.local:
+            tf = self.local_token_file(name)
+            if tf:
+                spec["token_file"] = tf
         self.ensure_plugin(h, probe)
         self.ensure_token(h, probe)
         self.ensure_tunnel(h, probe)

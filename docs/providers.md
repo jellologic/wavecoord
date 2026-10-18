@@ -74,7 +74,17 @@ Some providers make `claude` print warnings such as `[claude-code:unrecognized_m
 
 `total_cost_usd` is Claude Code's estimate at Anthropic prices. The attempt result and the report post therefore also carry `usage` and `model_usage` (token counts from the final result) and `cost_basis` from the profile.
 
-The wrapper marks a run `throttled` on an `api_retry` with error `rate_limit` or `overloaded`, a rejected `rate_limit_event`, a `StopFailure` hook event, or an error result that names a rate limit or overload. The result and the report post carry `provider`, `throttled`, `throttle` (the reasons) and `next_provider` (the profile after the current one in `provider_fallback`). The launcher does not switch profiles itself; the dispatcher (P4) starts the next attempt with `next_provider`.
+The wrapper marks a run `throttled` on an `api_retry` with error `rate_limit` or `overloaded`, a rejected `rate_limit_event`, a `StopFailure` hook event, or an error result that names a rate limit or overload. The result and the report post carry `provider`, `throttled`, `throttle` (the reasons) and `next_provider` (the profile after the current one in `provider_fallback`). The launcher does not switch profiles itself.
+
+## Fallback
+
+The lead tools do:
+
+- `collect` (the tool, the CLI and the dispatcher loop) starts the next attempt of a task on `next_provider` when an attempt ended throttled and not `reported`. The new attempt is a new branch (`<task>-<n+1>`); its result has `actions: [..., "fallback"]` and the new attempt in `fallback`.
+- `dispatch` and `dispatch_wave` skip a provider for `PROVIDER_BACKOFF_S` (900 s) after a throttled attempt or a `rate_limit` notice that names it, and take the next one of `[exec.provider] + exec.provider_fallback` that a candidate host has. The `reason` of the decision lists the skipped ones (`alt: backed off (...)`). An explicit `overrides.provider` is never skipped.
+- No provider left gives the refusal `rate_limited` (all backed off) or `no_provider`.
+
+`tests/e2e/test_wave.py` runs this flow: the first provider is rate limited, the attempt is dispatched again on the fallback and merges.
 
 ## Known profiles
 

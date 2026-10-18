@@ -93,6 +93,38 @@ class FakeClaudeTest(unittest.TestCase):
             self.assertEqual(rep["files"], ["fake-claude-%s.txt" % SID[:8]])
             self.assertTrue(os.path.isfile(os.path.join(d, rep["files"][0])))
 
+    def test_modes(self):
+        with tempfile.TemporaryDirectory() as d:
+            subprocess.run(["git", "init", "-q", d], check=True)
+            modes = os.path.join(d, ".modes.json")
+            runs = os.path.join(d, ".runs.jsonl")
+            with open(modes, "w") as f:
+                json.dump({"t1": {"commit": {"a/x.txt": "x\n", "b.txt": "b\n"},
+                                  "report": {"proposals": [{"kind": "split", "summary": "split t1"}]}},
+                           "t1@alt": {"rate_limit": True},
+                           "t1:resolve": {"status": "blocked"}}, f)
+            env = {"FAKE_CLAUDE_MODES": modes, "FAKE_CLAUDE_RUNS": runs, "WAVECOORD_TASK": "t1",
+                   "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
+                   "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
+            p = run(["-p", "--output-format", "stream-json", "--session-id", SID], cwd=d, env=env)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            rep = json.loads(p.stdout.splitlines()[-1])["structured_output"]
+            self.assertEqual(js.validate(rep, report_schema()), [])
+            self.assertEqual((rep["files"], len(rep["commits"])), (["a/x.txt", "b.txt"], 1))
+            self.assertEqual(rep["proposals"][0]["summary"], "split t1")
+            # the provider of the env file picks the rate-limited mode
+            p = run(["-p", "--output-format", "stream-json"], cwd=d, env=dict(env, FAKE_PROVIDER="alt"))
+            self.assertEqual(p.returncode, 1)
+            lines = [json.loads(l) for l in p.stdout.splitlines()]
+            self.assertEqual(lines[-2]["type"], "rate_limit_event")
+            self.assertTrue(lines[-1]["is_error"])
+            # a resolver brief picks the :resolve mode
+            p = run(["-p", "--output-format", "json"], stdin="# Resolve merge conflicts: task t1, attempt 1\n",
+                    cwd=d, env=env)
+            self.assertEqual(json.loads(p.stdout)["structured_output"]["status"], "blocked")
+            with open(runs) as f:
+                self.assertEqual([json.loads(l)["mode"] for l in f], ["t1", "t1@alt", "t1:resolve"])
+
 
 if __name__ == "__main__":
     unittest.main()
