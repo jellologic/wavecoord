@@ -1,0 +1,8 @@
+{
+  "branch": "plan/3",
+  "commit": "4f1c2a9e0b7d",
+  "pr": "https://example.invalid/pull/12",
+  "files": [
+    "plan/tasks/api-auth.md"
+  ]
+}

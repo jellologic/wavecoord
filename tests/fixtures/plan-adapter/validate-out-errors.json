@@ -1,0 +1,6 @@
+{
+  "ok": false,
+  "errors": [
+    "api-auth.md: needs unknown task session-store"
+  ]
+}

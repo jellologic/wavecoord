@@ -1,0 +1,18 @@
+{
+  "branch": null,
+  "edits": [
+    {
+      "op": "replace",
+      "id": "api-auth",
+      "anchor": "budget_usd: 5",
+      "text": "budget_usd: 8"
+    },
+    {
+      "op": "insert_after",
+      "id": "api-auth",
+      "anchor": "## Notes\n",
+      "text": "Raised the budget after attempt 1.\n",
+      "occurrence": 1
+    }
+  ]
+}

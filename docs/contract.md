@@ -2,7 +2,7 @@
 
 This page is the contract between the wavecoord server and its clients: the worker launcher, the Claude Code hooks, the lead's MCP tools, the channel bridge and any UI. The schemas in `schemas/` and the examples in `tests/fixtures/` are part of the contract. Change them together, in one PR.
 
-Status: P1. The server (`wavecoord serve`), the log, the cache, REST, SSE and the MCP tools of section 8 exist. Plan, dispatch, resolve and refinery tools answer `isError` until P4. P5 adds the lead feedback paths (`events --for lead`, the inbox injection for the lead, `wavecoord channel`) and the watchdog; see `feedback.md`.
+Status: P1. The server (`wavecoord serve`), the log, the cache, REST, SSE and the MCP tools of section 8 exist. P4 adds the lead tools (plan, dispatch, collect, conflicts, resolve, refinery; section 8, `adapters.md` and `launcher.md`). P5 adds the lead feedback paths (`events --for lead`, the inbox injection for the lead, `wavecoord channel`) and the watchdog; see `feedback.md`.
 
 ## 1. Model in one paragraph
 
@@ -105,6 +105,9 @@ Full rules in `security.md`. In short:
 | `SSE_PING_S` | 15 | SSE keep-alive comment interval |
 | `CLIENT_TIMEOUT_S` | 3 | Maximum time a hook or CLI call waits for the server |
 | `WATCHDOG_S` | 60 | Watchdog check interval; 0 turns it off |
+| `PROVIDER_BACKOFF_S` | 900 | A provider with a throttled attempt or a `rate_limit` notice within this time is skipped by dispatch |
+| `PLAN_FETCH_S` | 15 | The lead tools fetch `origin` at most once per this time to read the plan |
+| `MAX_RESOLVES` | 2 | Resolver runs that `auto_resolve` starts for one conflict |
 | `WATCHDOG_NUDGE_S` | 1200 | An active lease with no activity for this time gets one nudge message |
 | `WATCHDOG_STALE_S` | 600 | With no activity this long after the nudge, the watchdog logs `lease.stale` |
 
@@ -124,15 +127,18 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `GET /api/leases`, `GET /api/tasks/<task>/lease` | read, gate | Current leases; `last_epoch` per task |
 | `POST /api/leases/<id>/release` | agent (own), ui (stale only), lead | Release |
 | `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease), lead | Add (`reservation_request`, or `{lease_id, reservations: [{glob, mode}]}` for several) or remove reservations |
-| `GET /api/conflicts?globs=&lease_id=` | read | Overlap check without reserving |
+| `GET /api/conflicts?globs=&lease_id=` | read | Overlap check without reserving; `?full=1` gives the `conflicts` tool answer (section 8) |
 | `POST /api/check` | agent, lead | Path check for the hooks and the git guards (`check_request`, `check_response`). A violation is `foreign_exclusive` (inside an exclusive glob of another non-released lease), `outside_lease` (the caller holds an active lease and the path matches none of its globs) or `stale_epoch` (the given epoch is not the current epoch of the task). Reads only; logs nothing |
 | `POST /api/messages`, `GET /api/inbox?agent=`, `POST /api/messages/<id>/ack` | see section 4 | Messages |
-| `GET /api/plan/ready`, `GET /api/plan/tasks/<id>`, `GET /api/plan/graph` | read | Through the plan adapter (`adapters.md`) |
-| `POST /api/dispatch` | lead | Start attempts for tasks (one or a wave) |
+| `GET /api/plan/ready`, `GET /api/plan/tasks/<id>`, `GET /api/plan/graph`, `POST /api/plan/validate` | read | Through the plan adapter (`adapters.md`); the same answers as the tools of section 8 |
+| `POST /api/plan/edit` | lead | `{edits, branch?, title?, body?}`: the `plan_edit` tool |
+| `POST /api/dispatch` | lead | `{task, host?, overrides?, dry_run?}` (one task) or `{wave: true, tasks?, dry_run?}` |
+| `POST /api/collect` | lead | `{dry_run?, attempt?}`: the `collect` tool |
+| `POST /api/attempts/<task>/<n>/end` | lead | `{state, pr_url?, pr_error?, conflicts?, ...}`: the client's final view of an attempt, logged as `attempt.end` |
 | `GET /api/attempts`, `GET /api/attempts/<task>/<n>` | read | Attempts with their reports |
 | `POST /api/attempts/<task>/<n>/report` | agent (own), lead | Post the report (`report_request`; the report is validated against `report.schema.json`). The launcher stats (cost basis, usage, provider, throttling, push, PR) are kept on the attempt |
-| `POST /api/resolve` | lead | Start a resolver attempt for a conflict |
-| `GET /api/refinery`, `POST /api/refinery/merge` | read / lead | Merge queue status; merge a parked attempt through `merge_cmd` |
+| `POST /api/resolve` | lead | `{attempt?, branch?, conflict?, dry_run?}`: start a resolver attempt |
+| `GET /api/refinery`, `POST /api/refinery/merge` | read / lead | Merge queue status; `{pr?, approved_protected?}` merges through `merge_cmd` |
 | `POST /api/proposals`, `PATCH /api/proposals/<id>` | agent, lead / lead | Plan proposals and their decisions |
 | `POST /api/notify` | agent, lead | A notice for the lead (`notify_request`: CI result, rate limit, `waiting_on_you`, handoff note) |
 | `GET /api/proposals`, `GET /api/requests`, `POST /api/requests` | read / read, ui, lead | List proposals; dispatch requests (`{task, note?}`, logged as `dispatch.request`) |
@@ -147,27 +153,33 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 
 ## 8. MCP and the channel
 
-**Tools.** `POST /mcp` speaks JSON-RPC 2.0 (MCP streamable HTTP, JSON responses only; `GET /mcp` is 405). Methods: `initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`. The plugin's `.mcp.json` (P4) points at `${user_config.coord_url}/mcp` with the token header. Tool results are one `text` item with JSON; failures set `isError: true`.
+**Tools.** `POST /mcp` speaks JSON-RPC 2.0 (MCP streamable HTTP, JSON responses only; `GET /mcp` is 405). Methods: `initialize`, `notifications/initialized`, `ping`, `tools/list`, `tools/call`. The plugin declares this endpoint as the HTTP MCP server `wavecoord` in `plugin.json` (`${user_config.coord_url}/mcp`, header `Authorization: Bearer ${user_config.token}`), so the tool names in a session are `mcp__plugin_wavecoord_wavecoord__<tool>`. Write tools need the `lead` role; read tools take any read role. Tool results are one `text` item with JSON; failures set `isError: true`.
 
-| Tool | Purpose |
-|---|---|
-| `plan_ready` | Ready tasks: all `needs` done, no path overlap with active leases |
-| `plan_get` | One task spec |
-| `plan_graph` | The `needs` graph with states |
-| `plan_edit` | Anchored edit of a spec on a `plan/<n>` branch, then a PR; never the default branch |
-| `dispatch` | Start one attempt of one task on a chosen or placed host |
-| `dispatch_wave` | Start every ready, non-overlapping task up to `wip_cap` |
-| `attempts` | List attempts (filter by task, state) |
-| `attempt_get` | One attempt with its report and stream stats (cost, turns, retries) |
-| `inbox` | Unacked messages for the caller, in the frame of section 4 |
-| `ack` | Ack a message |
-| `send` | Send a message to an agent, a task's holder, the lead or all |
-| `conflicts` | Open conflicts (path overlap, merge-tree conflicts) |
-| `resolve` | Start a resolver attempt for a conflict |
-| `refinery_status` | Merge queue: parked attempts, checks, protected-path holds |
-| `refinery_merge` | Merge one attempt through `merge_cmd` after `check_cmd` |
-| `propose` | Record a plan proposal (from a report or the lead) |
-| `config` | The effective consumer config (no secrets) |
+| Tool | Arguments | Purpose |
+|---|---|---|
+| `plan_ready` | | Ready tasks (`task-spec.md`, "Ready") with `why_not` for the others and `wip {in_flight, cap}` |
+| `plan_get` | `id` | `{spec, state, lease, attempts, proposals}`: the spec, its effective state, and the open proposals of the task |
+| `plan_graph` | | `{nodes, edges, critical_path, critical_weight, funnel_heads, cycles, missing}`; each node has `unblocks` |
+| `plan_validate` | `spec?` | `{ok, errors}` for the whole plan (schema, ids, unknown needs, cycles) or one spec |
+| `plan_edit` | `edits[]`, `branch?`, `title?`, `body?` | Anchored edits of one or more spec files (also `create` of a new spec) in one commit on a new `plan/<n>` branch (or the given `plan/<name>`), pushed, then one PR opened on the lead machine. All edits apply or none. Never the default branch. `{branch, commit, pr, files}` |
+| `dispatch` | `task`, `host?`, `overrides?`, `dry_run?` | Claim the lease (paths `exclusive`, shared_paths `shared`), then start one attempt with the launcher. Refusals have `reason`: `not_ready`, `wip_cap`, `host_needs`, `rate_limited`, `no_provider`, `hosts_full`, `launch_failed` |
+| `dispatch_wave` | `tasks?`, `dry_run?` | Start every ready, non-overlapping task (or the listed ones) up to `wip_cap`; tasks with an open dispatch request first |
+| `collect` | `attempt?`, `dry_run?` | Finished attempts: resend a missing report, open the PR on the lead machine (or record a merge-tree conflict instead), dispatch a resolver when `auto_resolve`, start the next provider after a rate limit, log `attempt.end` |
+| `attempts` | `task?`, `state?` | List attempts |
+| `attempt_get` | `task`, `n` | One attempt with its report and stream stats (cost, turns, retries) |
+| `inbox` | `agent?` | Unacked messages for the caller, in the frame of section 4 |
+| `ack` | `id` | Ack a message |
+| `send` | `to`, `body`, `reply_to?` | Send a message to an agent, a task's holder, the lead or all |
+| `conflicts` | `globs?` | `{conflicts, merge_tree, hot, open, base}`: live reservation overlaps, merge-tree conflicts of pushed attempt branches with the default branch, hot files (changed by two or more branches, or reserved by two or more tasks), open logged conflicts. With `globs`: only the overlap check |
+| `resolve` | `attempt?` (`<task>/<n>`), `branch?`, `conflict?`, `dry_run?` | Dispatch a resolver: a `--continue` run of the same branch (it steals the parked lease: new epoch) with a brief of the conflicting files and both sides' intents |
+| `refinery_status` | | The merge queue in merge order, merged items, `merge_cmd`, `check_cmd`, protected globs |
+| `refinery_merge` | `pr?`, `approved_protected?` | One serialized loop: per PR, fetch and re-check the merge-tree against the current default branch (conflict: block and resolve), protected paths, `check_cmd`, then `merge_cmd` pinned to the checked head sha. Without `pr`: the whole queue |
+| `propose` | `text` (or `summary`), `task?`, `kind?`, `attempt?`, `detail?` | Record a plan proposal (`proposal.new`) |
+| `proposals` | `task?`, `state?` | List proposals |
+| `proposal_decide` | `id`, `decision` (`accepted`, `rejected`, `deferred`, `done`), `note?` | Decide a proposal (`proposal.decide`) |
+| `config` | | The effective consumer config (no secrets) |
+
+**Lead records.** The lead tools log these transitions: `dispatch.decide` (`{host, branch, provider, agent, reason, lease_epoch, request_id?, resolver?}`), `attempt.start` (`{state, host, branch, holder, provider, resolver?, conflict_id?}`), `attempt.end` (`{state, pr_url, pr_error, conflicts, report_status, throttled, next_provider, pushed}`), `conflict.open` (`{conflict: {id, kind: "merge_tree", task, attempt, branch, base, files, state, ts}}`), `conflict.close` (`{conflict_id, by}`), `resolve.start` (`{conflict_id, files, branch, base, agent}`), `resolve.end` (`{conflict_id, ok}`), `refinery.queue` (`{pr, pr_url, branch, sha}`), `refinery.block` (`{..., reason: conflict|protected|check_failed|merge_failed|branch_missing, files?, detail?}`) and `refinery.merge` (`{pr, pr_url, branch, sha, approved_protected}`; the attempt becomes `merged` and its lease is released with reason `merged`). A refinery event is logged only when it changes the item.
 
 **Channel.** A Claude Code channel is an MCP server that Claude Code spawns over **stdio** and that declares `capabilities.experimental["claude/channel"] = {}`. It pushes `notifications/claude/channel` with `{content, meta}`; meta keys must be identifiers. wavecoord ships this as a stdio bridge, `wavecoord channel`, declared as the plugin MCP server `lead-feed` and bound in `plugin.json` `channels`: it follows `GET /api/events` and pushes the lead lines of `feedback.md` (reports, conflicts, notices, proposals, attempt states) with meta `seq`, `kind`, `task`, `attempt`. It follows events only in a lead session. Channels are a research preview: they need a claude.ai login, and a channel outside Anthropic's allowlist needs `--dangerously-load-development-channels plugin:wavecoord@wavecoord` in an interactive session. So the lead also has two fallbacks: a `Monitor` on `wavecoord events --follow`, and the inbox injected by the `UserPromptSubmit` and `PostToolBatch` hooks. The channel never declares `claude/channel/permission`: coordination traffic can never answer a permission prompt.
 

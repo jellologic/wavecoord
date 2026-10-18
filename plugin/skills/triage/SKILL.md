@@ -3,6 +3,7 @@ name: triage
 description: Process wavecoord feedback as the lead. Turns each report, notice, conflict, proposal and inbox message into the next action - merge or queue done work, answer or escalate blocked and needs_decision attempts, retry failed attempts with an adjusted spec or another provider, send conflicts to resolve, and proposals to revise. Use after lead events arrive, when the user asks what the workers need, or on a loop for unattended runs.
 argument-hint: "[--unattended]"
 allowed-tools:
+  - mcp__plugin_wavecoord_wavecoord__proposals
   - mcp__plugin_wavecoord_wavecoord__inbox
   - mcp__plugin_wavecoord_wavecoord__ack
   - mcp__plugin_wavecoord_wavecoord__send

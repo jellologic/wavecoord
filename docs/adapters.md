@@ -8,15 +8,16 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `project` | required | Project name on the server |
 | `log_branch` | `coord/log` | Orphan branch for events |
 | `plan` | `{"adapter": "builtin", "dir": "plan/tasks"}` | Plan store (below) |
-| `hosts[]` | one `local` host, 2 slots, `repo_path` `.` | `name`, `ssh` (destination or alias; absent = local), `slots`, `repo_path`, `env`, `prepare_cmd`, `claude_flags`. See `launcher.md` |
-| `merge_cmd` | `gh pr merge --squash` | How the refinery merges a PR. Receives the PR number as the last argument |
-| `pr_cmd` | `gh pr create --head {branch} --base {base} --title {title} --body-file {body_file}` | How the launcher opens a PR for a pushed attempt branch (below) |
+| `hosts[]` | one `local` host, 2 slots, `repo_path` `.` | `name`, `ssh` (destination or alias; absent = local), `slots`, `repo_path`, `env`, `prepare_cmd`, `claude_flags`, `providers`, `labels`. See `launcher.md` |
+| `merge_cmd` | `gh pr merge {pr} --merge --match-head-commit {sha}` | How the refinery merges a PR (below) |
+| `pr_cmd` | `gh pr create --head {branch} --base {base} --title {title} --body-file {body_file}` | How the lead machine opens a PR for a pushed attempt branch or a plan branch (below) |
 | `check_cmd` | none | Command the refinery runs before a merge |
 | `protected_paths_cmd` | none | Prints protected globs, one per line. A PR that touches one stops in the refinery until the user approves it in the lead session |
 | `providers` | none | Provider profiles for workers: `{<name>: {env_file, models?, cost_basis?}}`. See `providers.md` |
 | `default_provider` | `anthropic` | Profile when the task and the launch name none |
 | `wip_cap` | number of slots | Maximum attempts in flight |
 | `branch_prefix` | `wave` | Attempt branches are `<prefix>/<task>-<attempt>` |
+| `auto_resolve` | `false` | On a merge-tree conflict of a finished attempt, the collector dispatches a resolver by itself (at most `MAX_RESOLVES` per conflict) |
 
 A command is an array (run without a shell, preferred) or a string (run with `sh -c`). Commands run in the consumer repo root unless noted.
 
@@ -24,15 +25,30 @@ A command is an array (run without a shell, preferred) or a string (run with `sh
 
 `builtin` reads `plan.dir/*.md` (see `task-spec.md`). `commands` delegates to the consumer's own tooling, so an existing tracker or ledger stays the source of truth. Each command reads JSON on stdin and writes JSON on stdout; a non-zero exit is an error and stderr is shown to the lead.
 
-| Command | stdin | stdout |
-|---|---|---|
-| `ready` | `{}` | `{"tasks": [<task-spec>, ...]}` in priority order |
-| `get` | `{"id": "<task>"}` | `<task-spec>` |
-| `graph` | `{}` | `{"nodes": [{"id", "state", "phase"}], "edges": [{"from", "to"}]}` (`from` needs `to`) |
-| `validate` | `{"spec": <task-spec>}` | `{"ok": true}` or `{"ok": false, "errors": ["..."]}` |
-| `edit` | `{"id", "anchor", "replace", "branch"}` | `{"branch", "commit", "pr"}`. Must commit to `branch`, never the default branch |
+Each command gets the JSON of the `stdin` column and must print the JSON of the `stdout` column. The message shapes are the definitions of `schemas/plan-adapter.schema.json`; examples are in `tests/fixtures/plan-adapter/`, and `tests/fake-plan/plan` is a working fake adapter.
 
-`<task-spec>` is an object valid against `task-spec.schema.json`. wavecoord validates adapter output against the schema and rejects invalid output.
+| Command | stdin | stdout | Fixtures |
+|---|---|---|---|
+| `ready` | `{}` | `{"tasks": [<task-spec>, ...]}` in priority order | `ready-in.json`, `ready-out.json` |
+| `get` | `{"id": "<task>"}` | `<task-spec>`; exit non-zero for an unknown id | `get-in.json`, `get-out.json` |
+| `graph` | `{}` | `{"nodes": [{"id", "state", "phase", "title"?, "size"?}], "edges": [{"from", "to"}]}`; `from` needs `to` | `graph-in.json`, `graph-out.json` |
+| `validate` | `{}` (the whole plan) or `{"spec": <task-spec>}` | `{"ok": true}` or `{"ok": false, "errors": ["..."]}` | `validate-in.json`, `validate-out*.json` |
+| `edit` | `{"branch": "plan/<name>" or null, "edits": [<edit>, ...]}` | `{"branch", "commit", "pr"?, "files"?}`. Must commit to `branch` (or a new `plan/<n>`), never the default branch | `edit-in.json`, `edit-out.json` |
+
+`<task-spec>` is an object valid against `task-spec.schema.json`; `<edit>` is the `edit` definition of `plan-adapter.schema.json` (the same edits as `plan_edit`). wavecoord validates every output and rejects output that does not match. wavecoord adds what only the coordinator knows: it drops a `ready` task whose effective state is not `todo` or whose paths overlap a live reservation, and it replaces node states with effective states (`task-spec.md`, "Ready"). The critical path and the funnel heads of `plan_graph` are computed by wavecoord from the graph.
+
+## Plan edits (built-in store)
+
+`plan_edit` applies a list of anchored edits to the spec files and opens one PR:
+
+| Field | Meaning |
+|---|---|
+| `op` | `replace` (the anchor by `text`), `insert_before`, `insert_after`, `delete` (the anchor), `create` (a new file with `text`; no anchor) |
+| `id` or `path` | The file: `<plan.dir>/<id>.md`, or `path` relative to `plan.dir` |
+| `anchor` | Exact text. It must occur exactly once, or `occurrence` (from 1) picks one; a missing or ambiguous anchor fails the call |
+| `text` | The new text |
+
+The edits apply in order, in memory. Every changed file must still be a valid spec with `id` equal to its file name. Any failure fails the whole call and writes nothing. Then wavecoord fetches `origin`, adds a detached worktree at `origin/<default>` (or at `origin/<branch>` for an existing plan branch), writes the files, commits once, pushes only `refs/heads/plan/<n>` (`n` is one more than any `plan/<number>` on origin or local), removes the worktree, and runs `pr_cmd` on the lead machine for a new branch. An edit on an existing branch adds a commit to its PR. The default branch is never written.
 
 ## Host prepare hook
 
@@ -41,10 +57,15 @@ A command is an array (run without a shell, preferred) or a string (run with `sh
 ## Hosts
 
 - `repo_path`: a checkout of the consumer repo with an `origin` remote. On a local host a relative path is relative to the consumer repo root; on an ssh host use an absolute or `~/` path. Attempt worktrees go to `<repo_path>/../wt/<task>-<n>`.
-- `env`: extra environment for `prepare_cmd`, the worker and `pr_cmd` on that host. Values expand `~` and `$VAR` on the host, so `"PATH": "$HOME/.local/bin:$PATH"` works.
+- `env`: extra environment for `prepare_cmd` and the worker on that host. Values expand `~` and `$VAR` on the host, so `"PATH": "$HOME/.local/bin:$PATH"` works.
+- `labels`: capabilities of the host (for example `gpu`, `python3`). A task's `exec.host_needs` must all be in the host's labels or be its name; dispatch places the task only on such hosts.
 - `providers`: the provider profiles this host has (default: all). Each profile's `env_file` must exist on the host with mode 600 (`providers.md`).
 - `claude_flags`: appended to every `claude -p` on that host. Put the permission setup for unattended workers here, for example `["--permission-mode", "acceptEdits", "--allowedTools", "Bash(make *),Bash(git add *),Bash(git commit *)"]`.
 
 ## PR command
 
-`pr_cmd` runs on the host, in the attempt worktree, after the launcher pushed the branch and found it merges cleanly. In an array command these placeholders are replaced: `{branch}`, `{base}` (the default branch), `{title}`, `{body_file}`, `{task}`, `{attempt}`. Every command (array or string) also gets `WAVECOORD_BRANCH`, `WAVECOORD_BASE`, `WAVECOORD_PR_TITLE` and `WAVECOORD_PR_BODY_FILE`. The body file starts with the `Task:`, `Attempt:` and `Lease: <task>@<epoch>` lines that the refinery and gate checks read. The last `http(s)://` line of stdout is the PR URL. A failure is recorded as `pr_error`; the attempt stays `reported`, and the branch stays pushed.
+`pr_cmd` runs on the lead machine (where the server and the dispatcher run), in the consumer repo root, never on a worker host. The host only pushes the attempt branch and reports `pr_ready` when the attempt is `reported`, pushed, and its merge-tree against the default branch is clean. `wavecoord collect`, the `collect` tool, the dispatcher loop and `wavecoord launch --wait` then run `pr_cmd`. On a merge-tree conflict no PR is opened: the collector logs `conflict.open` and, with `auto_resolve`, dispatches a resolver. In an array command these placeholders are replaced: `{branch}`, `{base}` (the default branch), `{title}`, `{body_file}`, `{task}`, `{attempt}`. Every command (array or string) also gets `WAVECOORD_BRANCH`, `WAVECOORD_BASE`, `WAVECOORD_PR_TITLE`, `WAVECOORD_PR_BODY_FILE`, `WAVECOORD_TASK` and `WAVECOORD_ATTEMPT`. The body file starts with the `Task:`, `Attempt:` and `Lease: <task>@<epoch>` lines that the refinery and gate checks read. The last `http(s)://` line of stdout is the PR URL. A failure is recorded as `pr_error` on the attempt; the branch stays pushed, and the next collect does not try again (open the PR by hand, or dispatch a `--continue` run).
+
+## Merge command
+
+`merge_cmd` runs on the lead machine in the consumer repo root, one PR at a time (the refinery loop). In an array command these placeholders are replaced: `{pr}` (the PR number, from the last `/pull/<n>` of the URL), `{pr_url}`, `{sha}` (the head the refinery checked), `{branch}`, `{base}`, `{task}`, `{attempt}`. An array with neither `{pr}` nor `{pr_url}` gets the PR number as the last argument. Every command also gets `WAVECOORD_PR`, `WAVECOORD_PR_URL`, `WAVECOORD_SHA`, `WAVECOORD_BRANCH`, `WAVECOORD_BASE`, `WAVECOORD_TASK` and `WAVECOORD_ATTEMPT`. Use the sha (for example `--match-head-commit`), so a push after the checks cannot merge unchecked. `check_cmd` runs before it in a temporary detached worktree of that sha, with the same variables. `protected_paths_cmd` runs in the repo root; the files that the PR changes are matched against its globs.

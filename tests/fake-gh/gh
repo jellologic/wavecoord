@@ -1,0 +1,88 @@
+#!/usr/bin/env python3
+"""A fake `gh` for tests: `gh pr create` and `gh pr merge`, against the repo's origin. Stdlib only.
+
+  gh pr create --head B --base main --title T --body-file F
+      records the PR in $FAKE_GH_STATE and prints https://example.invalid/pull/<n>
+  gh pr merge <n> --merge --match-head-commit <sha>
+      fails unless origin's B is at <sha>; merges B into the base in a temp clone of
+      origin (git merge --no-ff) and pushes the base; fails on a conflict
+
+$FAKE_GH_STATE is a JSON file {"prs": [...], "calls": [...]}."""
+
+import json
+import os
+import shutil
+import subprocess
+import sys
+import tempfile
+
+
+def git(args, cwd, check=True):
+    return subprocess.run(["git"] + args, cwd=cwd, check=check, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                          universal_newlines=True)
+
+
+def load(path):
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (OSError, ValueError):
+        return {"prs": [], "calls": []}
+
+
+def opt(args, name):
+    return args[args.index(name) + 1] if name in args else None
+
+
+def main(argv):
+    path = os.environ["FAKE_GH_STATE"]
+    st = load(path)
+    st["calls"].append(argv)
+    try:
+        if argv[:2] == ["pr", "create"]:
+            body = ""
+            if opt(argv, "--body-file"):
+                with open(opt(argv, "--body-file")) as f:
+                    body = f.read()
+            n = len(st["prs"]) + 1
+            st["prs"].append({"number": n, "head": opt(argv, "--head"), "base": opt(argv, "--base") or "main",
+                              "title": opt(argv, "--title"), "body": body, "state": "open"})
+            print("https://example.invalid/pull/%d" % n)
+            return 0
+        if argv[:2] == ["pr", "merge"]:
+            n = int(argv[2])
+            pr = st["prs"][n - 1]
+            if pr["state"] != "open":
+                sys.stderr.write("PR %d is %s\n" % (n, pr["state"]))
+                return 1
+            origin = git(["remote", "get-url", "origin"], os.getcwd()).stdout.strip()
+            head = git(["ls-remote", origin, "refs/heads/" + pr["head"]], os.getcwd()).stdout.split()
+            want = opt(argv, "--match-head-commit")
+            if want and (not head or head[0] != want):
+                sys.stderr.write("head of %s is not %s\n" % (pr["head"], want))
+                return 1
+            tmp = tempfile.mkdtemp(prefix="fake-gh-")
+            try:
+                git(["clone", "-q", "-b", pr["base"], origin, tmp], os.getcwd())
+                git(["fetch", "-q", "origin", pr["head"]], tmp)
+                p = git(["merge", "--no-ff", "-q", "-m", "Merge pull request #%d" % n, "FETCH_HEAD"], tmp, check=False)
+                if p.returncode != 0:
+                    sys.stderr.write("merge conflict\n")
+                    return 1
+                git(["push", "-q", "origin", "HEAD:" + pr["base"]], tmp)
+            finally:
+                shutil.rmtree(tmp, ignore_errors=True)
+            pr["state"] = "merged"
+            print("merged #%d" % n)
+            return 0
+        sys.stderr.write("fake gh: unsupported %s\n" % " ".join(argv))
+        return 2
+    finally:
+        tmp_path = path + ".tmp"
+        with open(tmp_path, "w") as f:
+            json.dump(st, f, indent=1)
+        os.replace(tmp_path, path)
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

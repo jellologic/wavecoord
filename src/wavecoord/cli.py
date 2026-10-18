@@ -1,9 +1,9 @@
 """The wavecoord command line. Stdlib only, Python >= 3.9.
 
 Implemented: `version`, `status`, `hook`, `guard`, the core commands (serve, log, revert,
-rebuild, events, tokens; see corecli.py), `channel` (see
-docs/feedback.md) and the launcher (launch, hosts, attempts, gc;
-see docs/launcher.md).
+rebuild, events, tokens; see corecli.py), `channel` (see docs/feedback.md), the launcher
+(launch, hosts, attempts, gc; see docs/launcher.md) and the lead tools (dispatch, collect,
+refinery, plan; see leadcli.py).
 """
 
 import argparse
@@ -164,6 +164,8 @@ def build_parser():
     corecli.register(sub)
     from wavecoord.launcher.cli import register as register_launcher
     register_launcher(sub)
+    from wavecoord.leadcli import register as register_lead
+    register_lead(sub)
 
     for name, helptext in STUBS.items():
         sp = sub.add_parser(name, help=helptext + " (not implemented in P0)")

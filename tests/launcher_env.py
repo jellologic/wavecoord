@@ -118,7 +118,8 @@ class LauncherTestCase(unittest.TestCase):
                 "WAVECOORD_NOTIFY_MIN_INTERVAL_S", "WAVECOORD_CLIENT_TIMEOUT_S", "CLAUDE_CONFIG_DIR",
                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
                 "API_TIMEOUT_MS", "ANTHROPIC_DEFAULT_OPUS_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL") + tuple(
-        "FAKE_CLAUDE_" + k for k in ("COMMIT", "STATUS", "REPORT", "EXIT", "SLEEP", "COST", "DUMP", "EVENTS", "STDERR",
+        "FAKE_CLAUDE_" + k for k in ("COMMIT", "COMMIT_FILE", "COMMIT_TEXT", "MERGE", "STATUS", "REPORT", "EXIT", "SLEEP",
+                                      "COST", "DUMP", "EVENTS", "STDERR",
                                       "EXPECT_ENV"))
 
     def setUp(self):
@@ -220,6 +221,9 @@ class LauncherTestCase(unittest.TestCase):
         while time.time() < end:
             r = L.result(aid)
             if r.get("state") in states:
+                if r.get("pr_ready"):  # the client opens the PR, as `wavecoord collect` does
+                    url, err = L.open_pr(r)
+                    r["pr_url"], r["pr_error"] = url, err
                 return r
             time.sleep(0.2)
         self.fail("attempt %s did not reach %s: %s" % (aid, states, r))

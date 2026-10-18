@@ -45,7 +45,8 @@
           "env": {"type": "object", "additionalProperties": {"type": "string"}},
           "prepare_cmd": {"$ref": "#/definitions/cmd"},
           "claude_flags": {"type": "array", "items": {"type": "string"}},
-          "providers": {"type": "array", "items": {"$ref": "#/definitions/provider_name"}, "uniqueItems": true, "description": "Provider profiles this host has; absent means every configured profile"}
+          "providers": {"type": "array", "items": {"$ref": "#/definitions/provider_name"}, "uniqueItems": true, "description": "Provider profiles this host has; absent means every configured profile"},
+          "labels": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 64}, "uniqueItems": true, "description": "Capabilities of the host, matched against exec.host_needs (with the host name)"}
         }
       }
     },
@@ -80,6 +81,7 @@
     "check_cmd": {"$ref": "#/definitions/cmd"},
     "protected_paths_cmd": {"$ref": "#/definitions/cmd"},
     "wip_cap": {"type": "integer", "minimum": 1},
+    "auto_resolve": {"type": "boolean", "default": false, "description": "On a merge-tree conflict, the collector dispatches a resolver attempt by itself"},
     "branch_prefix": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,31}$"}
   },
   "definitions": {
