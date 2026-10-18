@@ -26,6 +26,8 @@ Environment:
   FAKE_CLAUDE_REPORT=<p>   use the JSON file at <p> as structured_output
   FAKE_CLAUDE_EXIT=<n>     exit code (default 0); non-zero gives is_error
   FAKE_CLAUDE_SLEEP=<s>    sleep before the result (seconds, float)
+  FAKE_CLAUDE_MAX_TURNS=<n>  end as a run that hit --max-turns after n turns: result subtype
+                           error_max_turns, is_error, no structured_output, exit 1 (after any commit)
   FAKE_CLAUDE_COST=<usd>   total_cost_usd (default 0.0)
   FAKE_CLAUDE_DUMP=<p>     write {"argv", "env" (WAVECOORD_* and CLAUDE* keys), "cwd", "stdin"} to <p>
   FAKE_CLAUDE_EVENTS=<p>   a JSONL file; each line goes into the stream-json output before the result
@@ -371,6 +373,10 @@ def main(argv):
                                     "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0, "costUSD": 0.0}},
     }
     result["structured_output"] = structured
+    if os.environ.get("FAKE_CLAUDE_MAX_TURNS"):
+        result.update(subtype="error_max_turns", is_error=True, num_turns=int(os.environ["FAKE_CLAUDE_MAX_TURNS"]))
+        result.pop("structured_output")
+        exit_code = 1
 
     out = sys.stdout
     if args.output_format == "stream-json":

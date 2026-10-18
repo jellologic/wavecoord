@@ -689,14 +689,17 @@ def handle(event, raw, env=None):
     except Unreachable:
         out = None
     if client.reached and event != "SessionEnd":
-        try:
-            client.spool_replay()
-        except Exception:
-            pass
+        # The override journal goes first: E3 refuses while it is not empty, the spool has no such gate. Both use
+        # what is left of this run's budget. When the decision used it up, the journal stays for the next
+        # reachable call (edit-fence.md, section 4.4); only an acknowledged entry leaves it.
         try:
             from wavecoord import fence
             if fence.journal_entries(env):
                 fence.journal_flush(client, env, ident.agent)
+        except Exception:
+            pass
+        try:
+            client.spool_replay()
         except Exception:
             pass
     hook.state.save()

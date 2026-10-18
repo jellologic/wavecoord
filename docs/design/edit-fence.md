@@ -215,7 +215,9 @@ So the hook reads the override only from the file. It ignores `WAVECOORD_FENCE_O
 
 Only an OS boundary stops a determined agent: Claude Code sandboxing with a write allowlist (the worktree only) or a separate OS user per worker. Sandboxing would also stop the shell writes outside the worktree. It is a follow-up (open decision D5).
 
-**Logging.** Each write that the override lets through is appended to `$WAVECOORD_HOME/state/fence-override.jsonl` (time, agent, task, epoch, path, point). The next hook run that reaches the coordinator sends `POST /api/notify` with kind `fence_override`, the file's `created`, `until` and `reason`, and the journal entries (up to 200; with more, a count and the first 200). The idempotency key is `fence-override:<nonce>:<offset>`. The server logs it as a `notify.post` event, and the lead sees it in the inbox and on the channel. A worker whose journal is not empty cannot pass E3 until the journal has been sent. The journal is append-only, and an entry leaves it only when the server acknowledges it.
+**Logging.** Each write that the override lets through is appended to `$WAVECOORD_HOME/state/fence-override.jsonl` (time, agent, task, epoch, path, point). The next hook run that reaches the coordinator, and has budget left after its decision, sends `POST /api/notify` with kind `fence_override`, the file's `created`, `until` and `reason`, and the journal entries (up to 200; with more, a count and the first 200). The idempotency key is `fence-override:<nonce>:<offset>`. The server logs it as a `notify.post` event, and the lead sees it in the inbox and on the channel. A worker whose journal is not empty cannot pass E3 until the journal has been sent. The journal is append-only, and an entry leaves it only when the server acknowledges it.
+
+The flush uses what is left of the hook run's budget (section 6), after the decision. It has no budget of its own, because a longer E1 run delays the edit tool call. When the check uses the budget, or a request of the flush gets no answer, the journal stays complete, and a later reachable call sends it. This is safe: E3 refuses while the journal is not empty, and E5 checks every path. The flush runs before the spool replay, because only the journal stops a push (0.1.4).
 
 ## 5. Races
 
@@ -261,7 +263,7 @@ Most of the E1 time is Python start-up and one or two `git` calls. The hook must
 The full plan is in `tests/fence/README.md`. In short:
 
 - **Randomized invariant test.** N simulated agents with random globs, edits, commits, pushes and merges against a real in-process server. Random coordinator kills, delays, 5xx answers, malformed bodies, clock steps, steals, releases and rollbacks. An independent oracle evaluates `ok(W)` against the server state at each decision. The test asserts zero accepted writes with `not ok(W)` (outside a logged override), and full liveness while the coordinator is healthy.
-- **Seeded defects.** Each defect is a patch that the test applies to the code under test. The randomized test, or a named table test, must fail for every defect. The list has the seven defects of the milestone brief and fifteen more that this design found (22 in all). D23 came from a soak run in 0.1.3 (section 11).
+- **Seeded defects.** Each defect is a patch that the test applies to the code under test. The randomized test, or a named table test, must fail for every defect. The list has the seven defects of the milestone brief and fifteen more that this design found (22 in all). D23 came from a soak run in 0.1.3 (section 11). D24 (a task PR that changes the lead config) came with the rule of section 8 in 0.1.4.
 - **Real Claude Code checks.** The `onFailure`, deny precedence and settings precedence facts are checked with a real `claude` and no model call, or listed as a manual release check where that is not possible.
 
 ## 8. Rollout
@@ -273,6 +275,22 @@ The full plan is in `tests/fence/README.md`. In short:
 ```
 
 Each point is `off`, `advisory` (check, warn, count "would deny"; today's P2 behavior) or `enforce`. The launcher reads the config from the default branch and passes it to workers as `WAVECOORD_FENCE`. The worktree's copy of `.claude/wavecoord.json` is writable by the agent, so it can only make the fence stricter. The hook uses the stricter of the two values for each point.
+
+**A config change is a lead decision (0.1.4).** The fence modes and the other lead config change only in a plan or config PR that the lead makes. A task PR must not change them. A task PR is a PR from a worker attempt: its body has the `Task:`, `Attempt:` and `Lease:` lines. Plan PRs (`plan/<n>` branches from `plan_edit`) and lead PRs do not have these lines, so this rule does not apply to them. The branch name is not used, because it does not identify the author. The lead config is:
+
+- in `.claude/wavecoord.json`: `fence`, `merge_cmd`, `check_cmd`, `protected_paths_cmd`, `providers`, and `claude_flags` and `env` of each entry in `hosts` (by `name`);
+- in `.claude/settings.json` and `.claude/settings.local.json`: `hooks`, `disableAllHooks`, `enabledPlugins`, `extraKnownMarketplaces` and `env`;
+- each file `hooks/hooks.json` (the plugin hooks), at any depth.
+
+Predicate: for a task PR with the net diff `D = merge-base(base, head)..head`, the PR passes E5 only if, for each file above in `D`, each listed key has the same JSON value at the merge base and at the head (an absent file is `{}`; a new file that does not parse changes every key), and `D` has no `hooks/hooks.json`. `gate-check` computes this with git (`gatecheck.config_changes`), and each change is a violation of kind `config_change`. The `merge` mode of the config on the base side (the default branch) decides what happens:
+
+| `merge` mode | `gate-check` | refinery |
+|---|---|---|
+| `enforce` | exit 1 | blocks, reason `config_change` |
+| `advisory` | exit 1 | blocks, reason `config_change` |
+| `off` | reports the change on stderr and in `--json` (`config_changes`), exit not changed | merges, with a `fence` note |
+
+The block holds in `advisory` mode too, unlike a path violation. Advisory mode is a way to measure the path fence before it denies. It is not a permission for a worker to change the fence. A worker that changes `fence` to `off` in a merged task PR turns the fence off for the next wave, and no stage of this rollout has that as a lead decision. The detail tells the lead to make the change in a plan or config PR. Seeded defect D24 and the table check `config_change_check` check the rule.
 
 **Stages.** Each stage needs a lead decision and one config PR. Going back is one config PR, or a move of the plugin pin (`docs/rollback.md`).
 
@@ -349,6 +367,7 @@ MCP Agent Mail (`Dicklesworthstone/mcp_agent_mail`) has advisory file reservatio
 - A handler that runs past its budget writes no more journal entries (in a real hook the process is gone; the in-process tests need the rule).
 - The override journal leaves the client only when the answer is a real `fence_override` notice. A 200 with any other body (a proxy, a fault) keeps it. The randomized test found this.
 - An entry leaves the journal only when the acknowledged notice holds it (`fence.acked_entries`). A retry has the same idempotency key as the first send. When the first send was logged and its answer was lost, the server returns the first notice, which does not hold the entries that were added later. The flush then sends again with a new key, so one reachable call sends the whole journal. A soak run found this in 0.1.3 (defect D23).
+- Assertion 5 of the randomized test (the journal is sent after a reachable call) accepts a journal that stays only when the hook run's client got no answer, a request of the flush got no answer, or the budget ended before the flush (`fencesim.flush_deferred`). A flush whose requests all got answers must leave the journal empty. The end of each run still requires one reachable call to send the whole journal. A run under heavy parallel load found this in 0.1.4 (seed 631187689, Python 3.9): the check used the 1.5 s test budget, and the flush had no time left.
 - The refinery runs E4 and E5 before `merge_cmd`: in `merge` enforce mode a `fail` verdict or a non-zero gate blocks the PR (`reason: fence`); in advisory mode the result carries a `fence` note. It calls the coordinator in process (`gatecheck.coord_checker`).
 - Metrics: the server counts checks by source and kind and returns them in `GET /api/live` as `fence` (with the modes). The client-side counts in the heartbeat (unavailable, auth and malformed denies, E1 latency) and the `would_deny` count are not in P6.
 - The mod check scans `~/.claude/plugins`, `~/.claude/dev-mods`, `~/.claude/skills` and `CLAUDE_CODE_PLUGIN_DIRS` for a hooks module that names `tool.check`. It cannot see a mod that a managed policy or another path loads, and it can also flag a mod that is installed but not enabled. It runs only in `edit` enforce mode.

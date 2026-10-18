@@ -13,6 +13,7 @@ Read the report (`summary`, `risks_hit`, `checks_run`) and the stats of `attempt
 | Cause | Signs | Retry |
 |---|---|---|
 | Rate limit or overload | `throttled`, `rate_limit` notice, many `api_retry` | Dispatch on `next_provider` (or the next of `provider_fallback`); no spec change |
+| Turn cap, work pushed | `continue_suggested` on the attempt; the launcher wrote the report (`plan_feedback: "continue: <n> commits pushed"`) | Continue the run (below). It keeps the branch, the session and the lease |
 | Turn cap | turns = `max_turns`, work half done | If the commits are good, a new attempt continues the branch with a higher `max_turns` (plan edit). If the task is bigger than planned, split it (revise) |
 | Budget cap | cost near `budget_usd` | As for the turn cap; never raise the budget over the plan in unattended mode |
 | Timeout | attempt `timed_out` | Long build: raise `timeout_min` (plan edit). Hung tool: retry once as is |
@@ -21,6 +22,14 @@ Read the report (`summary`, `risks_hit`, `checks_run`) and the stats of `attempt
 | Spec gap | The report asks a question or says the spec is wrong | Revise the spec first, then retry |
 | Host problem | Missing tool, disk full, auth failure on one host | Dispatch on another host; tell the user about the host |
 | Bad output | No valid report (synthetic `failed`) | Retry once; on a second one, use another model or provider |
+
+## Continue a run that hit its limit
+
+When `attempt_get` shows `continue_suggested: true`, the worker used its turns (`error_max_turns`) or its token budget after it pushed commits, and wrote no report. Do not start a new attempt: continue the same one.
+
+1. Write a short prompt file. Name the goal in one line, then list the acceptance commands of the spec. Tell the worker: "Your earlier commits are on this branch. Run each acceptance command, fix what fails, commit, and write the report. Do not redo the done work."
+2. Run `wavecoord launch --task <task> --attempt <n> --continue --prompt-file <file>`. Add `--max-turns <m>` when the spec cap was too low (about half of the first cap is usually enough). The run resumes the session on the same host and takes over the parked lease.
+3. A continued run counts as a retry for the limits below. When it also hits the limit, split the task (`/wavecoord:revise`).
 
 ## Retry limits
 

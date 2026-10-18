@@ -419,6 +419,25 @@ class RefineryTest(LeadTestCase):
         out = self.lead.refinery_merge("late/1")
         self.assertEqual(out["results"][0]["state"], "merged")
 
+    def test_refinery_refuses_a_task_pr_that_changes_the_config(self):
+        """A task PR may not change the lead's config (edit-fence.md, section 8): refused in the default advisory
+        merge mode with reason config_change; in mode off it is only reported."""
+        self.run_task("solo", ".claude/wavecoord.json")  # the fake worker overwrites the config
+        r = self.lead.refinery_merge()["results"][0]
+        self.assertEqual((r["state"], r["reason"]), ("blocked", "config_change"))
+        self.assertIn("plan or config PR", r["detail"])
+        self.assertEqual([c for c in self.gh()["calls"] if c[:2] == ["pr", "merge"]], [])
+        cfgp = os.path.join(self.repo, ".claude", "wavecoord.json")
+        with open(cfgp) as f:
+            cfg = json.load(f)
+        cfg["fence"] = "off"
+        with open(cfgp, "w") as f:
+            json.dump(cfg, f)
+        os.utime(cfgp, (time.time() + 5, time.time() + 5))
+        r = self.lead.refinery_merge()["results"][0]
+        self.assertEqual(r["state"], "merged")
+        self.assertIn("config_change (reported, fence merge mode off)", r["fence"])
+
     def test_refinery_refuses_a_stale_lease_line(self):
         """In every fence mode (here the default, advisory), a PR whose Lease: epoch is not the
         attempt's lease is not merged."""

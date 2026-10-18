@@ -48,6 +48,9 @@ You are a wavecoord worker: a non-interactive Claude Code session that works on 
 - Finish with the structured report: status (done, blocked, failed or needs_decision), a summary,
   the commits and files you changed, the checks you ran, whether the acceptance criteria are met,
   questions, plan proposals, plan feedback and the risks you hit.
+- Your turns are limited{turns}. When fewer than 15% of them remain, stop, commit your work and
+  write the report. Batch shell commands into one call where you can, and do not read a file again
+  that you already read.
 """
 
 
@@ -61,10 +64,23 @@ def validate_report(rep):
     return jsonschema_lite.validate(rep, report_schema())
 
 
-def synthetic_report(summary, commits=(), files=()):
+def synthetic_report(summary, commits=(), files=(), plan_feedback=""):
     return {"status": "failed", "summary": (summary or "worker failed")[:4000], "commits": list(commits),
             "files": list(files), "checks_run": [], "acceptance_met": False, "questions": [],
-            "proposals": [], "plan_feedback": "", "risks_hit": []}
+            "proposals": [], "plan_feedback": plan_feedback, "risks_hit": []}
+
+
+CONTINUE_RESULTS = ("error_max_turns",)  # result subtypes of a run that ran out of turns
+CONTINUE_REASONS = ("token_budget",)
+
+
+def continue_cut(reason, subtype):
+    """The limit that cut the run short (a --continue run can finish the work), or None."""
+    if reason in CONTINUE_REASONS:
+        return reason
+    if reason is None and subtype in CONTINUE_RESULTS:
+        return subtype
+    return None
 
 
 def worker_settings(task=None):
@@ -101,8 +117,10 @@ def claude_argv(task, d):
     settings = os.path.join(d, "worker-settings.json")
     write_json(settings, worker_settings(task))
     lease = "%s@%s" % (task["task"], spec.get("lease_epoch")) if spec.get("lease_epoch") else "none"
+    turns = " (at most %s)" % spec["max_turns"] if spec.get("max_turns") not in (None, "") else ""
     rules = WORKER_RULES.format(task=task["task"], attempt=task["attempt"], host=task["host"], lease=lease,
-                                worktree=task["worktree"], branch=task["branch"], default=task["default_branch"])
+                                worktree=task["worktree"], branch=task["branch"], default=task["default_branch"],
+                                turns=turns)
     argv += ["--settings", settings, "--append-system-prompt", rules]
     argv += list(cfg.get("claude_flags") or []) + list(spec.get("claude_flags") or [])
     return argv
@@ -461,6 +479,8 @@ class Attempt(object):
             branch_commits = self.git_lines(["rev-list", "--reverse", base + "..HEAD"]) or []
         res["commits"] = branch_commits
 
+        cut = continue_cut(self.reason, (self.stats.result or {}).get("subtype"))
+        res["continue_suggested"] = bool(cut and state == "failed" and res["pushed"] and branch_commits)
         if state == "reported":
             report = dict(rep)
             res["worker_commits"] = report.get("commits")
@@ -471,7 +491,15 @@ class Attempt(object):
                     t["id"], state, rc, (self.stats.result or {}).get("subtype"),
                     ("; report invalid: " + "; ".join(errs[:3])) if errs and self.reason is None else "")
             files = [f for f in (rep.get("files") or []) if isinstance(f, str) and f] if isinstance(rep, dict) else []
-            report = synthetic_report(why, branch_commits, files)
+            feedback = ""
+            if res["continue_suggested"]:
+                # the run used its turns or tokens before it wrote the report: report the pushed work instead
+                files = files or self.git_lines(["diff", "--name-only", "--no-renames", base + "...HEAD"]) or []
+                why = "attempt %s: the run hit its limit (%s) after %s turns, with %d commit(s) pushed; the worker" \
+                      " wrote no report, so the launcher wrote this one. A --continue run can finish the work." % (
+                          t["id"], cut, res.get("turns") if res.get("turns") is not None else "?", len(branch_commits))
+                feedback = "continue: %d commits pushed" % len(branch_commits)
+            report = synthetic_report(why, branch_commits, files, feedback)
             if isinstance(rep, dict) and not validate_report(rep):
                 res["worker_report"] = rep
         if validate_report(report):  # never post an invalid report
@@ -498,7 +526,7 @@ class Attempt(object):
                 "usage": res["usage"], "model_usage": res["model_usage"], "turns": res["turns"],
                 "session_id": self.stats.session_id or t["session_id"], "agent": t["agent"], "host": t["host"],
                 "provider": self.provider, "throttled": res["throttled"], "throttle": res["throttle"],
-                "next_provider": res["next_provider"],
+                "next_provider": res["next_provider"], "continue_suggested": res["continue_suggested"],
                 "state": state, "branch": self.branch, "pushed": res["pushed"], "pr_url": res.get("pr_url")}
         body.update(fencehost.report_fields(self, res))
         # A --continue run (a resolver) is a new run of the same attempt: its report needs its own key.

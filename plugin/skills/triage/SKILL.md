@@ -51,6 +51,7 @@ Details and the retry rules: [actions.md](actions.md).
 | Report `done` but acceptance not met, or not pushed | Treat as `failed` (below); say why |
 | Report `blocked` | Read the question. Answer with `send` to the task when the spec or the code answers it. Otherwise ask the user |
 | Report `needs_decision` | A design choice: ask the user, unless the spec decides it. Record the answer in the spec (`/wavecoord:revise`), then retry |
+| Report `failed` with `continue_suggested` (the run hit its turn limit or token budget after it pushed commits; `plan_feedback` is `continue: <n> commits pushed`) | Continue the same attempt: `wavecoord launch --task <task> --attempt <n> --continue --prompt-file <f>` with a short prompt that lists the acceptance commands (actions.md). Do not dispatch a new attempt |
 | Report `failed` / attempt `timed_out` / `lost` | Find the cause in the report and the stream stats; retry once with an adjusted spec or another provider (actions.md); after 2 failed attempts, stop and ask the user |
 | Notice `rate_limit` | Do not retry on the same provider now; use `provider_fallback` or wait |
 | Notice `waiting_on_you` | A worker waits for a prompt it cannot answer: tell the user which one |

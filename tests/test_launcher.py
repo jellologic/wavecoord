@@ -213,6 +213,37 @@ class LocalEndToEnd(LauncherTestCase):
         self.assertIn("report invalid", rep["summary"])
         self.assertEqual(jsonschema_lite.validate(rep, report_schema()), [])
 
+    def test_max_turns_after_push_gets_a_launcher_report(self):
+        """A run that hits --max-turns before it writes the report, but committed: the launcher pushes and writes
+        a valid failed report with the commits and files, and marks it continue_suggested (0.1.4)."""
+        os.environ.update(FAKE_CLAUDE_COMMIT="1", FAKE_CLAUDE_COMMIT_FILE="work.txt", FAKE_CLAUDE_MAX_TURNS="12")
+        L = self.launcher()
+        L.launch(self.opts(max_turns=12))
+        r = self.wait_state(L, "t1-1", ("reported", "failed", "timed_out"))
+        self.assertEqual(r["state"], "failed", r)
+        self.assertTrue(r["pushed"])
+        self.assertTrue(r["continue_suggested"])
+        body = self.coord.posts("/api/attempts/t1/1/report")[0]["body"]
+        rep = body["report"]
+        self.assertTrue(body["continue_suggested"])
+        self.assertEqual(jsonschema_lite.validate(rep, report_schema()), [])
+        self.assertEqual((rep["status"], rep["checks_run"], rep["files"]), ("failed", [], ["work.txt"]))
+        self.assertEqual(rep["commits"], r["commits"])
+        self.assertEqual(rep["plan_feedback"], "continue: 1 commits pushed")
+        self.assertIn("error_max_turns", rep["summary"])
+        self.assertNotIn("report invalid", rep["summary"])
+
+    def test_max_turns_without_commits_is_not_continue(self):
+        os.environ["FAKE_CLAUDE_MAX_TURNS"] = "12"
+        L = self.launcher()
+        L.launch(self.opts(max_turns=12))
+        r = self.wait_state(L, "t1-1", ("reported", "failed", "timed_out"))
+        self.assertEqual(r["state"], "failed", r)
+        self.assertFalse(r["continue_suggested"])
+        body = self.coord.posts("/api/attempts/t1/1/report")[0]["body"]
+        self.assertFalse(body["continue_suggested"])
+        self.assertEqual(body["report"]["plan_feedback"], "")
+
     def test_branch_exists(self):
         sh(["git", "push", "-q", "origin", "main:refs/heads/wave/t1-1"], self.seed)
         L = self.launcher()

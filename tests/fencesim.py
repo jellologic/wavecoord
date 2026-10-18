@@ -14,6 +14,7 @@ import random  # noqa: F401
 from fenceworld import (FAULTS, NAMES, TREE, DIRS, TTL_S, World, changed, git, ocovers, synthetic_report,
                         tree_of)
 from wavecoord import fence, gatecheck, hooks
+from wavecoord.client import Unreachable
 from wavecoord.core import ApiError, Ctx, lead_ctx
 
 OUTAGES = ("down", "delay", "trickle", "500", "503", "truncated")
@@ -49,6 +50,42 @@ class Sim(object):
         if rc == 2:
             dec = "deny"
         return dec or "allow", d
+
+    def run_hook_traced(self, event, inp, env, rec):
+        """run_hook, and record the hook run's client (its budget and whether an answer reached it) and each
+        journal flush (whether a request of it got no answer) in `rec` (for assertion 5)."""
+        rec.update(clients=[], flushes=[])
+        real_cls, real_flush = hooks.Client, fence.journal_flush
+
+        class Traced(real_cls):
+            def __init__(s, *a, **k):
+                real_cls.__init__(s, *a, **k)
+                if (a[3] if len(a) > 3 else k.get("deadline")) is not None:
+                    rec["clients"].append(s)
+
+        def flush(client, env, agent):
+            f = {"client": client, "unreachable": False}
+            post = client.post
+
+            def traced_post(*a, **k):
+                try:
+                    return post(*a, **k)
+                except Unreachable:
+                    f["unreachable"] = True
+                    raise
+            client.post = traced_post
+            try:
+                f["left"] = real_flush(client, env, agent)
+                return f["left"]
+            finally:
+                del client.post
+                rec["flushes"].append(f)
+
+        hooks.Client, fence.journal_flush = Traced, flush
+        try:
+            return self.run_hook(event, inp, env)
+        finally:
+            hooks.Client, fence.journal_flush = real_cls, real_flush
 
     def trace_since(self, n):
         return self.w.coord.check_trace[n:]
@@ -145,7 +182,8 @@ class Sim(object):
         loc, rel = w.truth(target, wk.wt)
         inp = {"session_id": "s-%s" % wk.agent, "cwd": wk.wt, "hook_event_name": "PreToolUse",
                "tool_name": self.rng.choice(["Edit", "Write", "MultiEdit"]), "tool_input": {"file_path": target}}
-        dec, out = self.run_hook("PreToolUse", inp, env)
+        rec = {}
+        dec, out = self.run_hook_traced("PreToolUse", inp, env, rec)
         trace = self.trace_since(n0)
         ok, needs = self.ok_write(wk, loc, rel, self.seq_of(trace))
         accepted = dec == "allow"
@@ -166,7 +204,12 @@ class Sim(object):
                 self.run_hook("PostToolUse", pi, env)
         timed_out = "time budget" in json.dumps(out or {})
         if not faulted and trace and not timed_out and self.journal(env):
-            w.fail("override log: journal not sent after a reachable call")
+            why = flush_deferred(rec)
+            if why:
+                self.stats["flush_deferred"] = self.stats.get("flush_deferred", 0) + 1
+            else:
+                w.fail("override log: journal not sent after a reachable call with budget left (%s)" % (
+                    ", ".join("%s=%s" % (k, v) for k, v in sorted(flush_facts(rec).items()))))
 
     def op_shell(self, wk):
         rel = self.pick_rel(wk) if self.rng.random() < 0.8 else "build/x.txt"
@@ -187,8 +230,8 @@ class Sim(object):
         git(wk.wt, "add", "-A")
         if wk.cfg_trick:
             # The trick lowers the worktree copy of the config (D13), which the fence ignores. A commit of it is a
-            # config change of the default branch after the merge, a lead decision (edit-fence.md, section 8)
-            # that this world does not model: its modes stay fixed, so the lead's `ask` expectation holds.
+            # config change, a lead decision (edit-fence.md, section 8): E5 refuses it as `config_change` (D24,
+            # table check `config_change_check`). This world keeps its modes fixed, so it keeps the file out.
             git(wk.wt, "reset", "-q", "--", ".claude/wavecoord.json", check=False)
         from fenceworld import index_of
         staged = changed(tree_of(wk.wt, "HEAD"), index_of(wk.wt))
@@ -609,7 +652,11 @@ class Sim(object):
         inp = {"session_id": "s-%s" % wk.agent, "cwd": wk.wt, "hook_event_name": "PreToolUse", "tool_name": "Edit",
                "tool_input": {"file_path": os.path.join(w.outside, "flush.txt")}}
         env = w.worker_env(wk)
-        hooks.handle("UserPromptSubmit", json.dumps(dict(inp, hook_event_name="UserPromptSubmit", prompt="x")), env)
+        # A later reachable call sends what a run under load left (section 4.4); a few runs cover a client timeout.
+        for _ in range(FINISH_RUNS):
+            hooks.handle("UserPromptSubmit", json.dumps(dict(inp, hook_event_name="UserPromptSubmit", prompt="x")), env)
+            if not fence.journal_entries(env):
+                break
         left = fence.journal_entries(env)
         if left:
             w.fail("override log: %d journal entries left after a reachable call" % len(left))
@@ -621,6 +668,36 @@ class Sim(object):
         missing = w.journaled - sent
         if missing:
             w.fail("override log: %d journaled writes never reached the server" % len(missing))
+
+
+FINISH_RUNS = 3
+
+
+def flush_facts(rec):
+    c = rec["clients"][-1] if rec.get("clients") else None
+    fl = [f for f in rec.get("flushes") or [] if c is not None and f["client"] is c]
+    return {"client": c is not None, "reached": bool(c and c.reached),
+            "budget_left": round(c.deadline.remaining(), 3) if c else None, "flushes": len(fl),
+            "flush_unreachable": bool(fl and fl[-1]["unreachable"]), "left": fl[-1].get("left") if fl else None}
+
+
+def flush_deferred(rec):
+    """Why a hook run that the server saw may leave the journal for a later reachable call, or None (a failure).
+
+    edit-fence.md, section 4.4: only an acknowledged entry leaves the journal, the flush uses what is left of the
+    run's budget, and E3 refuses while the journal is not empty. So the journal may stay when (1) no answer reached
+    the client (the server logged the check, the answer came after the client's timeout), (2) a request of the
+    flush got no answer (the budget ended, or the client timed out), or (3) the budget ended before the flush.
+    A flush whose every request got an answer, or a finished run with budget left that did not flush, fails.
+    """
+    f = flush_facts(rec)
+    if not f["reached"]:
+        return "no answer reached the client"
+    if f["flushes"] and f["flush_unreachable"]:
+        return "a flush request got no answer"
+    if not f["flushes"] and f["budget_left"] is not None and f["budget_left"] <= 0:
+        return "the budget ended before the flush"
+    return None
 
 
 def run(seed, ops=None, ci=None, n_workers=None):

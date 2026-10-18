@@ -30,7 +30,7 @@ Design: `docs/design/edit-fence.md`. These tests come first: the implementation 
 2. **Integration.** Every path in the net diff of every merge has `ok` true at the merge check's `seq`. No exceptions.
 3. **Liveness.** When the coordinator was healthy (no fault active during the call) and `ok(W)` was true, the point accepted `W`. This catches a fence that denies everything.
 4. **Fail-closed.** Every call made while a fault was active ended in a refusal for a worker (E1 to E3, E5), or an allow that the journal recorded under a valid override (E1, E2 only).
-5. **Override log.** Every journal entry reaches the server as a `fence_override` notice after the next reachable call, and E3 refuses while the journal is not empty.
+5. **Override log.** Every journal entry reaches the server as a `fence_override` notice after the next reachable call, and E3 refuses while the journal is not empty. The journal may stay after one hook run only when its client got no answer, a request of the flush got no answer, or the budget ended before the flush (`fencesim.flush_deferred`; design section 4.4). At the end of each run, a reachable call must send the whole journal.
 6. **Lead and other.** Their foreign-exclusive edits get `ask` (or the configured action), and never `deny` from a server fault.
 
 **Runs.** CI runs a fixed list of 50 seeds and 1 new random seed, with up to 300 operations each. The seed is printed on failure. `WAVECOORD_FENCE_SEED=<n>` reruns one seed, and `WAVECOORD_FENCE_RUNS=<n>` runs more (for local soak runs). A failing seed is added to the fixed list with the fix. A soak seed that fails goes into `REGRESSION_SEEDS` with its operation count.
@@ -64,6 +64,7 @@ Each defect is a small patch (a monkeypatch of one function or constant) on the 
 | D21 | An agent token can add a `claim` exclusive reservation `**` | safety |
 | D22 | Exclusive overlap granted in enforce mode | liveness (deadlock of two holders) and a table test |
 | D23 | The override journal flush removes the whole batch on a deduplicated ack (the first send was logged, its answer lost, and the retry with the same key carries more entries) | override log, and the table test `journal_retry_check` (0.1.3) |
+| D24 | A task PR that changes the lead config (`fence`, `merge_cmd`, `providers`, `hosts[].claude_flags`, the settings hook keys, a `hooks/hooks.json`) passes the merge check | the table test `config_change_check` (0.1.4; design section 8) |
 
 ## 3. Table tests (`test_fence_points.py`)
 
@@ -103,7 +104,7 @@ These facts come from the Claude Code hooks reference. The fence depends on them
 | `tests/fenceworld.py` | the world: a real coordinator with a fake clock behind a fault proxy, the repo and worktrees, and the oracle (its own glob matcher `omatch`, its own log fold `OState`, and the inode-based `truth` of a target) |
 | `tests/fencesim.py` | the random operations and the six assertions |
 | `tests/test_fence_invariant.py` | 50 fixed seeds and one new random seed in parallel processes; on a case-sensitive file system 5 more seeds with a case-insensitive probe. `OracleCacheTest`: a cached oracle fold equals a fresh fold, also when a later event list gets the id of a freed one (seeded defect O1 of the oracle, seed 44 after seed 5 in one process) |
-| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 23 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
+| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 24 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
 | `tests/test_fence_points.py` | the failure table, the path table, the output shapes, the override, the modes, the server rules, gate-check, the launcher helpers and the fake-claude hook runs |
 
 `WAVECOORD_FENCE_SEED=<n>` reruns one seed, `WAVECOORD_FENCE_RUNS=<n>` adds n random seeds, and `WAVECOORD_FENCE_OPS=<n>` sets the maximum number of operations per seed (default 80; use 300 for a soak run).

@@ -1,4 +1,4 @@
-"""The 23 seeded defects of tests/fence/README.md, section 2, as patches.
+"""The 24 seeded defects of tests/fence/README.md, section 2, as patches.
 
 Each defect is a small monkeypatch of one function or constant of the code
 under test. `patched(name)` applies one and undoes it on exit. The patches
@@ -125,6 +125,8 @@ DEFECTS = {
             [(fencecore, "grant_conflicts", lambda: (lambda st, items, exclude_lease=None: []))]),
     "D23": ("the override journal flush drops the whole batch on a deduplicated ack",
             [(fence, "acked_entries", lambda: (lambda notice, batch: set(r.get("n") for r in batch)))]),
+    "D24": ("a task PR that changes the lead's config (fence modes, claude_flags, hooks) passes the merge check",
+            [(gatecheck, "config_changes", lambda: (lambda repo, base, head, paths: []))]),
 }
 
 
