@@ -31,7 +31,7 @@ Or in one step on Claude Code 2.1.275 or later:
 | `plugin/` | The plugin: manifest, hooks, skills, `bin/wavecoord` (a stdlib Python zipapp) |
 | `src/wavecoord/` | Source of `bin/wavecoord` |
 | `schemas/` | JSON Schemas: task spec, worker report, event, consumer config, REST bodies |
-| `docs/` | `contract.md`, `task-spec.md`, `adapters.md`, `hooks.md`, `security.md`, `rollback.md` |
-| `tests/` | Unit tests, fixtures, and a fake `claude` |
+| `docs/` | `contract.md`, `task-spec.md`, `adapters.md`, `launcher.md`, `hooks.md`, `security.md`, `rollback.md` |
+| `tests/` | Unit tests, fixtures, a fake `claude` and a fake `ssh` |
 
 See `CONTRIBUTING.md` for the PR and CI flow.
