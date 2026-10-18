@@ -2,7 +2,7 @@
 
 The launcher starts one worker **attempt** of one task on one host, watches it, and turns its end into a pushed branch, a PR and one report. It runs on the lead's machine (the client) and on each host (the host side). Stdlib Python only; the same zipapp is both sides.
 
-Status: P3. The lead tools (P4) call the same code through `POST /api/dispatch`; until then, run it from the CLI.
+Status: P3. The lead tools (P4) will call the same code through `POST /api/dispatch`; until then, run it from the CLI.
 
 ## Commands
 
@@ -98,7 +98,7 @@ Writes carry an `Idempotency-Key` header (as in the hooks client). All calls car
 | end | `POST /api/attempts/<task>/<n>/report` | `{report, cost_usd, cost_basis, usage, model_usage, turns, session_id, agent, host, provider, throttled, throttle, next_provider, state, branch, pushed, pr_url}`; key `report:<task>:<n>` |
 | end | `POST /api/agents/<agent>/finish` | `finish_request`: state done, failed or stopped; pushed; `source: launcher` |
 
-The report body is not yet in `api.schema.json`; P1 adds it there.
+The report body is `report_request` in `api.schema.json`.
 
 ## gc
 

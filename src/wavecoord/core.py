@@ -92,6 +92,11 @@ def effective_config(repo, cfg):
     return out
 
 
+# report_request fields kept in the report.post event besides the report itself
+REPORT_STATS = ("cost_usd", "turns", "session_id", "cost_basis", "usage", "model_usage", "provider",
+                "throttled", "throttle", "next_provider", "pushed", "pr_url")
+
+
 def _schema_check(body, ref):
     if not isinstance(body, dict):
         raise ApiError("bad_request", "the body must be a JSON object")
@@ -904,9 +909,11 @@ class Coord(object):
         return {"now": self.ts(), "request": logged[0]["payload"]["request"]}
 
     def report(self, ctx, task, n, body, idem=None):
+        """Post the attempt's report (report_request); the launcher's stats ride along."""
         self._require(ctx, "agent", "lead")
         if not isinstance(body, dict) or not isinstance(body.get("report"), dict):
             raise ApiError("bad_request", "need {report, cost_usd?, turns?, session_id?}")
+        _schema_check(body, "report_request")
         errs = schemaload.errors(body["report"], "report")
         if errs:
             raise ApiError("bad_request", "invalid report: " + "; ".join(errs[:3]))
@@ -918,7 +925,7 @@ class Coord(object):
                     raise ApiError("not_found", "no attempt %s/%d" % (task, n))
                 self._check_agent(ctx, a["holder"])
             payload = {"report": body["report"]}
-            for k in ("cost_usd", "turns", "session_id"):
+            for k in REPORT_STATS:
                 if body.get(k) is not None:
                     payload[k] = body[k]
             return [self._ev("report.post", payload, task, n)]

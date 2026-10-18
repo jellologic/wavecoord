@@ -1,0 +1,51 @@
+{
+  "report": {
+    "status": "done",
+    "summary": "Added token rotation behind the session-store interface; unit tests pass.",
+    "commits": [
+      "3f9a1c2"
+    ],
+    "files": [
+      "src/auth/rotate.py",
+      "tests/test_rotate.py"
+    ],
+    "checks_run": [
+      {
+        "cmd": "python -m unittest discover -s tests",
+        "result": "Ran 41 tests OK",
+        "ok": true
+      }
+    ],
+    "acceptance_met": true,
+    "questions": [],
+    "proposals": [],
+    "plan_feedback": "",
+    "risks_hit": []
+  },
+  "cost_usd": 0.31,
+  "cost_basis": "anthropic_estimate",
+  "usage": {
+    "input_tokens": 1200,
+    "output_tokens": 340,
+    "cache_creation_input_tokens": 0,
+    "cache_read_input_tokens": 0
+  },
+  "model_usage": {
+    "glm-5.3": {
+      "inputTokens": 1200,
+      "outputTokens": 340
+    }
+  },
+  "turns": 12,
+  "session_id": "5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10",
+  "agent": "worker-api-auth-1-ab12",
+  "host": "build-1",
+  "provider": "zai",
+  "throttled": false,
+  "throttle": [],
+  "next_provider": null,
+  "state": "reported",
+  "branch": "wave/api-auth-1",
+  "pushed": true,
+  "pr_url": "https://example.invalid/pull/12"
+}

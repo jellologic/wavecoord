@@ -247,6 +247,29 @@
         "mode": {"enum": ["exclusive", "shared"]}
       }
     },
+    "report_request": {
+      "description": "POST /api/attempts/<task>/<n>/report. `report` is validated against report.schema.json. The rest are launcher stats; cost_usd is an estimate whose meaning is cost_basis.",
+      "type": "object", "additionalProperties": false, "required": ["report"],
+      "properties": {
+        "report": {"type": "object"},
+        "cost_usd": {"type": ["number", "null"]},
+        "cost_basis": {"enum": ["anthropic", "anthropic_estimate", "provider", "none"]},
+        "usage": {"type": ["object", "null"]},
+        "model_usage": {"type": ["object", "null"]},
+        "turns": {"type": ["integer", "null"], "minimum": 0},
+        "session_id": {"type": ["string", "null"]},
+        "agent": {"$ref": "#/definitions/agent_id"},
+        "host": {"$ref": "#/definitions/host"},
+        "provider": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
+        "throttled": {"type": "boolean"},
+        "throttle": {"type": "array", "items": {"type": "string"}},
+        "next_provider": {"type": ["string", "null"]},
+        "state": {"enum": ["reported", "failed", "timed_out", "stopped", "lost"]},
+        "branch": {"type": "string"},
+        "pushed": {"type": "boolean"},
+        "pr_url": {"type": ["string", "null"]}
+      }
+    },
     "notify_request": {
       "type": "object", "additionalProperties": false, "required": ["kind", "agent", "text"],
       "properties": {
