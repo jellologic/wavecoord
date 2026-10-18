@@ -262,7 +262,8 @@ class State(object):
     def _on_lease_park(self, ev, p, h):
         l = self.lease(p["lease_id"])
         if l and l["state"] in ("active", "stale"):
-            self.put("leases", l["id"], dict(l, state="parked", renewed=ev["ts"], expires_at=None))
+            self.put("leases", l["id"], dict(l, state="parked", renewed=ev["ts"], expires_at=None,
+                                             reason=p.get("reason")))
 
     def _on_lease_release(self, ev, p, h):
         self._end_lease(p["lease_id"], ev["ts"], p.get("reason"), p.get("by"))

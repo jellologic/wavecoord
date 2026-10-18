@@ -23,6 +23,7 @@ from wavecoord.store import REVERTIBLE, State, Store, fold
 
 RESERVED_IDS = ("lead", "ui")
 READ_ROLES = ("agent", "lead", "ui")
+PARKED_FAILED = "finish:failed"  # the reason of a lease parked by a failed run with pushed commits
 CONFIG_REL_PATH = os.path.join(".claude", "wavecoord.json")
 
 
@@ -653,6 +654,11 @@ class Coord(object):
                 self.renew.pop(l["id"], None)
                 if body["pushed"] and body["state"] == "done":
                     evs.append(self._ev("lease.park", {"lease_id": l["id"]}, l["task"], l["attempt"]))
+                elif body["pushed"] and body["state"] == "failed":
+                    # A failed run with pushed commits keeps its reservations: a --continue run of the
+                    # same attempt resumes the lease, so no other lease can take its paths in between.
+                    evs.append(self._ev("lease.park", {"lease_id": l["id"], "reason": PARKED_FAILED},
+                                        l["task"], l["attempt"]))
                 else:
                     evs.append(self._ev("lease.release", {"lease_id": l["id"], "reason": "finish:" + body["state"],
                                                           "by": agent}, l["task"], l["attempt"]))
@@ -698,9 +704,10 @@ class Coord(object):
         force = bool(body.get("force"))
         if force and ctx.role != "lead":
             raise ApiError("forbidden", "only the lead may force an overlapping grant")
+        resume = bool(body.get("resume"))
         self._check_agent(ctx, holder, host)
-        items = body.get("reservations", [])
-        self._check_reservations(items)
+        given = body.get("reservations", [])
+        self._check_reservations(given)
 
         def build():
             if self.clock_bad:
@@ -716,9 +723,18 @@ class Coord(object):
             if mine is not None and (cur is None or mine["id"] != cur["id"]):
                 raise ApiError("agent_busy", "%s has a %s lease on %s" % (holder, mine["state"], mine["task"]),
                                lease=self.render_lease(mine))
-            if cur is not None and not steal:
+            # A parked lease hands over without a steal: to a --continue run of the same attempt
+            # (`resume`), and, when its run failed, to a newer attempt of the task.
+            takeover = cur is not None and cur["state"] == "parked" and (
+                (resume and cur["attempt"] == attempt) or
+                (cur.get("reason") == PARKED_FAILED and attempt > cur["attempt"]))
+            if cur is not None and not steal and not takeover:
                 raise ApiError("held", "%s has a %s lease (holder %s)" % (task, cur["state"], cur["holder"]),
                                lease=self.render_lease(cur))
+            items = given
+            if not items and cur is not None and cur["attempt"] == attempt:
+                # the same attempt again (a --continue run): it keeps the paths of its earlier lease
+                items = [{"glob": r["glob"], "mode": r["mode"]} for r in fencecore.grant_set(self.state, cur)]
             lid = self.state.next_id("lease")
             last = self.state.last_epoch(task) or 0
             epoch = max(last + 1, int(now * 1000))
@@ -1083,6 +1099,13 @@ class Coord(object):
             raise ApiError("bad_request", "need {state, pr_url?, pr_error?, conflicts?}")
         keep = ("state",) + State.END_KEYS
         self.record(ctx, "attempt.end", {k: body[k] for k in keep if k in body}, task, n, idem)
+        if body["state"] == "abandoned":
+            # an abandoned attempt keeps no lease (a parked one of a failed run included)
+            with self.wlock:
+                _, lease = fencecore.attempt_lease(self.state, task, n)
+            if lease is not None and lease["state"] != "released" and lease["attempt"] == n:
+                self.release(ctx, lease["id"], {"reason": "abandoned"},
+                             idem=None if idem is None else idem + ":release")
         return self.attempt(ctx, task, n)
 
     def _report_fence(self, task, n, paths, epoch):

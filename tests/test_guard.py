@@ -49,7 +49,8 @@ class GuardTest(Base):
             self.assertTrue(hp.endswith("wavecoord-hooks"), hp)
             p = self.commit(env)
             self.assertEqual(p.returncode, 0, p.stderr)
-            self.assertIn("docs/api.md: foreign_exclusive (task api-docs, docs/**)", p.stderr)
+            self.assertIn("docs/api.md: foreign_exclusive (inside docs/**, reserved exclusive by task api-docs", p.stderr)
+            self.assertNotIn("None", p.stderr)
             self.assertIn("advisory only", p.stderr)
             chk = fc.find("POST", "/api/check")
             self.assertEqual(len(chk), 1)
@@ -126,6 +127,21 @@ class GuardTest(Base):
 def _get(cwd, key):
     p = subprocess.run(["git", "config", "--get", key], cwd=cwd, stdout=subprocess.PIPE, universal_newlines=True)
     return p.stdout.strip() if p.returncode == 0 else None
+
+
+class ViolationLineTest(unittest.TestCase):
+    def test_never_none(self):
+        from wavecoord import fence
+        for kind in ("outside_lease", "foreign_exclusive", "stale_epoch", "no_lease", "other"):
+            for v in ({"path": "a/b", "kind": kind},
+                      {"path": "a/b", "kind": kind, "task": "t1", "glob": None, "lease_id": None, "holder": None},
+                      {"path": "a/b", "kind": kind, "task": "t1", "glob": "a/**", "lease_id": 7, "holder": "w"}):
+                line = fence.violation_line(v)
+                self.assertNotIn("None", line, (v, line))
+                self.assertTrue(line.startswith("a/b: " + kind), line)
+        self.assertEqual(fence.violation_line({"path": "ci.md", "kind": "outside_lease", "task": "M1", "lease_id": 3,
+                                               "glob": None}),
+                         "ci.md: outside_lease (no reservation of your lease #3 of task M1 covers it)")
 
 
 if __name__ == "__main__":

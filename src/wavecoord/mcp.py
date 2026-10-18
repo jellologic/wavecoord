@@ -66,7 +66,7 @@ def _propose(c, ctx, a):
 _BOOL = {"type": "boolean"}
 _ARR = {"type": "array", "items": _STR}
 _OVERRIDES = _obj({"model": _STR, "fallback_model": _STR, "effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
-                   "max_turns": _INT, "budget_usd": {"type": "number"}, "timeout_min": _INT, "provider": _STR,
+                   "max_turns": _INT, "budget_usd": {"type": "number"}, "max_tokens": _INT, "timeout_min": _INT, "provider": _STR,
                    "provider_fallback": _ARR, "prompt": _STR, "claude_flags": _ARR,
                    "force": {"type": "boolean", "description": "dispatch even when the task is not ready"}})
 _EDIT = _obj({"op": {"enum": ["replace", "insert_before", "insert_after", "delete", "create"]},

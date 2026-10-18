@@ -2,6 +2,16 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
+## 0.1.2
+
+### Fixed
+
+- **`--continue` lost the lease paths.** A `wavecoord launch --task <t> --continue` run without `--spec` claimed a new lease with no reservations, because the first run's lease was released on `finish: failed`. So the git guard and the edit fence reported every path as `outside_lease`, also the paths of the task. Now the launcher keeps the reservations of each run in the client index and claims them again on `--continue`; the claim sends `resume`; and a claim of the same attempt with no reservations keeps the paths of the attempt's current lease.
+- **A failed run with pushed commits parks its lease** (reason `finish:failed`) instead of releasing it, so its reservations stay held until the `--continue` run takes them over (a `resume` claim: new agent, new epoch, same paths) and no other lease can take the paths in between. A newer attempt of the task takes over such a lease without a steal, and the lead does not count it as review. `attempt.end` with state `abandoned` releases the attempt's lease. A run without pushed commits, or a stopped run, still releases it.
+- **`install-server` over a running launchd unit.** The reinstall ran `launchctl bootstrap` while the old job still exited, got `Bootstrap failed: 5: Input/output error` and left the server down. Now it runs `launchctl bootout` (a job that is not loaded is fine), waits until `launchctl print` no longer finds the job (at most 15 s), then bootstraps; after an exit 5 it boots out and waits again, and retries the bootstrap once. On Linux it runs `systemctl --user daemon-reload`, `enable` and `restart` as before; a failure of any of them is an error.
+- **No dollar budget for a `cost_basis: none` provider.** `total_cost_usd` is an Anthropic-priced estimate there, so the launcher no longer passes `--max-budget-usd` for such a profile and `wrapper.log` says that the budget is not enforced. The new optional `exec.max_tokens` (`--max-tokens`) is a token budget: the wrapper counts input, output and cache-write tokens of the main conversation from the stream and interrupts the run at the limit (`reason: token_budget`). Without it, `max_turns` and `timeout_min` limit the run. The result has `tokens`. See `docs/providers.md`.
+- **Guard and gate-check output never print `None`.** A violation line names the lease: `src/x: outside_lease (no reservation of your lease #7 of task t covers it)`. On an `outside_lease` the guard also prints the agent, lease and epoch it checked as. `identity.json` records the lease id.
+
 ## 0.1.1
 
 ### Fixed

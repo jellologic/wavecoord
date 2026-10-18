@@ -115,6 +115,58 @@ class LeaseTest(CoordCase):
         self.assertEqual(self.c.state.lease(lid)["state"], "parked")  # parked never expires
         self.assertEqual([l["id"] for l in self.c.live(LEAD)["drift"]], [lid])
 
+    def test_failed_park_resume_and_takeover(self):
+        """A failed run with pushed commits parks its lease; a --continue run (resume) of the same
+        attempt takes it over with its paths; a newer attempt takes over a failed parked lease;
+        a parked lease of a done run needs the lead (steal)."""
+        a1, a2, a3 = agent_ctx("h1", "w1"), agent_ctx("h1", "w2"), agent_ctx("h1", "w3")
+        l1 = claim(self.c, a1, "t1", "w1", "h1", [("src/**", "exclusive"), ("docs/ci.md", "shared")])["lease"]
+        f = self.c.finish(a1, "w1", {"state": "failed", "pushed": True, "source": "launcher", "seq": 1})
+        self.assertEqual((f["lease"]["state"], f["lease"]["reason"]), ("parked", "finish:failed"))
+        self.assertEqual(len([r for r in self.c.state.live_reservations() if r["lease_id"] == l1["id"]]), 2)
+        with self.assertRaises(ApiError) as e:  # resume without the flag: held
+            claim(self.c, a2, "t1", "w2", "h1")
+        self.assertEqual(e.exception.code, "held")
+        r = claim(self.c, a2, "t1", "w2", "h1", resume=True)
+        l2 = r["lease"]
+        self.assertEqual((l2["attempt"], l2["state"]), (1, "active"))
+        self.assertGreater(l2["epoch"], l1["epoch"])
+        self.assertEqual(sorted((x["glob"], x["mode"]) for x in r["reservations"]),
+                         [("docs/ci.md", "shared"), ("src/**", "exclusive")])
+        self.assertEqual(self.c.state.lease(l1["id"])["state"], "released")
+        self.assertEqual(self.c.check(a2, {"agent": "w2", "paths": ["src/a.py", "docs/ci.md"], "task": "t1",
+                                           "epoch": l2["epoch"], "source": "guard"})["violations"], [])
+        # failed again with commits: a newer attempt takes the parked lease over without a steal
+        self.c.finish(a2, "w2", {"state": "failed", "pushed": True, "source": "launcher", "seq": 1})
+        l3 = claim(self.c, a3, "t1", "w3", "h1", [("src/**", "exclusive")], attempt=2)["lease"]
+        self.assertEqual((l3["attempt"], self.c.state.lease(l2["id"])["state"]), (2, "released"))
+        # a done run's parked lease is review: no takeover by a newer attempt; resume of the same attempt is fine
+        self.c.finish(a3, "w3", {"state": "done", "pushed": True, "source": "launcher", "seq": 1})
+        self.assertIsNone(self.c.state.lease(l3["id"])["reason"])
+        a4 = agent_ctx("h1", "w4")
+        with self.assertRaises(ApiError) as e:
+            claim(self.c, a4, "t1", "w4", "h1", attempt=3)
+        self.assertEqual(e.exception.code, "held")
+        with self.assertRaises(ApiError) as e:  # resume names the attempt of the parked lease
+            claim(self.c, a4, "t1", "w4", "h1", attempt=3, resume=True)
+        self.assertEqual(e.exception.code, "held")
+        l4 = claim(self.c, a4, "t1", "w4", "h1", attempt=2, resume=True)
+        self.assertEqual([x["glob"] for x in l4["reservations"]], ["src/**"])
+
+    def test_failed_without_push_releases_and_abandon_releases(self):
+        a1 = agent_ctx("h1", "w1")
+        claim(self.c, a1, "t1", "w1", "h1", [("src/**", "exclusive")])
+        f = self.c.finish(a1, "w1", {"state": "failed", "pushed": False, "source": "launcher", "seq": 1})
+        self.assertEqual(f["lease"]["state"], "released")
+        a2 = agent_ctx("h1", "w2")
+        l2 = claim(self.c, a2, "t2", "w2", "h1", [("lib/**", "exclusive")])["lease"]
+        self.c.finish(a2, "w2", {"state": "failed", "pushed": True, "source": "launcher", "seq": 1})
+        self.assertEqual(self.c.state.lease(l2["id"])["state"], "parked")
+        self.c.attempt_end(LEAD, "t2", 1, {"state": "abandoned"})
+        self.assertEqual((self.c.state.lease(l2["id"])["state"], self.c.state.lease(l2["id"])["reason"]),
+                         ("released", "abandoned"))
+        self.assertEqual(self.reopen().state.lease(l2["id"])["state"], "released")  # rebuilt from the log
+
     def test_heartbeat_dedup_not_logged(self):
         a = agent_ctx("h1", "w1")
         hb(self.c, a, "w1", "h1", 1)

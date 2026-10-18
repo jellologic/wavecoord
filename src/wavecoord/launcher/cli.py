@@ -36,7 +36,7 @@ def cmd_launch(args):
     try:
         L = _launcher(args)
         opts = {"task": args.task, "host": args.host, "model": args.model, "effort": args.effort,
-                "max_turns": args.max_turns, "max_budget_usd": args.max_budget_usd,
+                "max_turns": args.max_turns, "max_budget_usd": args.max_budget_usd, "max_tokens": args.max_tokens,
                 "fallback_model": args.fallback_model, "timeout_min": args.timeout_min,
                 "continue": args.cont, "wait": args.wait, "attempt": args.attempt,
                 "lease_id": args.lease_id, "lease_epoch": args.lease_epoch, "no_claim": args.no_claim,
@@ -48,7 +48,8 @@ def cmd_launch(args):
             opts["task"] = opts["task"] or spec["id"]
             ex = spec.get("exec") or {}
             for src, dst in (("model", "model"), ("effort", "effort"), ("max_turns", "max_turns"),
-                             ("budget_usd", "max_budget_usd"), ("fallback_model", "fallback_model"),
+                             ("budget_usd", "max_budget_usd"), ("max_tokens", "max_tokens"),
+                             ("fallback_model", "fallback_model"),
                              ("timeout_min", "timeout_min"), ("provider", "provider"),
                              ("provider_fallback", "provider_fallback")):
                 if opts.get(dst) is None and ex.get(src) is not None:
@@ -219,6 +220,7 @@ def register(sub):
     sp.add_argument("--effort")
     sp.add_argument("--max-turns", type=int)
     sp.add_argument("--max-budget-usd", type=float)
+    sp.add_argument("--max-tokens", type=int, help="token budget of the run (exec.max_tokens)")
     sp.add_argument("--fallback-model")
     sp.add_argument("--timeout-min", type=float, help="stop the worker after this time (default 120)")
     sp.add_argument("--attempt", type=int, help="attempt number (default: the next free one)")

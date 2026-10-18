@@ -530,6 +530,27 @@ def describe(kind, rel, violations=(), detail=None):
     return "; ".join(parts) or kind
 
 
+def violation_line(v):
+    """One violation as `<path>: <kind> (<what>)`, for the guard and gate-check output. Never prints None."""
+    k, path = v.get("kind") or "violation", v.get("path") or "?"
+    task, lid, glob, holder = v.get("task"), v.get("lease_id"), v.get("glob"), v.get("holder")
+    lease = ("lease #%s of task %s" % (lid, task)) if lid is not None and task else (
+        ("task %s" % task) if task else None)
+    if k == "outside_lease":
+        why = "no reservation of your %s covers it" % lease if lease else None
+    elif k == "foreign_exclusive":
+        why = ", ".join(x for x in (("inside %s" % glob) if glob else None,
+                                    ("reserved exclusive by task %s" % task) if task else None,
+                                    ("holder %s" % holder) if holder else None) if x) or None
+    elif k == "stale_epoch":
+        why = ("your epoch is not the current epoch of %s" % lease) if lease else None
+    elif k == "no_lease":
+        why = ("you hold no lease on task %s" % task) if task else "you hold no lease"
+    else:
+        why = ", ".join(x for x in (("task %s" % task) if task else None, glob) if x) or None
+    return "%s: %s%s" % (path, k, (" (%s)" % why) if why else "")
+
+
 def _epoch_from_env(env):
     try:
         e = int((env.get("WAVECOORD_LEASE_EPOCH") or "").strip())

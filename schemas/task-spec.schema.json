@@ -42,6 +42,7 @@
         "effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
         "max_turns": {"type": "integer", "minimum": 1, "maximum": 10000},
         "budget_usd": {"type": "number", "exclusiveMinimum": 0},
+        "max_tokens": {"type": "integer", "minimum": 1, "description": "Token budget of one run (input + output + cache writes of the main conversation; cache reads are not counted). The launcher stops the run when it is used up. For a provider with cost_basis none it replaces budget_usd."},
         "timeout_min": {"type": "integer", "minimum": 1, "maximum": 10080},
         "host_needs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
         "split_if": {"type": "string", "description": "A condition, in words, under which the worker stops and proposes a split instead of continuing."},

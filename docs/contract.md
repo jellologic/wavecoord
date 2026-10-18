@@ -42,8 +42,8 @@ Terms:
 
 | State | Meaning | Next |
 |---|---|---|
-| `active` | The holder works on the task. Activity renews `expires_at = now + LEASE_TTL_S` | `parked` at finish with pushed commits; `released` at finish with no commits; `stale` at expiry |
-| `parked` | The attempt is finished and pushed; the work waits for review and merge. **Never expires**; after `PARKED_DRIFT_S` it is reported as drift | `released` by the lead or the refinery after merge or abandon |
+| `active` | The holder works on the task. Activity renews `expires_at = now + LEASE_TTL_S` | `parked` at finish with pushed commits (also a `failed` run: reason `finish:failed`); `released` at finish with no commits or after a stop; `stale` at expiry |
+| `parked` | The attempt is finished and pushed; the work waits for review and merge. **Never expires**; after `PARKED_DRIFT_S` it is reported as drift | `released` by the lead or the refinery after merge or abandon (`attempt.end` `abandoned` releases it); taken over (a new epoch, the same reservations unless the claim names others) by a `resume` claim of the same attempt (a `--continue` run), and, when the reason is `finish:failed`, by a claim of a newer attempt of the task |
 | `stale` | No activity for the TTL, or marked by the watchdog (`by: "watchdog"`, `feedback.md`). **Not free**: nobody else gets the task until the lead acts | `active` (same epoch) on new activity from the holder; `released`; replaced by a steal |
 | `released` | Ended | none |
 
@@ -125,7 +125,7 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `GET /api/live` | read | Snapshot: agents, leases, reservations, attempts in flight, drift, `server.last_seq` |
 | `POST /api/hb` | agent (own), lead | Heartbeat; returns `{agent, lease, lost, inbox, more}`. Dedup by `(agent, source, seq)` |
 | `POST /api/agents/<id>/finish` | agent (own), lead | Ends the agent; parks or releases its lease |
-| `POST /api/leases` | agent (own), lead | Claim (`steal` and `user_set` are lead only); returns lease, reservations, conflicts |
+| `POST /api/leases` | agent (own), lead | Claim (`steal` and `user_set` are lead only; `resume` takes over the parked lease of the same attempt); returns lease, reservations, conflicts. A claim of the same attempt with no `reservations` keeps the paths of that attempt's current lease |
 | `GET /api/leases`, `GET /api/tasks/<task>/lease` | read, gate | Current leases; `last_epoch` per task |
 | `POST /api/leases/<id>/release` | agent (own), ui (stale only), lead | Release |
 | `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease, `shared` `hot` marks only), lead | Add (`reservation_request`, or `{lease_id, reservations: [{glob, mode, origin?}], force?}` for several) or remove reservations |
