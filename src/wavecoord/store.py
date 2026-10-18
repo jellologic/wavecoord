@@ -293,7 +293,8 @@ class State(object):
         self.put("attempts", key, a)
 
     # attempt.end: the final launcher state, as the collector saw it on the host
-    END_KEYS = ("pr_url", "pr_error", "conflicts", "report_status", "throttled", "next_provider", "pushed")
+    END_KEYS = ("pr_url", "pr_error", "conflicts", "report_status", "throttled", "next_provider", "pushed",
+                "merged_at")
 
     def _on_attempt_end(self, ev, p, h):
         key, a = self._attempt(ev)

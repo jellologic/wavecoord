@@ -79,6 +79,7 @@
     "default_provider": {"$ref": "#/definitions/provider_name"},
     "merge_cmd": {"$ref": "#/definitions/cmd"},
     "pr_cmd": {"$ref": "#/definitions/cmd"},
+    "pr_state_cmd": {"$ref": "#/definitions/cmd", "description": "Prints JSON with state (OPEN, MERGED, CLOSED) and mergedAt of an attempt PR; default gh pr view {pr} --json state,mergedAt"},
     "check_cmd": {"$ref": "#/definitions/cmd"},
     "protected_paths_cmd": {"$ref": "#/definitions/cmd"},
     "fence": {

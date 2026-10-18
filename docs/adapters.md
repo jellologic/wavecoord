@@ -11,6 +11,7 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `hosts[]` | one `local` host, 2 slots, `repo_path` `.` | `name`, `ssh` (destination or alias; absent = local), `slots`, `repo_path`, `env`, `prepare_cmd`, `claude_flags`, `providers`, `labels`, `dispatch`. See `launcher.md` |
 | `merge_cmd` | `gh pr merge {pr} --merge --match-head-commit {sha}` | How the refinery merges a PR (below) |
 | `pr_cmd` | `gh pr create --head {branch} --base {base} --title {title} --body-file {body_file}` | How the lead machine opens a PR for a pushed attempt branch or a plan branch (below) |
+| `pr_state_cmd` | `gh pr view {pr} --json state,mergedAt` | How `collect` reads the state of a parked attempt's PR (below, "PR state command") |
 | `check_cmd` | none | Command the refinery runs before a merge |
 | `protected_paths_cmd` | none | Prints protected globs, one per line. A PR that touches one stops in the refinery until the user approves it in the lead session |
 | `providers` | none | Provider profiles for workers: `{<name>: {env_file, models?, cost_basis?}}`. See `providers.md` |
@@ -49,6 +50,16 @@ Each command gets the JSON of the `stdin` column and must print the JSON of the 
 | `text` | The new text |
 
 The edits apply in order, in memory. Every changed file must still be a valid spec with `id` equal to its file name. Any failure fails the whole call and writes nothing. Then wavecoord fetches `origin`, adds a detached worktree at `origin/<default>` (or at `origin/<branch>` for an existing plan branch), writes the files, commits once, pushes only `refs/heads/plan/<n>` (`n` is one more than any `plan/<number>` on origin or local), removes the worktree, and runs `pr_cmd` on the lead machine for a new branch. An edit on an existing branch adds a commit to its PR. The default branch is never written.
+
+## PR state command
+
+A PR can be merged outside the refinery, for example by the consumer's own merge gate. Its lease then stays `parked` and keeps its exclusive reservations, so an overlapping task never becomes ready. So `collect` (and each tick of the dispatcher loop, which calls it) runs `pr_state_cmd` on the lead machine, in the consumer repo root, for each `parked` lease whose attempt has a PR URL. The placeholders are `{pr}` (the PR number from the URL, else the URL), `{pr_url}` and `{branch}`; an array command without `{pr}` or `{pr_url}` gets the PR as its last argument. The environment has `WAVECOORD_PR`, `WAVECOORD_PR_URL` and `WAVECOORD_BRANCH`. The last stdout line must be a JSON object with `state` (`OPEN`, `MERGED` or `CLOSED`, any case) and optionally `mergedAt`.
+
+- `MERGED` (or a `mergedAt`): `attempt.end` with state `merged`, then `lease.release` with reason `merged`. The task counts as done.
+- `CLOSED` without a merge: `attempt.end` with state `abandoned`, then `lease.release` with reason `abandoned`.
+- `OPEN`, or an error: nothing changes; an error is in the `parked` list of the `collect` result.
+
+Each change is logged once (idempotency keys `pr-merged:<task>/<n>`, `pr-abandoned:<task>/<n>`, `pr-release:<lease id>`). `collect` with `dry_run` only lists what it would do.
 
 ## Host prepare hook
 

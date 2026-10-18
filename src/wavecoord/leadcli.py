@@ -49,6 +49,9 @@ def _print_collect(out):
             continue
         extra = c.get("pr_url") or c.get("pr_error") or ""
         print("%s: %s [%s] %s" % (c["id"], c["state"], ",".join(c.get("actions") or []) or "-", extra))
+    for p in out.get("parked") or []:
+        print("%s-%s: %s outside the refinery (%s)%s" % (p["task"], p["attempt"], p.get("state") or "pr state error",
+                                                         p["pr_url"], (": " + p["error"]) if p.get("error") else ""))
 
 
 def cmd_dispatch(args):

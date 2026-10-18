@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """A fake `gh` for tests: `gh pr create|view|edit|merge`, against the repo's origin. Stdlib only.
 
-  gh pr view <n|url> --json body      prints {"body", "baseRefName", "headRefName", ...}
+  gh pr view <n|url> --json body      prints {"body", "baseRefName", "headRefName", "state", "mergedAt", ...}
+                                      (state OPEN, MERGED or CLOSED; a test may set "state" in the file)
   gh pr edit <n|url> --body-file F    replaces the PR body
 
   gh pr create --head B --base main --title T --body-file F
@@ -57,7 +58,9 @@ def main(argv):
             pr = st["prs"][n - 1]
             if argv[1] == "view":
                 print(json.dumps({"body": pr["body"], "baseRefName": pr["base"], "headRefOid": pr.get("sha", ""),
-                                  "headRefName": pr["head"]}))
+                                  "headRefName": pr["head"], "state": pr["state"].upper(),
+                                  "mergedAt": pr.get("merged_at") or (
+                                      "2026-10-18T12:00:00Z" if pr["state"] == "merged" else None)}))
                 return 0
             with open(opt(argv, "--body-file")) as f:
                 pr["body"] = f.read()
