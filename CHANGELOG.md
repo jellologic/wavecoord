@@ -2,7 +2,22 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
-## 0.1.0 (unreleased)
+## 0.1.1
+
+### Fixed
+
+- **Placement and AUTH by provider.** A host with no claude login but with the env file of a provider profile (mode 600) now counts as authenticated for an attempt of that profile. Placement is per attempt: a host can take it with the attempt's provider or with one of its `provider_fallback` profiles (less the ones backed off after a rate limit), limited to the host's `providers` list. The primary provider wins whenever an eligible host can run it; the most free slots, then the most free memory, rank hosts only within one provider rank. Before, only the first provider was looked at, so an attempt failed (or waited) when no host could run its first provider, although build hosts with free slots had the env file of its fallback. A host placed with a fallback runs that profile, and the rest of the chain stays its fallback.
+- **`wavecoord hosts` AUTH column.** It shows `provider:<name>` when the host has the env file of `default_provider`, and the login check (`logged-in`, `env`, `keychain?`, `no`) otherwise. STATUS is checked against the host's `providers` list. `--json` adds `auth` and `dispatch` per host.
+- **Report proposals are filed.** On `report.post` the server files each item of `report.proposals[]` as a `proposal.new` event (idempotent by `<report idem>#p<i>`; the task defaults to the attempt's task; `source` is the attempt id). Before, `GET /api/proposals`, `plan_get` and `/wavecoord:revise` did not see them.
+- **PRs merged or closed outside the refinery.** `collect` (and so each dispatcher loop tick) now reads the PR state of every `parked` lease's attempt with the new `pr_state_cmd` (default `gh pr view {pr} --json state,mergedAt`). A merged PR logs `attempt.end` `merged` and releases the lease with reason `merged`; a PR closed without a merge logs `attempt.end` `abandoned` and releases the lease with reason `abandoned`. Before, the lease stayed `parked` and its exclusive reservations kept an overlapping task out of `ready`. The `collect` result has a new `parked` list.
+- **Skipped hosts are visible.** The `dispatch.decide` reason now names each host that placement skipped and why (for example `build1: unreachable: Permission denied (publickey)`), and a fallback provider when one was used.
+
+### Added
+
+- **`install-server --env KEY=VALUE`** (repeatable) adds a variable to the unit's environment. The unit also carries this shell's `WAVECOORD_*` variables (for example `WAVECOORD_SSH`, `WAVECOORD_HOME`), except worker variables and names that look like a secret; `--no-carry-env` turns that off. Before, a launchd or systemd server had no `WAVECOORD_SSH`, so its launcher could reach an ssh host only through a ControlMaster socket that a CLI run had opened, and placement fell back to `local`.
+- **`dispatch: false` on a host** (`docs/adapters.md`, `schemas/config.schema.json`): automatic placement never picks the host; `--host` and the `host` of the `dispatch` tool still do.
+
+## 0.1.0
 
 The first usable release: one lead session plans a wave in git, dispatches it to Claude Code workers on local or SSH hosts, and merges the results, with every coordination step in `coord/log`.
 

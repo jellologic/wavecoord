@@ -26,9 +26,10 @@ class InstallServerTest(unittest.TestCase):
         with open(os.path.join(self.repo, ".claude", "wavecoord.json"), "w") as f:
             json.dump({"project": "demo"}, f)
 
-    def cli(self, *args):
+    def cli(self, *args, **extra_env):
         env = {k: v for k, v in os.environ.items() if not k.startswith(("WAVECOORD_", "XDG_"))}
         env.update(HOME=self.home, PYTHONPATH=_paths.SRC, PYTHONDONTWRITEBYTECODE="1")
+        env.update(extra_env)
         return subprocess.run([sys.executable, "-m", "wavecoord", "install-server", "--repo", self.repo] + list(args),
                               env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
@@ -58,6 +59,33 @@ class InstallServerTest(unittest.TestCase):
         self.assertEqual(plan["start"][-1][:2], ["launchctl", "bootstrap"])
         self.assertIn("no tokens file", p.stderr)
         self.assertEqual(self.files(), [])  # a dry run writes nothing
+
+    def test_env_carry_and_flags(self):
+        # the server's launcher needs the shell's WAVECOORD_SSH (an ssh wrapper with the host key)
+        p = self.cli("--dry-run", "--json", "--platform", "darwin", "--env", "FOO=bar baz", "--env",
+                     "WAVECOORD_POLL_S=5", WAVECOORD_SSH="/opt/x/ssh-wrapper", WAVECOORD_HOME="/srv/wc",
+                     WAVECOORD_POLL_S="1", WAVECOORD_TOKEN="not-carried-secret", WAVECOORD_TOKEN_FILE="/t/tok",
+                     WAVECOORD_TASK="t1")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        env = plistlib.loads(json.loads(p.stdout)["unit"].encode())["EnvironmentVariables"]
+        self.assertEqual(env["WAVECOORD_SSH"], "/opt/x/ssh-wrapper")
+        self.assertEqual(env["WAVECOORD_HOME"], "/srv/wc")
+        self.assertEqual(env["WAVECOORD_TOKEN_FILE"], "/t/tok")
+        self.assertEqual(env["WAVECOORD_POLL_S"], "5")  # --env wins over a carried value
+        self.assertEqual(env["FOO"], "bar baz")
+        self.assertEqual(env["HOME"], self.home)
+        for k in ("WAVECOORD_TOKEN", "WAVECOORD_TASK"):
+            self.assertNotIn(k, env)
+        self.assertNotIn("not-carried-secret", p.stdout)
+        p = self.cli("--dry-run", "--platform", "linux", "--no-carry-env", WAVECOORD_SSH="/opt/x/ssh-wrapper")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertNotIn("WAVECOORD_SSH", p.stdout)
+        p = self.cli("--dry-run", "--platform", "linux", "--env", "WAVECOORD_SSH=/w/ssh")
+        self.assertIn('Environment="WAVECOORD_SSH=/w/ssh"', p.stdout)
+        for bad in ("NOEQUALS", "1X=y", "HOME=/x"):
+            p = self.cli("--dry-run", "--platform", "linux", "--env", bad)
+            self.assertEqual(p.returncode, 1, bad)
+            self.assertIn("--env", p.stderr)
 
     def test_dry_run_systemd(self):
         p = self.cli("--dry-run", "--platform", "linux", "--no-push")

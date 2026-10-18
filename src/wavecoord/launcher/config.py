@@ -78,6 +78,10 @@ class Config(object):
             return list(h["providers"])
         return sorted(set(self.providers) | {ANTHROPIC})
 
+    def auto_dispatch(self, host_name):
+        """False for a host with `dispatch: false`: automatic placement skips it; --host still works."""
+        return self.hosts[host_name].get("dispatch", True) is not False
+
     def coord_url(self):
         from wavecoord.cli import resolve_coord_url
         return resolve_coord_url(cwd=self.root)

@@ -111,16 +111,23 @@ def _print_result(r):
 
 
 def cmd_hosts(args):
-    from .client import why_ineligible
+    from .client import attempt_auth, why_ineligible
     try:
         L = _launcher(args)
         probes = L.probe([args.host] if args.host else None)
     except LauncherError as e:
         return _err(e)
+    prov = L.cfg.default_provider
+    for n, p in probes.items():
+        # AUTH is per provider: a profile's env file authenticates the worker without a claude login
+        allowed = prov in L.cfg.host_providers(n) if n in L.cfg.hosts else True
+        label = attempt_auth(p, prov)[0] if p.get("ok") and allowed else None
+        p["auth"] = label or (p.get("claude") or {}).get("auth") or "?"
+        p["dispatch"] = L.cfg.auto_dispatch(n) if n in L.cfg.hosts else True
     if args.json:
         _print(probes, True)
         return 0
-    print("%-12s %-6s %-8s %-8s %-10s %-24s %-24s %s" % ("HOST", "SLOTS", "MEM_GIB", "DISK_GIB", "AUTH", "CLAUDE",
+    print("%-12s %-6s %-8s %-8s %-16s %-24s %-24s %s" % ("HOST", "SLOTS", "MEM_GIB", "DISK_GIB", "AUTH", "CLAUDE",
                                                         "PROVIDERS", "STATUS"))
     for n in sorted(probes):
         p = probes[n]
@@ -128,10 +135,16 @@ def cmd_hosts(args):
         mem = p.get("mem_avail_gib")
         disk = p.get("disk_free_gib")
         provs = ",".join(k + ("" if v.get("present") else "(missing)") for k, v in sorted((p.get("providers") or {}).items()))
-        print("%-12s %-6s %-8s %-8s %-10s %-24s %-24s %s" % (
+        if prov not in L.cfg.host_providers(n):
+            status = "provider %s is not on this host" % prov
+        else:
+            status = why_ineligible(p, prov) or "ok"
+        if not p["dispatch"]:
+            status += " (dispatch: false; --host only)"
+        print("%-12s %-6s %-8s %-8s %-16s %-24s %-24s %s" % (
             n, "%s/%s" % (p.get("active", "?"), p.get("slots", "?")), "%.1f" % mem if mem is not None else "?",
-            "%.0f" % disk if disk is not None else "?", c.get("auth", "?"), (c.get("version") or "-")[:24],
-            provs or "-", why_ineligible(p, L.cfg.default_provider) or "ok"))
+            "%.0f" % disk if disk is not None else "?", p["auth"], (c.get("version") or "-")[:24],
+            provs or "-", status))
     return 0
 
 

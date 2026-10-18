@@ -241,7 +241,8 @@ class Coord(object):
             primary = next((i for i, e in enumerate(evs) if e.get("primary")), 0)
             logged = []
             for i, e in enumerate(evs):
-                logged.append(self._log(ctx, e, idem if i == primary else None, actor_agent))
+                # a secondary event may carry its own key (report proposals: "<report idem>#p<i>")
+                logged.append(self._log(ctx, e, idem if i == primary else e.get("idem"), actor_agent))
             if logged:
                 logged.insert(0, logged.pop(primary))
         if logged:
@@ -982,6 +983,29 @@ class Coord(object):
         logged, _, _ = self.write(ctx, idem, build, expect=("dispatch.request",))
         return {"now": self.ts(), "request": logged[0]["payload"]["request"]}
 
+    def _report_proposals(self, ctx, key, task, n, report, a):
+        """proposal.new events for report.proposals[], one per item, idempotent by "<report idem>#p<i>".
+
+        The task defaults to the attempt's task; the source is the attempt (`attempt`, `source`)."""
+        sender = (a or {}).get("holder") or ctx.agent or ctx.principal
+        evs, pid = [], self.state.next_id("proposal")
+        for i, item in enumerate(report.get("proposals") or []):
+            pidem = ("%s#p%d" % (key, i))[-128:]
+            if self.log.find_idem(pidem) is not None:
+                continue
+            ptask = item.get("task") or task
+            if schemaload.errors(ptask, "api", "#/definitions/task_id"):
+                ptask = task
+            p = {"id": pid, "ts": self.ts(), "sender": sender, "kind": item.get("kind") or "other",
+                 "task": ptask, "attempt": n if ptask == task else None, "summary": item["summary"],
+                 "detail": str(item.get("detail") or ""), "state": "open", "note": None, "decided_by": None,
+                 "decided_ts": None, "source": "%s-%d" % (task, n)}
+            ev = self._ev("proposal.new", {"proposal": p}, ptask, p["attempt"])
+            ev["idem"] = pidem
+            evs.append(ev)
+            pid += 1
+        return evs
+
     def report(self, ctx, task, n, body, idem=None):
         """Post the attempt's report (report_request); the launcher's stats ride along."""
         self._require(ctx, "agent", "lead")
@@ -1004,9 +1028,12 @@ class Coord(object):
                     payload[k] = body[k]
             if isinstance(body.get("changed_paths"), list):
                 payload["fence"] = self._report_fence(task, n, body["changed_paths"], body.get("lease_epoch"))
-            return [self._ev("report.post", payload, task, n)]
+            evs = [self._ev("report.post", payload, task, n, primary=True)]
+            evs += self._report_proposals(ctx, key, task, n, body["report"], a)
+            return evs
 
-        self.write(ctx, idem or "report:%s:%d" % (task, n), build, expect=("report.post",))
+        key = idem or "report:%s:%d" % (task, n)
+        self.write(ctx, key, build, expect=("report.post",))
         return self.attempt(ctx, task, n)
 
     # ----- lead records (dispatch, attempts, conflicts, resolve, refinery) -----

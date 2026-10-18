@@ -150,6 +150,69 @@ class LeadTestCase(LauncherTestCase):
             return res["isError"], text
 
 
+class ExternalMergeTest(LeadTestCase):
+    """A PR merged (or closed) outside the refinery releases its parked lease (0.1.1 fix)."""
+    SPECS = {"one": spec_md("one", ["core/**"]), "two": spec_md("two", ["core/**"])}
+
+    def set_pr(self, n, state):
+        st = self.gh()
+        st["prs"][n - 1]["state"] = state
+        with open(self.gh_state, "w") as f:
+            json.dump(st, f)
+
+    def ready(self):
+        return [t["id"] for t in self.lead.plan_ready()["tasks"]]
+
+    def test_merged_and_closed_prs_release_the_lease(self):
+        os.environ.update(FAKE_CLAUDE_COMMIT="1", FAKE_CLAUDE_COMMIT_FILE="{task}/work.txt")
+        self.lead.dispatch("one")
+        item = self.collect_until("one-1")
+        self.assertIn("pr", item["actions"])
+        self.assertEqual(self.core.state.task_lease("one")["state"], "parked")
+        self.assertNotIn("two", self.ready())  # the parked lease holds core/** exclusive
+        # an open PR changes nothing
+        self.assertEqual(self.lead.collect()["parked"], [])
+        # the consumer merges PR 1 with its own gate, not the refinery
+        self.set_pr(1, "merged")
+        self.assertEqual([p["state"] for p in self.lead.collect(dry_run=True)["parked"]], ["merged"])
+        self.assertEqual(self.core.state.task_lease("one")["state"], "parked")  # a dry run changes nothing
+        out = self.lead.collect()
+        self.assertEqual([(p["task"], p["attempt"], p["state"]) for p in out["parked"]], [("one", 1, "merged")])
+        rel = self.events("lease.release")[-1]
+        self.assertEqual((rel["task"], rel["payload"]["reason"]), ("one", "merged"))
+        self.assertEqual(self.attempt("one", 1)["state"], "merged")
+        self.assertEqual([r for r in self.core.state.live_reservations() if r["task"] == "one"], [])
+        self.assertIn("two", self.ready())
+        n = self.core.log.last_seq
+        self.assertEqual(self.lead.collect()["parked"], [])  # once only
+        self.assertEqual(self.core.log.last_seq, n)
+        self.assertIn(["pr", "view", "1", "--json", "state,mergedAt"], self.gh()["calls"])
+        # a PR closed without a merge: release, and the attempt is abandoned
+        self.lead.dispatch("two")
+        self.collect_until("two-1")
+        self.set_pr(2, "closed")
+        out = self.lead.collect()
+        self.assertEqual([(p["task"], p["state"]) for p in out["parked"]], [("two", "abandoned")])
+        self.assertEqual(self.events("lease.release")[-1]["payload"]["reason"], "abandoned")
+        self.assertEqual(self.attempt("two", 1)["state"], "abandoned")
+        self.assertEqual([r for r in self.core.state.live_reservations() if r["task"] == "two"], [])
+
+    def test_pr_state_cmd_is_configurable(self):
+        script = os.path.join(self.tmp, "bin", "pr-state")
+        with open(script, "w") as f:
+            f.write("#!/bin/sh\necho \"$1 $WAVECOORD_PR_URL\" >> %s\necho '{\"state\": \"MERGED\"}'\n"
+                    % os.path.join(self.tmp, "pr-state.log"))
+        os.chmod(script, 0o755)
+        with open(os.path.join(self.repo, ".claude", "wavecoord.json")) as f:
+            cfg = json.load(f)
+        cfg["pr_state_cmd"] = [script, "{pr}"]
+        with open(os.path.join(self.repo, ".claude", "wavecoord.json"), "w") as f:
+            json.dump(cfg, f)
+        self.assertEqual(self.lead.pr_state("https://example.invalid/pull/7"), ("MERGED", None, None))
+        with open(os.path.join(self.tmp, "pr-state.log")) as f:
+            self.assertEqual(f.read(), "7 https://example.invalid/pull/7\n")
+
+
 class DispatchTest(LeadTestCase):
     SPECS = {"alpha": spec_md("alpha", ["alpha/**"], shared=["docs/index.md"], host_needs=["python3"]),
              "beta": spec_md("beta", ["beta/**"], provider="alt", fallback=["anthropic"]),
