@@ -9,7 +9,14 @@
   "homepage": "https://github.com/jellologic/wavecoord",
   "repository": "https://github.com/jellologic/wavecoord",
   "license": "MIT",
-  "keywords": ["coordination", "parallel", "agents", "planning", "orchestration", "git"],
+  "keywords": [
+    "coordination",
+    "parallel",
+    "agents",
+    "planning",
+    "orchestration",
+    "git"
+  ],
   "userConfig": {
     "coord_url": {
       "type": "string",
@@ -27,6 +34,31 @@
       "type": "string",
       "title": "Project",
       "description": "Project name on the coordinator. Empty means the name from .claude/wavecoord.json in the repo."
+    },
+    "lead": {
+      "type": "boolean",
+      "title": "Lead session",
+      "description": "Treat interactive sessions as the wavecoord lead: inject lead events through the hooks and let the channel push them. Launched workers (WAVECOORD_TASK or WAVECOORD_AGENT_ID set) are never the lead. WAVECOORD_ROLE overrides this.",
+      "default": false
     }
-  }
+  },
+  "mcpServers": {
+    "lead-feed": {
+      "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+      "args": [
+        "channel"
+      ],
+      "env": {
+        "CLAUDE_PLUGIN_OPTION_COORD_URL": "${user_config.coord_url}",
+        "CLAUDE_PLUGIN_OPTION_TOKEN": "${user_config.token}",
+        "CLAUDE_PLUGIN_OPTION_LEAD": "${user_config.lead}"
+      }
+    }
+  },
+  "channels": [
+    {
+      "server": "lead-feed",
+      "displayName": "wavecoord lead feed"
+    }
+  ]
 }

@@ -550,13 +550,17 @@ class Coord(object):
             now = self.now()
             s = self.seen.setdefault(agent, {})
             s["t"] = now
+            # Real activity (for the watchdog): a hook or MCP beat, or a launcher beat with a new tool.
+            real = source != "launcher" or bool(body.get("last_tool") and body["last_tool"] != s.get("tool"))
+            if real:
+                s["act"] = now
             if body.get("last_tool"):
                 s["tool"] = body["last_tool"]
             evs = self._register_events(ctx, agent, body["host"], body["kind"], {
                 k: body.get(k) for k in ("session_id", "task", "attempt", "branch", "worktree")})
             l = self.state.agent_lease(agent)
             if l is not None:
-                evs += self._activity(l, now)
+                evs += self._activity(l, now, real)
             return evs
 
         self.write(ctx, None, build, actor_agent=agent)
@@ -572,13 +576,19 @@ class Coord(object):
             out["duplicate"] = True
         return out
 
-    def _activity(self, l, now):
-        """Renew an active lease in memory; revive a stale one (logged)."""
+    def _activity(self, l, now, real=True):
+        """Renew an active lease in memory; revive a stale one (logged).
+
+        A lease the watchdog made stale revives only on real activity, not on
+        a launcher heartbeat alone (watchdog.py).
+        """
         ttl = const.get("LEASE_TTL_S")
         if l["state"] == "active":
             self.renew[l["id"]] = {"renewed": now, "expires": now + ttl}
             return []
         if l["state"] == "stale":
+            if l.get("stale_by") == "watchdog" and not real:
+                return []
             self.renew[l["id"]] = {"renewed": now, "expires": now + ttl}
             return [self._ev("lease.revive", {"lease_id": l["id"], "expires_at": const.fmt_ts(now + ttl)},
                              l["task"], l["attempt"])]
@@ -639,6 +649,8 @@ class Coord(object):
         steal = bool(body.get("steal"))
         if steal and ctx.role != "lead":
             raise ApiError("forbidden", "only the lead may steal a lease")
+        if body.get("user_set") and ctx.role != "lead":
+            raise ApiError("forbidden", "only the lead may set user_set")
         self._check_agent(ctx, holder, host)
         items = body.get("reservations", [])
         self._check_reservations(items)
@@ -668,6 +680,8 @@ class Coord(object):
                      "state": "active", "acquired": ts, "renewed": ts,
                      "expires_at": const.fmt_ts(now + const.get("LEASE_TTL_S")),
                      "released_at": None, "released_by": None, "reason": None}
+            if body.get("user_set"):
+                lease["user_set"] = True  # the watchdog never touches it
             rid = self.state.next_id("reservation")
             res = [{"id": rid + i, "lease_id": lid, "task": task, "glob": it["glob"], "mode": it["mode"]}
                    for i, it in enumerate(items)]

@@ -12,8 +12,9 @@ All hooks are command hooks that run `${CLAUDE_PLUGIN_ROOT}/bin/wavecoord hook <
 |---|---|
 | Coordinator URL | `WAVECOORD_URL`, then the plugin option `coord_url` (`CLAUDE_PLUGIN_OPTION_COORD_URL`), then `coord_url` in `.claude/wavecoord.json`, found from the hook's `cwd` upward |
 | Token | The plugin option `token` (`CLAUDE_PLUGIN_OPTION_TOKEN`), then the file `WAVECOORD_TOKEN_FILE`, then `~/.wavecoord/token` |
-| Agent id | `lead` when `WAVECOORD_ROLE=lead`, else `WAVECOORD_AGENT_ID`, else `claude:<session_id>` |
-| Agent kind | `lead` when `WAVECOORD_ROLE=lead`, else `WAVECOORD_AGENT_KIND`, else `worker` when `WAVECOORD_TASK` is set, else `other` |
+| Lead | `WAVECOORD_ROLE=lead`; or the plugin option `lead` (`CLAUDE_PLUGIN_OPTION_LEAD`) when `WAVECOORD_ROLE`, `WAVECOORD_TASK` and `WAVECOORD_AGENT_ID` are all unset (`feedback.md`) |
+| Agent id | `lead` when the session is the lead, else `WAVECOORD_AGENT_ID`, else `claude:<session_id>` |
+| Agent kind | `lead` when the session is the lead, else `WAVECOORD_AGENT_KIND`, else `worker` when `WAVECOORD_TASK` is set, else `other` |
 | Host, task, attempt | `WAVECOORD_HOST` (default `local`), `WAVECOORD_TASK`, `WAVECOORD_ATTEMPT` |
 | State and spool | `WAVECOORD_STATE_DIR`, else `${CLAUDE_PLUGIN_DATA}/state`, else `~/.wavecoord/state` |
 
@@ -27,8 +28,8 @@ Every request has `Authorization: Bearer <token>`, `X-Wavecoord-Agent: <agent id
 
 | Event | Matcher | Mode | Timeout (s) | Budget (s) | Behavior | Milestone |
 |---|---|---|---|---|---|---|
-| `SessionStart` | | sync | 10 | 8 | Heartbeat (registers the agent). Worker: task, spec title, lease and epoch, own paths, peers, paths reserved by others, hot files, inbox, as `additionalContext`. Lead: wave state from `GET /api/live` | P2 |
-| `UserPromptSubmit` | | sync | 10 | 6 | Deliver messages not yet shown, and lost-lease notices, as `additionalContext`; ack them; heartbeat at most once per `HOOK_MIN_INTERVAL_S` (else `GET /api/inbox`) | P2 |
+| `SessionStart` | | sync | 10 | 8 | Heartbeat (registers the agent). Worker: task, spec title, lease and epoch, own paths, peers, paths reserved by others, hot files, inbox, as `additionalContext`. Lead: wave state from `GET /api/live`; on `startup` or `clear`, move the lead cursor to the head | P2, P5 |
+| `UserPromptSubmit` | | sync | 10 | 6 | Deliver messages not yet shown, and lost-lease notices, as `additionalContext`; ack them; heartbeat at most once per `HOOK_MIN_INTERVAL_S` (else `GET /api/inbox`). Lead: also the event lines after the shared lead cursor, at most 40 (`feedback.md`) | P2, P5 |
 | `PostToolBatch` | | async | 10 | 6 | Same as `UserPromptSubmit`, at most once per `HOOK_MIN_INTERVAL_S`. The output arrives on the next turn | P2 |
 | `PreToolUse` | `Edit\|Write\|MultiEdit\|NotebookEdit` | sync | 6 | 4 | **Advisory in P2**: `POST /api/check` with the repo-relative path. On a violation, `additionalContext` and `systemMessage` with a warning. Never `permissionDecision`. Unreachable: no output | P2 (fence: P6) |
 | `PostToolUse` | `Edit\|Write\|MultiEdit\|NotebookEdit` | async | 10 | 6 | Heartbeat with `last_tool`. When the agent holds an active lease: a hot-file mark, `POST /api/reservations` with the path as a `shared` glob, once per path | P2 |

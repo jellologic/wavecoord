@@ -251,12 +251,13 @@ class State(object):
     def _on_lease_stale(self, ev, p, h):
         l = self.lease(p["lease_id"])
         if l and l["state"] == "active":
-            self.put("leases", l["id"], dict(l, state="stale"))
+            self.put("leases", l["id"], dict(l, state="stale", stale_by=p.get("by")))
 
     def _on_lease_revive(self, ev, p, h):
         l = self.lease(p["lease_id"])
         if l and l["state"] == "stale":
-            self.put("leases", l["id"], dict(l, state="active", renewed=ev["ts"], expires_at=p.get("expires_at")))
+            self.put("leases", l["id"], dict(l, state="active", renewed=ev["ts"], expires_at=p.get("expires_at"),
+                                             stale_by=None))
 
     def _on_lease_park(self, ev, p, h):
         l = self.lease(p["lease_id"])

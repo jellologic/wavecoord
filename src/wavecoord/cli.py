@@ -1,7 +1,8 @@
 """The wavecoord command line. Stdlib only, Python >= 3.9.
 
 Implemented: `version`, `status`, `hook`, `guard`, the core commands (serve, log, revert,
-rebuild, events, tokens; see corecli.py) and the launcher (launch, hosts, attempts, gc;
+rebuild, events, tokens; see corecli.py), `channel` (see
+docs/feedback.md) and the launcher (launch, hosts, attempts, gc;
 see docs/launcher.md).
 """
 
@@ -81,7 +82,7 @@ def cmd_version(_args):
 
 
 def cmd_status(args):
-    url = resolve_coord_url()
+    url = (args.url or "").strip().rstrip("/") or resolve_coord_url()
     if not url:
         print("not configured")
         return 0
@@ -114,6 +115,11 @@ def cmd_guard(args):
     return guard.check("push", args.push, enforce=args.enforce)
 
 
+def cmd_channel(args):
+    from wavecoord import channel
+    return channel.main(args)
+
+
 def _stub(name):
     def run(_args):
         sys.stderr.write("wavecoord %s: not implemented in P0\n" % name)
@@ -132,6 +138,7 @@ def build_parser():
 
     sp = sub.add_parser("status", help="show whether the coordinator is configured and reachable")
     sp.add_argument("--timeout", type=float, default=STATUS_TIMEOUT_S)
+    sp.add_argument("--url", help="coordinator URL; empty means the usual lookup")
     sp.set_defaults(func=cmd_status)
 
     sp = sub.add_parser("hook", help="Claude Code hook entry point (reads JSON on stdin)")
@@ -150,6 +157,9 @@ def build_parser():
     mode.add_argument("--push", metavar="RANGE", help="check a revision range, or - for pre-push stdin")
     gp.add_argument("--enforce", action="store_true", help="fail on a violation (reserved for the P6 fence)")
     gp.set_defaults(func=cmd_guard)
+
+    sp = sub.add_parser("channel", help="stdio MCP channel that pushes lead events into the session")
+    sp.set_defaults(func=cmd_channel)
 
     corecli.register(sub)
     from wavecoord.launcher.cli import register as register_launcher
