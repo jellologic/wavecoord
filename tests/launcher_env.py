@@ -119,7 +119,7 @@ class LauncherTestCase(unittest.TestCase):
                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
                 "API_TIMEOUT_MS", "ANTHROPIC_DEFAULT_OPUS_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL") + tuple(
         "FAKE_CLAUDE_" + k for k in ("COMMIT", "COMMIT_FILE", "COMMIT_TEXT", "MERGE", "STATUS", "REPORT", "EXIT", "SLEEP",
-                                      "COST", "DUMP", "EVENTS", "EARLY_EVENTS", "STDERR",
+                                      "COST", "DUMP", "EVENTS", "EARLY_EVENTS", "STDERR", "MAX_TURNS",
                                       "EXPECT_ENV"))
 
     def setUp(self):

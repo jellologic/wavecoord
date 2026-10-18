@@ -27,11 +27,12 @@ Adjust:
 - `provider_fallback` lists profiles to use next after a rate limit or overload, in order. Give one when the wave has more tasks than one provider's rate limit allows.
 - `host_needs` lists capabilities the host must have (`python3`, `docker`, a label). Placement uses it; a task with no matching host waits.
 - A non-Anthropic model behind a profile may differ: weaker tool use, a smaller context window, no extended thinking, other limits. For such a profile choose smaller tasks, a lower `autocompact_window`, explicit file lists in the prompt and acceptance commands that check the result, not the process.
+- A non-Anthropic model through an Anthropic-compatible endpoint (for example GLM) uses about 1.5 to 2 times the turns of the table. Set `max_turns` to about 2 times the starting point for such a profile. Without that margin the worker hits `error_max_turns` before it writes the report.
 
 ## Budget and turns
 
 - `budget_usd` is a hard stop. Total for the wave = the sum; show it in the PR body.
-- `max_turns` caps the loop. A worker that hits it ends with a `failed` or `blocked` report; triage then splits the task or raises the cap.
+- `max_turns` caps the loop. A worker that hits it ends with a `failed` or `blocked` report; triage then splits the task or raises the cap. When the worker hits the cap before it writes its report but after it committed, the launcher pushes the commits and writes a `failed` report with `plan_feedback: "continue: <n> commits pushed"` and `continue_suggested: true` on the attempt. Triage then continues the run (`/wavecoord:triage`).
 - `split_if` is the sign that the task is bigger than planned ("needs a schema change", "touches more than 8 files", "the API has no endpoint for X"). The worker stops, reports `needs_decision` and proposes a split.
 
 ## Acceptance commands
@@ -51,3 +52,4 @@ The worker sees the prompt, the spec and the repo, nothing from this conversatio
 4. The acceptance commands, and "list each one you ran in `checks_run`".
 5. When to stop: `split_if`, an ambiguous requirement (report `needs_decision` with the question), a needed change outside `paths` (send a message to the lead).
 6. "Commit and push your branch before you end. Do not merge."
+7. For a turn budget: "Batch shell commands into one call. Do not read a file again that you already read." The worker rules of the launcher also tell the worker to stop, commit and write the report when fewer than 15% of its turns remain.

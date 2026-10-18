@@ -97,7 +97,7 @@ def effective_config(repo, cfg):
 
 # report_request fields kept in the report.post event besides the report itself
 REPORT_STATS = ("cost_usd", "turns", "session_id", "cost_basis", "usage", "model_usage", "provider",
-                "throttled", "throttle", "next_provider", "pushed", "pr_url")
+                "throttled", "throttle", "next_provider", "pushed", "pr_url", "continue_suggested")
 
 
 def _schema_check(body, ref):

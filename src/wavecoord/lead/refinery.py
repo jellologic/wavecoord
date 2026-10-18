@@ -142,7 +142,8 @@ class RefineryMixin(object):
         # 4. the fence merge check (E5, docs/design/edit-fence.md): enforce blocks, advisory only notes
         fence_note = self._fence_check(it, sha, default)
         if fence_note and fence_note.get("block"):
-            return self._block(it, "stale_lease" if fence_note.get("stale") else "fence", sha=sha,
+            return self._block(it, fence_note.get("reason") or ("stale_lease" if fence_note.get("stale") else "fence"),
+                               sha=sha,
                                detail=fence_note["detail"])
         # 5. merge_cmd, pinned to the head sha that was checked
         ok, detail = self._merge_cmd(it, sha, default)
@@ -179,7 +180,7 @@ class RefineryMixin(object):
         res = io.StringIO()
         code = gatecheck.run(None, it["task"], it["attempt"], "%s/%s..%s" % ("origin", default, sha), repo=self.repo,
                              body_text=body if body is not None else "", out=res, err=io.StringIO(), as_json=True,
-                             check_fn=gatecheck.coord_checker(self.coord, self.ctx))
+                             check_fn=gatecheck.coord_checker(self.coord, self.ctx), merge_mode=mode)
         try:
             d = _json.loads(res.getvalue())
         except ValueError:
@@ -189,6 +190,14 @@ class RefineryMixin(object):
             return {"block": True, "stale": True,
                     "detail": "stale lease: the PR's Lease: line is not the attempt's current lease (%s)"
                               % d.get("detail")}
+        cfg = d.get("config_changes") or []
+        if cfg:
+            # a task PR that changes the lead's config (edit-fence.md, section 8): refused unless the fence is off
+            keys = ", ".join(v.get("key") or "?" for v in cfg)
+            if mode != "off":
+                return {"block": True, "reason": "config_change",
+                        "detail": "config_change: %s; %s" % (keys, gatecheck.CONFIG_ADVICE)}
+            return {"block": False, "detail": "config_change (reported, fence merge mode off): %s" % keys}
         if mode == "off":
             return None
         if code != 0:

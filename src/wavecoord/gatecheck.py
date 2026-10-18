@@ -10,6 +10,14 @@ itself with git; it checks every path with `source: "gate"`. No override has
 any effect here. Exit codes: 0 pass, 1 violation (or a lease mismatch), 3 the
 coordinator is unavailable or any other error. A gate must treat every exit
 other than 0 as "do not merge".
+
+A task PR (it has `Task:`, `Attempt:` and `Lease:` lines: the work of a worker
+attempt) must not change the lead's config: the `.claude/wavecoord.json` keys
+in CONFIG_KEYS and HOST_KEYS, the hook keys of the `.claude` settings files, or
+a plugin `hooks/hooks.json`. Each such change is a violation of kind
+`config_change` (edit-fence.md, section 8): it fails the check in the merge
+modes advisory and enforce, and is only reported in mode off. Plan PRs and
+lead PRs have no such lines, so this check does not apply to them.
 """
 
 import json
@@ -31,8 +39,95 @@ TASK_RE = re.compile(r"^Task:[ \t]*([A-Za-z0-9][A-Za-z0-9._-]{0,63})[ \t]*$", re
 ATTEMPT_RE = re.compile(r"^Attempt:[ \t]*([0-9]+)[ \t]*$", re.M)
 
 
+# The lead's config: a change to these is a lead decision in a plan or config PR, never in a task PR.
+CONFIG_PATH = ".claude/wavecoord.json"
+CONFIG_KEYS = ("fence", "merge_cmd", "check_cmd", "protected_paths_cmd", "providers")
+HOST_KEYS = ("claude_flags", "env")
+SETTINGS_PATHS = (".claude/settings.json", ".claude/settings.local.json")
+SETTINGS_KEYS = ("hooks", "disableAllHooks", "enabledPlugins", "extraKnownMarketplaces", "env")
+HOOKS_FILE = "hooks/hooks.json"
+_BAD = object()
+
+
 class GateError(Exception):
     pass
+
+
+def _show(repo, rev, path):
+    """The text of `rev:path`, or None when it does not exist there (or git fails: then every key looks changed)."""
+    try:
+        p = subprocess.run(["git", "show", "%s:%s" % (rev, path)], cwd=repo, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    return p.stdout.decode("utf-8", "replace") if p.returncode == 0 else None
+
+
+def _load(text):
+    if text is None:
+        return {}
+    try:
+        d = json.loads(text)
+    except ValueError:
+        return _BAD
+    return d if isinstance(d, dict) else _BAD
+
+
+def _hosts(cfg):
+    out = {}
+    hosts = cfg.get("hosts")
+    for h in hosts if isinstance(hosts, list) else []:
+        if isinstance(h, dict) and isinstance(h.get("name"), str):
+            out[h["name"]] = h
+    return out
+
+
+def _key_changes(path, old, new, keys, hosts=False):
+    if new is _BAD:
+        return [{"kind": "config_change", "path": path, "key": "%s (the new file does not parse)" % path}]
+    old = {} if old is _BAD else old
+    out = [{"kind": "config_change", "path": path, "key": k} for k in keys if old.get(k) != new.get(k)]
+    if hosts:
+        oh, nh = _hosts(old), _hosts(new)
+        for name in sorted(set(oh) | set(nh)):
+            for k in HOST_KEYS:
+                if (oh.get(name) or {}).get(k) != (nh.get(name) or {}).get(k):
+                    out.append({"kind": "config_change", "path": path, "key": "hosts[%s].%s" % (name, k)})
+    return out
+
+
+def is_hooks_file(path):
+    return path == HOOKS_FILE or path.endswith("/" + HOOKS_FILE)
+
+
+def config_changes(repo, base, head, paths):
+    """The lead-config changes of the net diff base...head (`paths` is that diff). -> [violation]."""
+    rc = subprocess.run(["git", "merge-base", base, head], cwd=repo, stdin=subprocess.DEVNULL,
+                        stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=120)
+    if rc.returncode != 0 or not rc.stdout.strip():
+        raise GateError("git merge-base %s %s failed: %s" % (base, head, rc.stderr.strip()[-300:]))
+    mb = rc.stdout.strip()
+    out = []
+    if CONFIG_PATH in paths:
+        out += _key_changes(CONFIG_PATH, _load(_show(repo, mb, CONFIG_PATH)), _load(_show(repo, head, CONFIG_PATH)),
+                            CONFIG_KEYS, hosts=True)
+    for sp in SETTINGS_PATHS:
+        if sp in paths:
+            out += _key_changes(sp, _load(_show(repo, mb, sp)), _load(_show(repo, head, sp)), SETTINGS_KEYS)
+    out += [{"kind": "config_change", "path": p, "key": "the plugin hooks (%s)" % p}
+            for p in paths if is_hooks_file(p)]
+    return out
+
+
+def base_merge_mode(repo, base):
+    """The fence `merge` mode of the config on the base side (the default branch): the authority (section 8)."""
+    from wavecoord import fencecore
+    cfg = _load(_show(repo, base, CONFIG_PATH))
+    return fencecore.parse_modes(cfg.get("fence") if isinstance(cfg, dict) else None)["merge"]
+
+
+CONFIG_ADVICE = ("a task PR may not change the lead's config (fence modes, gate commands, providers, claude_flags,"
+                 " host env, hooks); the lead makes this change in a plan or config PR")
 
 
 def parse_body(text):
@@ -135,11 +230,11 @@ def coord_checker(coord, ctx):
 
 
 def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None, repo=None, env=None,
-        out=sys.stdout, err=sys.stderr, as_json=False, check_fn=None, body_text=None):
+        out=sys.stdout, err=sys.stderr, as_json=False, check_fn=None, body_text=None, merge_mode=None):
     env = os.environ if env is None else env
     repo = os.path.abspath(repo or os.getcwd())
     res = {"verdict": "error", "exit": UNAVAILABLE_EXIT, "lease_ok": None, "task": None, "attempt": None, "epoch": None,
-           "paths": 0, "violations": [], "seq": None, "detail": None}
+           "paths": 0, "violations": [], "seq": None, "detail": None, "config_changes": [], "merge_mode": merge_mode}
 
     def done(code, verdict, detail=None):
         res.update(exit=code, verdict=verdict, detail=detail)
@@ -184,6 +279,16 @@ def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None
         if paths is None:
             raise GateError("git diff %s failed" % net_range(rng or "origin/HEAD...HEAD"))
         res["paths"] = len(paths)
+        nr = net_range(rng or "origin/HEAD...HEAD")
+        base, head = nr.split("...", 1)
+        cfg = config_changes(repo, base, head or "HEAD", paths) if paths else []
+        if cfg and merge_mode is None:
+            merge_mode = base_merge_mode(repo, base)
+        res.update(config_changes=cfg, merge_mode=merge_mode)
+        cfg_block = bool(cfg) and merge_mode != "off"
+        if cfg and not cfg_block:
+            err.write("wavecoord gate-check: note: %d config change(s), not refused because the fence merge mode is"
+                      " off: %s\n" % (len(cfg), ", ".join(v["key"] for v in cfg)))
         client = None if check_fn else Client.from_env(agent=None, deadline=Deadline(BUDGET_S), env=env, cwd=repo)
         if client is None and check_fn is None:
             return done(UNAVAILABLE_EXIT, "unavailable", "no coordinator URL")
@@ -206,8 +311,13 @@ def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None
         elif lease_rec is not None and (lease_rec.get("task"), lease_rec.get("epoch")) != (task, info["epoch"]):
             return done(VIOLATION_EXIT, "fail", "the PR body says Lease: %s@%s, the server has %s@%s"
                         % (task, info["epoch"], lease_rec.get("task"), lease_rec.get("epoch")))
+        if cfg_block:
+            res["violations"] = list(r.violations) + cfg
         if r.violations:
-            return done(VIOLATION_EXIT, "fail", "%d violation(s) in %d path(s)" % (len(r.violations), len(paths)))
+            return done(VIOLATION_EXIT, "fail", "%d violation(s) in %d path(s)" % (len(res["violations"]), len(paths)))
+        if cfg_block:
+            return done(VIOLATION_EXIT, "fail", "%d config change(s): %s; %s" % (
+                len(cfg), ", ".join(v["key"] for v in cfg), CONFIG_ADVICE))
         return done(PASS_EXIT, "pass", "%d path(s) checked at seq %s" % (len(paths), r.seq))
     except (GateError, OSError, ValueError, KeyError) as e:
         return done(UNAVAILABLE_EXIT, "error", str(e))

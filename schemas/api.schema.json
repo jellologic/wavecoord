@@ -279,6 +279,7 @@
         "throttled": {"type": "boolean"},
         "throttle": {"type": "array", "items": {"type": "string"}},
         "next_provider": {"type": ["string", "null"]},
+        "continue_suggested": {"description": "The run hit its turn limit or token budget after it pushed commits, so the launcher wrote the report: a --continue run can finish the work", "type": "boolean"},
         "state": {"enum": ["reported", "failed", "timed_out", "stopped", "lost"]},
         "branch": {"type": "string"},
         "pushed": {"type": "boolean"},

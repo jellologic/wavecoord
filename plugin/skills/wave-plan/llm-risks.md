@@ -16,6 +16,7 @@ Go through the list for each task. For each risk that applies, add a `## Risks` 
 | Secrets | Tokens in env, config, logs | Prompt: "never print or commit a secret"; acceptance needs no secret |
 | Provider rate limits | Many tasks on one provider, long tasks | `provider_fallback`; `fallback_model`; fewer parallel tasks on that provider |
 | Non-Anthropic model quirks | A profile that maps to another vendor's model | Smaller tasks, explicit file lists, strict acceptance commands, lower `autocompact_window`; do not rely on extended thinking |
+| Turn overrun | A non-Anthropic provider (for example GLM through an Anthropic-compatible endpoint); it uses about 1.5 to 2 times the planned turns | `max_turns` about 2 times the size table; prompt: "batch shell commands into one call; do not read a file again that you already read" |
 | Tool or host gaps | A tool missing on a host (docker, a compiler) | `host_needs`; an acceptance command that checks the tool first |
 | Stale base | The task needs a change that another task in the wave makes | `needs`; or `shared_paths` and an order note in the prompt |
 | Merge conflicts | Two tasks edit the same file region | Disjoint `paths`; one owner for shared files; `needs` for order |

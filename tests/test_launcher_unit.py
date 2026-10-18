@@ -13,7 +13,7 @@ from wavecoord import zipapp
 from wavecoord.launcher import client, config, coord, stream
 from wavecoord.launcher.common import LauncherError
 from wavecoord.launcher.worktrees import check_branch
-from wavecoord.launcher.wrapper import synthetic_report, validate_report
+from wavecoord.launcher.wrapper import continue_cut, synthetic_report, validate_report
 
 
 def probe(free=1, mem=8.0, ok=True, auth="logged-in", installed=True, repo_ok=True, slots=2):
@@ -100,6 +100,15 @@ class StreamTest(unittest.TestCase):
 
 
 class ReportTest(unittest.TestCase):
+    def test_continue_cut(self):
+        self.assertEqual(continue_cut(None, "error_max_turns"), "error_max_turns")
+        self.assertEqual(continue_cut("token_budget", "error_during_execution"), "token_budget")
+        for reason, subtype in ((None, "success"), (None, "error_during_execution"), ("timeout", "error_max_turns"),
+                                ("lease_lost", None), ("stopped", "error_max_turns")):
+            self.assertIsNone(continue_cut(reason, subtype), (reason, subtype))
+        rep = synthetic_report("x", ["a" * 40], ["f.py"], "continue: 1 commits pushed")
+        self.assertEqual(validate_report(rep), [])
+
     def test_synthetic_report_is_valid(self):
         self.assertEqual(validate_report(synthetic_report("x" * 5000, ["a" * 40], ["f.py"])), [])
         self.assertEqual(validate_report(synthetic_report("")), [])

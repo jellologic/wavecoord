@@ -579,6 +579,8 @@ def violation_line(v):
         why = ("your epoch is not the current epoch of %s" % lease) if lease else None
     elif k == "no_lease":
         why = ("you hold no lease on task %s" % task) if task else "you hold no lease"
+    elif k == "config_change":
+        why = "a task PR changes %s; the lead makes this change in a plan or config PR" % (v.get("key") or "it")
     else:
         why = ", ".join(x for x in (("task %s" % task) if task else None, glob) if x) or None
     return "%s: %s%s" % (path, k, (" (%s)" % why) if why else "")

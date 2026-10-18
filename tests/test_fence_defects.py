@@ -1,6 +1,6 @@
 """Seeded defects (tests/fence/README.md, section 2).
 
-For each of the 23 defects, the test applies its patch (tests/fencedefects.py)
+For each of the 24 defects, the test applies its patch (tests/fencedefects.py)
 and runs (1) the defect's named table check and (2) the randomized
 simulation on the first fixed seeds. At least one must fail, else the
 defect is not caught and the suite fails. Without a patch, every table
@@ -220,6 +220,73 @@ class Table(object):
 
     def D23(self):
         return journal_retry_check(self.w)
+
+    def D24(self):
+        return config_change_check(self.w)
+
+
+def config_change_check(w):
+    """A task PR must not change the lead's config (edit-fence.md, section 8). The lease covers `.claude/**`, so
+    only the config check can refuse it. -> None or the failure."""
+    wk = w.workers[0]
+    w.assign(wk, [(".claude/**", "exclusive"), ("plugin/**", "exclusive")])
+    cfgp = os.path.join(wk.wt, ".claude", "wavecoord.json")
+
+    def gate(change, mode=None):
+        git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, "origin/main")
+        change()
+        git(wk.wt, "add", "-A")
+        git(wk.wt, "commit", "-q", "--no-verify", "-m", "c")
+        sha = git(wk.wt, "rev-parse", "HEAD").strip()
+        out = io.StringIO()
+        code = gatecheck.run(None, wk.task, 1, "origin/main..%s" % sha, None, "%s@%d" % (wk.task, wk.epoch), w.repo,
+                             env=w.base_env("gate"), out=out, err=io.StringIO(), as_json=True, merge_mode=mode)
+        d = json.loads(out.getvalue())
+        return code, sorted(v["key"] for v in d.get("config_changes") or [])
+
+    def cfg_edit(fn):
+        def change():
+            with open(cfgp) as f:
+                c = json.load(f)
+            fn(c)
+            with open(cfgp, "w") as f:
+                json.dump(c, f)
+        return change
+
+    def write(rel, text):
+        def change():
+            p = os.path.join(wk.wt, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(text)
+        return change
+
+    try:
+        cases = [
+            ("fence off", cfg_edit(lambda c: c.update(fence="off")), None, (1, ["fence"])),
+            ("claude_flags", cfg_edit(lambda c: c.update(hosts=[{"name": "local", "slots": 1, "repo_path": ".",
+                                                                 "claude_flags": ["--dangerously-skip-permissions"]}])),
+             None, (1, ["hosts[local].claude_flags"])),
+            ("providers and merge_cmd", cfg_edit(lambda c: c.update(providers={"x": {}}, merge_cmd="true")), None,
+             (1, ["merge_cmd", "providers"])),
+            ("settings hooks", write(".claude/settings.json", json.dumps({"disableAllHooks": True})), None,
+             (1, ["disableAllHooks"])),
+            ("plugin hooks", write("plugin/hooks/hooks.json", "{}"), None, (1, ["the plugin hooks (plugin/hooks/hooks.json)"])),
+            ("not a parse", write(".claude/wavecoord.json", "{"), None,
+             (1, [".claude/wavecoord.json (the new file does not parse)"])),
+            ("an unguarded key", cfg_edit(lambda c: c.update(wip_cap=5)), None, (0, [])),
+            ("settings permissions", write(".claude/settings.json", json.dumps({"permissions": {"allow": []}})), None,
+             (0, [])),
+            ("fence off, merge mode off", cfg_edit(lambda c: c.update(fence="off")), "off", (0, ["fence"])),
+        ]
+        for what, change, mode, want in cases:
+            got = gate(change, mode)
+            if got != want:
+                return "%s: gate-check gave %s, want %s" % (what, got, want)
+        return None
+    finally:
+        git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, "origin/main")
+        git(wk.wt, "clean", "-fdq")
 
 
 def journal_retry_check(w):

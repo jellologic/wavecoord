@@ -332,6 +332,71 @@ class OverrideTest(FenceWorld):
         journal and go in the next send (0.1.3; seeded defect D23)."""
         from test_fence_defects import journal_retry_check
         self.assertIsNone(journal_retry_check(self.w))
+    def test_slow_check_uses_the_budget_journal_stays_for_the_next_call(self):
+        """A check that answers but uses up the hook budget leaves no time for the journal flush (the 0.1.4 flake,
+        seed 631187689 under load). The decision stands, the journal stays whole, E3 refuses while it is not empty,
+        and the next reachable call sends it (edit-fence.md, section 4.4). Deterministic: the slow check sets the
+        run's deadline to now after the real answer."""
+        import fencesim
+        env = self.w.base_env("agent")
+        self.w.proxy.fault = "down"
+        fence.write_override(env, 3600, "slow drill")
+        self.assertEqual(self.decision(*self.hook(self.a, "a/x.py")[:2])[0], "allow")
+        self.assertEqual(len(fence.journal_entries(env)), 1)
+        self.w.proxy.fault = None
+        real = fence.server_check
+
+        def slow_check(client, body, retry=True):
+            r = real(client, body, retry)
+            client.deadline.end = time.monotonic()  # the check used the whole budget
+            return r
+        inp = {"session_id": "s-" + self.a.agent, "cwd": self.a.wt, "hook_event_name": "PreToolUse",
+               "tool_name": "Edit", "tool_input": {"file_path": "docs/api.md"}}
+        rec = {}
+        fence.server_check = slow_check
+        try:
+            dec, _ = self.sim.run_hook_traced("PreToolUse", inp, self.w.worker_env(self.a), rec)
+        finally:
+            fence.server_check = real
+        self.assertEqual(dec, "deny")  # the server's answer (foreign exclusive), not a budget deny
+        self.assertEqual(len(fence.journal_entries(env)), 1)  # nothing lost, nothing half removed
+        self.assertEqual(fencesim.flush_deferred(rec), "a flush request got no answer")
+        self.w.proxy.fault = "down"
+        res = fence.push_check(self.a.wt, "origin/main", self.a.agent, self.a.task, self.a.epoch,
+                               self.w.worker_env(self.a))
+        self.assertEqual((res["ok"], res["kind"]), (False, "journal"))
+        # the next reachable call, with its budget, sends the journal
+        self.w.proxy.fault = None
+        rec = {}
+        self.sim.run_hook_traced("PreToolUse", inp, self.w.worker_env(self.a), rec)
+        self.assertEqual(fence.journal_entries(env), [])
+        notes = [n for n in self.w.coord.state.values("notices") if n["kind"] == "fence_override"]
+        self.assertEqual(notes[-1]["detail"]["reason"], "slow drill")
+        fence.remove_override(env)
+
+    def test_deferred_flush_is_narrow(self):
+        """The tolerance of assertion 5 does not cover a flush whose requests got answers but kept entries."""
+        import fencesim
+        env = self.w.base_env("agent")
+        self.w.proxy.fault = "down"
+        fence.write_override(env, 3600, "narrow drill")
+        self.hook(self.a, "a/x.py")
+        self.w.proxy.fault = None
+        real = fence.acked_entries
+        fence.acked_entries = lambda notice, batch: set()  # the server answers, the client keeps every entry
+        rec = {}
+        try:
+            inp = {"session_id": "s-" + self.a.agent, "cwd": self.a.wt, "hook_event_name": "PreToolUse",
+                   "tool_name": "Edit", "tool_input": {"file_path": "a/x.py"}}
+            self.sim.run_hook_traced("PreToolUse", inp, self.w.worker_env(self.a), rec)
+        finally:
+            fence.acked_entries = real
+        self.assertEqual(len(fence.journal_entries(env)), 1)
+        self.assertIsNone(fencesim.flush_deferred(rec), fencesim.flush_facts(rec))
+        self.hook(self.a, "a/x.py")
+        self.assertEqual(fence.journal_entries(env), [])
+        fence.remove_override(env)
+
     def test_env_var_alone_has_no_effect(self):
         self.w.proxy.fault = "down"
         rc, out, _ = self.hook(self.a, "a/x.py", {"WAVECOORD_FENCE_OFFLINE": "1"})
