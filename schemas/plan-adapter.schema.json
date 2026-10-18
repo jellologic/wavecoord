@@ -1,0 +1,99 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jellologic/wavecoord/schemas/plan-adapter.schema.json",
+  "title": "wavecoord plan adapter messages",
+  "description": "The JSON on stdin and stdout of the plan adapter commands (plan.adapter = commands), and the anchored edit of plan_edit. A task spec inside these messages is checked against task-spec.schema.json separately. See docs/adapters.md.",
+  "definitions": {
+    "task_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "state": {"enum": ["todo", "active", "review", "blocked", "done", "dropped"]},
+    "empty_in": {"type": "object", "additionalProperties": false, "properties": {}},
+    "ready_out": {
+      "type": "object",
+      "required": ["tasks"],
+      "properties": {"tasks": {"type": "array", "items": {"type": "object"}}}
+    },
+    "get_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id"],
+      "properties": {"id": {"$ref": "#/definitions/task_id"}}
+    },
+    "graph_out": {
+      "type": "object",
+      "required": ["nodes", "edges"],
+      "properties": {
+        "nodes": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["id", "state", "phase"],
+            "properties": {
+              "id": {"$ref": "#/definitions/task_id"},
+              "state": {"$ref": "#/definitions/state"},
+              "phase": {"type": "string", "minLength": 1},
+              "title": {"type": "string"},
+              "size": {"enum": ["XS", "S", "M", "L", "XL"]}
+            }
+          }
+        },
+        "edges": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["from", "to"],
+            "properties": {"from": {"$ref": "#/definitions/task_id"}, "to": {"$ref": "#/definitions/task_id"}}
+          }
+        }
+      }
+    },
+    "validate_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {"spec": {"type": "object"}}
+    },
+    "validate_out": {
+      "type": "object",
+      "required": ["ok"],
+      "properties": {
+        "ok": {"type": "boolean"},
+        "errors": {"type": "array", "items": {"type": "string"}}
+      }
+    },
+    "edit": {
+      "description": "One anchored edit. The file is <plan.dir>/<id>.md (or `path`, relative to plan.dir). `anchor` must occur exactly once, or `occurrence` picks the n-th (from 1). `create` writes a new file and takes no anchor.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["op"],
+      "properties": {
+        "op": {"enum": ["replace", "insert_before", "insert_after", "delete", "create"]},
+        "id": {"$ref": "#/definitions/task_id"},
+        "path": {"type": "string", "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]+\\.md$"},
+        "anchor": {"type": "string", "minLength": 1},
+        "text": {"type": "string"},
+        "occurrence": {"type": "integer", "minimum": 1}
+      }
+    },
+    "edit_in": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["edits"],
+      "properties": {
+        "branch": {"type": ["string", "null"], "pattern": "^plan/[A-Za-z0-9._-]{1,64}$"},
+        "edits": {"type": "array", "minItems": 1, "items": {"$ref": "#/definitions/edit"}},
+        "title": {"type": "string", "maxLength": 200},
+        "body": {"type": "string"}
+      }
+    },
+    "edit_out": {
+      "type": "object",
+      "required": ["branch", "commit"],
+      "properties": {
+        "branch": {"type": "string", "pattern": "^plan/[A-Za-z0-9._-]{1,64}$"},
+        "commit": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"},
+        "pr": {"type": ["string", "null"]},
+        "files": {"type": "array", "items": {"type": "string"}}
+      }
+    }
+  }
+}

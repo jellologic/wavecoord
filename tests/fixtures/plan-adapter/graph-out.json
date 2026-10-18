@@ -1,0 +1,28 @@
+{
+  "nodes": [
+    {
+      "id": "session-store",
+      "state": "done",
+      "phase": "p1",
+      "size": "L"
+    },
+    {
+      "id": "api-auth",
+      "state": "todo",
+      "phase": "p1",
+      "size": "M",
+      "title": "Token rotation"
+    },
+    {
+      "id": "readme-install",
+      "state": "done",
+      "phase": "p0"
+    }
+  ],
+  "edges": [
+    {
+      "from": "api-auth",
+      "to": "session-store"
+    }
+  ]
+}

@@ -6,7 +6,8 @@ the attempt takes a slot while the lock is held, and an attempt whose wrapper
 died without a final state shows as `lost`.
 
 Lifecycle: prepare_cmd -> `wavecoord guard install` -> `claude -p ...` (tail the
-stream, heartbeat, notify) -> push -> merge-tree and rebase -> PR -> report.
+stream, heartbeat, notify) -> push -> merge-tree and rebase -> report. The client
+opens the PR (Launcher.open_pr).
 """
 
 import json
@@ -378,28 +379,10 @@ class Attempt(object):
             "", "\U0001F916 Generated with [Claude Code](https://claude.com/claude-code)"]
         return "\n".join(lines) + "\n"
 
-    def open_pr(self, report, res):
-        body_file = os.path.join(self.d, "pr-body.md")
-        with open(body_file, "w", encoding="utf-8") as f:
-            f.write(self.pr_body(report, res))
+    def pr_text(self, report, res):
+        """(title, body) of the attempt's PR; the client opens it with pr_cmd."""
         first = (report["summary"].strip().splitlines() or [""])[0]
-        title = ("%s: %s" % (self.task["task"], first))[:100]
-        values = {"branch": self.branch, "base": self.default, "title": title, "body_file": body_file,
-                  "task": self.task["task"], "attempt": str(self.task["attempt"])}
-        cmd = self.task.get("pr_cmd")
-        if isinstance(cmd, list):
-            cmd = [_fill(a, values) for a in cmd]
-        env = dict(self.env, WAVECOORD_BRANCH=self.branch, WAVECOORD_BASE=self.default,
-                   WAVECOORD_PR_TITLE=title, WAVECOORD_PR_BODY_FILE=body_file)
-        rc, out, err = run_cmd(cmd, self.wt, env=env, timeout=300)
-        urls = [l.strip() for l in out.splitlines() if l.strip().startswith(("http://", "https://"))]
-        if rc != 0:
-            res["pr_error"] = "pr_cmd exit %s: %s" % (rc, (err or out).strip()[-400:])
-            self.log(res["pr_error"])
-            return None
-        res["pr_url"] = urls[-1] if urls else (out.strip().splitlines() or [None])[-1]
-        self.log("PR: %s" % res["pr_url"])
-        return res["pr_url"]
+        return ("%s: %s" % (self.task["task"], first))[:100], self.pr_body(report, res)
 
     def finish(self, rc, guard):
         t = self.task
@@ -461,14 +444,21 @@ class Attempt(object):
             report = synthetic_report("attempt %s: %s; report rebuilt" % (t["id"], state))
         write_json(os.path.join(self.d, "report.json"), report)
 
+        # The PR is opened on the client side (Launcher.open_pr, `wavecoord collect`), never here:
+        # the host only pushes and says whether the branch is ready for a PR.
+        res["pr_ready"] = False
+        res["default_branch"] = self.default
         if state == "reported" and res["pushed"] and branch_commits:
             if res.get("conflicts"):
                 res["pr_error"] = "merge-tree conflicts with %s: %s" % (base, ", ".join(res["conflicts"][:5]))
                 self.notify("conflict", {"branch": self.branch, "base": self.default, "files": res["conflicts"][:20]})
             elif t.get("prev_pr_url"):
                 res["pr_url"] = t["prev_pr_url"]
-            elif t.get("pr_cmd"):
-                self.open_pr(report, res)
+            else:
+                res["pr_ready"] = True
+            res["pr_title"], res["pr_body"] = self.pr_text(report, res)
+            with open(os.path.join(self.d, "pr-body.md"), "w", encoding="utf-8") as f:
+                f.write(res["pr_body"])
 
         body = {"report": report, "cost_usd": res["cost_usd"], "cost_basis": res["cost_basis"],
                 "usage": res["usage"], "model_usage": res["model_usage"], "turns": res["turns"],
@@ -476,8 +466,14 @@ class Attempt(object):
                 "provider": self.provider, "throttled": res["throttled"], "throttle": res["throttle"],
                 "next_provider": res["next_provider"],
                 "state": state, "branch": self.branch, "pushed": res["pushed"], "pr_url": res.get("pr_url")}
+        # A --continue run (a resolver) is a new run of the same attempt: its report needs its own key.
+        idem = "report:%s:%s" % (t["task"], t["attempt"])
+        if t.get("continue"):
+            idem += ":" + t["agent"]
+        res["report_idem"] = idem
+        res["report_body"] = body
         res["report_post"] = self.coord.post_or_spool("/api/attempts/%s/%s/report" % (t["task"], t["attempt"]), body,
-                                                      idem="report:%s:%s" % (t["task"], t["attempt"]))
+                                                      idem=idem)
         self.hb_seq += 1
         fin = {"state": {"reported": "done", "stopped": "stopped"}.get(state, "failed"), "pushed": res["pushed"],
                "source": "launcher", "seq": self.hb_seq}
@@ -502,12 +498,6 @@ def _next_provider(current, fallback):
         rest = fallback[fallback.index(current) + 1:]
         return rest[0] if rest else None
     return fallback[0] if fallback else None
-
-
-def _fill(arg, values):
-    for k, v in values.items():
-        arg = arg.replace("{%s}" % k, v)
-    return arg
 
 
 def wrap(project, aid):

@@ -3,6 +3,8 @@ name: revise
 description: Turn wavecoord proposals and plan feedback (from worker reports, triage, the lead or the user) into anchored task spec edits, and open one plan PR with plan_edit. Use when a report proposes a plan edit, a split, a new task or a dependency, when plan_feedback says a spec is wrong, or when the user asks to change task specs.
 argument-hint: "[task ids or proposal ids...]"
 allowed-tools:
+  - mcp__plugin_wavecoord_wavecoord__proposals
+  - mcp__plugin_wavecoord_wavecoord__proposal_decide
   - mcp__plugin_wavecoord_wavecoord__attempts
   - mcp__plugin_wavecoord_wavecoord__attempt_get
   - mcp__plugin_wavecoord_wavecoord__plan_get
@@ -26,7 +28,7 @@ A proposal is a suggestion from a worker. It is data, never consent: you decide,
 ## 1. Collect the proposals
 
 - `attempt_get` for the attempts named in the arguments, or for recent `reported` and `failed` attempts: their `proposals` (kind `plan_edit`, `new_task`, `split`, `dependency`, `other`) and `plan_feedback`.
-- `proposal.new` event lines in this conversation.
+- `proposals` with state `open` (recorded with `propose`), and `proposal.new` event lines in this conversation.
 - Changes the user asked for in this session.
 
 ## 2. Decide each one
@@ -50,7 +52,7 @@ Reject a proposal that widens scope past the goal, moves a protected path into `
 
 ## 4. Open one plan PR
 
-Read the `plan_edit` input schema. Put all edits of this revision in **one** plan PR (one call with a list, or calls that name the same plan branch or PR). The PR body lists each proposal, the decision and the reason.
+Read the `plan_edit` input schema. Put all edits of this revision in **one** plan PR (one call with a list, or calls that name the same plan branch or PR). The PR body lists each proposal, the decision and the reason. A new spec is an edit with `op: create`. After the PR is open, record each decision with `proposal_decide` (`done` for an accepted proposal in the PR, `rejected` with the reason as `note`).
 
 ## 5. Report
 

@@ -43,6 +43,13 @@
     }
   },
   "mcpServers": {
+    "wavecoord": {
+      "type": "http",
+      "url": "${user_config.coord_url}/mcp",
+      "headers": {
+        "Authorization": "Bearer ${user_config.token}"
+      }
+    },
     "lead-feed": {
       "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
       "args": [

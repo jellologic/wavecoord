@@ -88,6 +88,8 @@ class Server(object):
         self.httpd = cls((bind, port), handler)
         self.httpd.daemon_threads = True
         self.port = self.httpd.server_address[1]
+        if getattr(coord, "server_url", None) is None:
+            coord.server_url = self.url  # the lead tools give it to workers when no coord_url is configured
         hosts = set(self.allow_hosts_cfg)
         for n in LOOPBACK_NAMES:
             hosts.update((n, "%s:%d" % (n, self.port)))
@@ -132,6 +134,32 @@ def _q1(q, name, default=None):
     return v[0] if v else default
 
 
+def _lead(app, ctx, write, fn):
+    """Run a lead-tool operation for REST: role check, then fn(lead) -> dict with `now`."""
+    from wavecoord.core import READ_ROLES
+    from wavecoord.lead import lead_for
+    c = app.coord
+    c._require(ctx, *(("lead",) if write else READ_ROLES))
+    try:
+        out = fn(lead_for(c))
+    except ApiError:
+        raise
+    except Exception as e:  # noqa: BLE001 - reported to the caller, never a traceback
+        raise ApiError("unavailable", "%s: %s" % (type(e).__name__, e))
+    out = dict(out) if isinstance(out, dict) else {"result": out}
+    out["now"] = c.ts()
+    return out
+
+
+def _dispatch(lead, b):
+    b = b or {}
+    if b.get("wave") or b.get("tasks"):
+        return lead.dispatch_wave(b.get("tasks"), bool(b.get("dry_run")))
+    if not b.get("task"):
+        raise ApiError("bad_request", "need {task, host?, overrides?, dry_run?} or {wave: true, tasks?, dry_run?}")
+    return lead.dispatch(b["task"], b.get("host"), b.get("overrides"), bool(b.get("dry_run")))
+
+
 # (method, path regex, handler(app, ctx, match, body, query, idem) -> response dict)
 def _routes():
     c = lambda app: app.coord  # noqa: E731
@@ -148,10 +176,28 @@ def _routes():
         ("POST", r"/api/leases/(\d+)/release", lambda a, x, m, b, q, k: c(a).release(x, i(m.group(1)), b, k)),
         ("POST", r"/api/reservations", lambda a, x, m, b, q, k: c(a).reserve(x, b, k)),
         ("DELETE", r"/api/reservations/(\d+)", lambda a, x, m, b, q, k: c(a).unreserve(x, i(m.group(1)), k)),
-        ("GET", r"/api/conflicts", lambda a, x, m, b, q, k: c(a).conflicts(
+        ("GET", r"/api/conflicts", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.conflicts())
+            if _q1(q, "full") == "1" else c(a).conflicts(
             x, [g for g in (_q1(q, "globs") or "").split(",") if g] or None,
             i(_q1(q, "lease_id")) if (_q1(q, "lease_id") or "").isdigit() else None,
             _q1(q, "mode", "exclusive"))),
+        ("GET", r"/api/plan/ready", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.plan_ready())),
+        ("GET", r"/api/plan/tasks/([^/]+)", lambda a, x, m, b, q, k: _lead(
+            a, x, False, lambda L: L.plan_get(urllib.parse.unquote(m.group(1))))),
+        ("GET", r"/api/plan/graph", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.plan_graph())),
+        ("POST", r"/api/plan/validate", lambda a, x, m, b, q, k: _lead(
+            a, x, False, lambda L: L.plan_validate((b or {}).get("spec")))),
+        ("POST", r"/api/plan/edit", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.plan_edit(
+            (b or {}).get("edits"), (b or {}).get("branch"), (b or {}).get("title"), (b or {}).get("body")))),
+        ("POST", r"/api/dispatch", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: _dispatch(L, b))),
+        ("POST", r"/api/collect", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.collect(
+            bool((b or {}).get("dry_run")), (b or {}).get("attempt")))),
+        ("POST", r"/api/resolve", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.resolve(
+            (b or {}).get("attempt"), (b or {}).get("branch"), (b or {}).get("conflict"),
+            bool((b or {}).get("dry_run"))))),
+        ("GET", r"/api/refinery", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.refinery_status())),
+        ("POST", r"/api/refinery/merge", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.refinery_merge(
+            (b or {}).get("pr"), bool((b or {}).get("approved_protected"))))),
         ("POST", r"/api/check", lambda a, x, m, b, q, k: c(a).check(x, b)),
         ("POST", r"/api/messages", lambda a, x, m, b, q, k: c(a).send(x, b, k)),
         ("GET", r"/api/inbox", lambda a, x, m, b, q, k: c(a).inbox(x, _q1(q, "agent"))),
@@ -166,6 +212,8 @@ def _routes():
         ("GET", r"/api/attempts/([^/]+)/(\d+)", lambda a, x, m, b, q, k: c(a).attempt(
             x, urllib.parse.unquote(m.group(1)), i(m.group(2)))),
         ("POST", r"/api/attempts/([^/]+)/(\d+)/report", lambda a, x, m, b, q, k: c(a).report(
+            x, urllib.parse.unquote(m.group(1)), i(m.group(2)), b, k)),
+        ("POST", r"/api/attempts/([^/]+)/(\d+)/end", lambda a, x, m, b, q, k: c(a).attempt_end(
             x, urllib.parse.unquote(m.group(1)), i(m.group(2)), b, k)),
         ("GET", r"/api/config", lambda a, x, m, b, q, k: c(a).config(x)),
         ("POST", r"/api/revert", lambda a, x, m, b, q, k: c(a).revert(x, b, k)),

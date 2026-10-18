@@ -24,7 +24,7 @@ from wavecoord import const
 from wavecoord.globs import globs_overlap
 
 COLLECTIONS = ("meta", "agents", "leases", "epochs", "reservations", "attempts", "messages", "acks",
-               "notices", "proposals", "requests", "conflicts", "idem", "counters", "reverted")
+               "notices", "proposals", "requests", "conflicts", "idem", "counters", "reverted", "refinery")
 
 # Kinds that `revert <seq>` may undo. Leases and reservations are undone by
 # their own transitions, because fencing epochs only go up (rollback.md).
@@ -285,14 +285,23 @@ class State(object):
     def _on_attempt_start(self, ev, p, h):
         key, a = self._attempt(ev)
         a = dict(a, state=p.get("state", "running"))
-        for k in ("host", "branch", "holder"):
+        for k in ("host", "branch", "holder", "provider", "resolver", "conflict_id"):
             if p.get(k) is not None:
                 a[k] = p[k]
+        if a.get("ended"):  # a --continue run (resolver) of the same attempt starts again
+            a["ended"] = None
         self.put("attempts", key, a)
+
+    # attempt.end: the final launcher state, as the collector saw it on the host
+    END_KEYS = ("pr_url", "pr_error", "conflicts", "report_status", "throttled", "next_provider", "pushed")
 
     def _on_attempt_end(self, ev, p, h):
         key, a = self._attempt(ev)
-        self.put("attempts", key, dict(a, state=p["state"], ended=ev["ts"]))
+        a = dict(a, state=p["state"], ended=ev["ts"])
+        for k in self.END_KEYS:
+            if k in p:
+                a[k] = p[k]
+        self.put("attempts", key, a)
 
     def _on_report_post(self, ev, p, h):
         key, a = self._attempt(ev)
@@ -351,6 +360,41 @@ class State(object):
         c = self.get("conflicts", p["conflict_id"])
         if c:
             self.put("conflicts", c["id"], dict(c, state="closed", closed_ts=ev["ts"]))
+
+    def _refinery(self, ev, p, state):
+        key = "%s/%d" % (ev["task"], ev["attempt"])
+        r = dict(self.get("refinery", key) or {"task": ev["task"], "n": ev["attempt"], "queued_ts": ev["ts"]})
+        r.update({"state": state, "ts": ev["ts"]})
+        if state != "blocked":
+            for k in ("reason", "files", "detail"):
+                r.pop(k, None)
+        for k in ("pr", "pr_url", "branch", "sha", "reason", "files", "detail"):
+            if k in p:
+                r[k] = p[k]
+        self.put("refinery", key, r)
+
+    def _on_refinery_queue(self, ev, p, h):
+        self._refinery(ev, p, "queued")
+
+    def _on_refinery_block(self, ev, p, h):
+        self._refinery(ev, p, "blocked")
+
+    def _on_refinery_merge(self, ev, p, h):
+        self._refinery(ev, p, "merged")
+        key, a = self._attempt(ev)
+        self.put("attempts", key, dict(a, state="merged", merged_sha=p.get("sha"), merged_ts=ev["ts"]))
+
+    def _on_resolve_start(self, ev, p, h):
+        c = self.get("conflicts", p.get("conflict_id")) if p.get("conflict_id") is not None else None
+        if c:
+            self.put("conflicts", c["id"], dict(c, resolver={"task": ev["task"], "n": ev["attempt"],
+                                                             "agent": p.get("agent"), "ts": ev["ts"]}))
+
+    def _on_resolve_end(self, ev, p, h):
+        c = self.get("conflicts", p.get("conflict_id")) if p.get("conflict_id") is not None else None
+        if c:
+            r = dict(c.get("resolver") or {}, ok=bool(p.get("ok")), ended=ev["ts"])
+            self.put("conflicts", c["id"], dict(c, resolver=r))
 
     def _on_revert(self, ev, p, h):
         if "to_seq" in p:

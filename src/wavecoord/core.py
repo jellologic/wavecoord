@@ -80,11 +80,13 @@ def effective_config(repo, cfg):
         "log_branch": const.DEFAULT_LOG_BRANCH,
         "plan": {"adapter": "builtin", "dir": "plan/tasks"},
         "hosts": [{"name": "local", "slots": 2, "repo_path": os.path.abspath(repo)}],
-        "merge_cmd": "gh pr merge --squash",
-        "pr_cmd": "gh pr create --fill",
+        "merge_cmd": ["gh", "pr", "merge", "{pr}", "--merge", "--match-head-commit", "{sha}"],
+        "pr_cmd": ["gh", "pr", "create", "--head", "{branch}", "--base", "{base}", "--title", "{title}",
+                   "--body-file", "{body_file}"],
         "check_cmd": None,
         "protected_paths_cmd": None,
         "branch_prefix": "wave",
+        "auto_resolve": False,
     }
     out.update({k: v for k, v in cfg.items() if k != "$schema"})
     if "wip_cap" not in out:
@@ -149,6 +151,7 @@ class Coord(object):
         self.clock_bad = False
         self._stop = threading.Event()
         self._reaper = None
+        self.server_url = None  # set by the HTTP server; the lead tools give it to workers
 
     # ----- lifecycle -----
 
@@ -891,8 +894,8 @@ class Coord(object):
 
     def decide(self, ctx, pid, body, idem=None):
         self._require(ctx, "lead")
-        if not isinstance(body, dict) or body.get("decision") not in ("accepted", "rejected", "deferred"):
-            raise ApiError("bad_request", "decision must be accepted, rejected or deferred")
+        if not isinstance(body, dict) or body.get("decision") not in ("accepted", "rejected", "deferred", "done"):
+            raise ApiError("bad_request", "decision must be accepted, rejected, deferred or done")
 
         def build():
             p = self.state.get("proposals", pid)
@@ -945,6 +948,55 @@ class Coord(object):
             return [self._ev("report.post", payload, task, n)]
 
         self.write(ctx, idem or "report:%s:%d" % (task, n), build, expect=("report.post",))
+        return self.attempt(ctx, task, n)
+
+    # ----- lead records (dispatch, attempts, conflicts, resolve, refinery) -----
+
+    RECORD_KINDS = ("dispatch.decide", "attempt.start", "attempt.end", "conflict.open", "conflict.close",
+                    "resolve.start", "resolve.end", "refinery.queue", "refinery.merge", "refinery.block")
+
+    def record(self, ctx, kind, payload, task=None, attempt=None, idem=None):
+        """Log one lead-side transition. `payload` is a dict, or a function(state) -> dict
+        (or None to log nothing) that runs under the write lock. -> the event or None."""
+        self._require(ctx, "lead")
+        if kind not in self.RECORD_KINDS:
+            raise ApiError("bad_request", "kind %s is not a lead record" % kind)
+
+        def build():
+            p = payload(self.state) if callable(payload) else payload
+            return [] if p is None else [self._ev(kind, p, task, attempt)]
+
+        logged, _, _ = self.write(ctx, idem, build, expect=(kind,))
+        return logged[0] if logged else None
+
+    def open_conflict(self, ctx, conflict, task=None, attempt=None, idem=None):
+        """conflict.open with the next conflict id, unless the same open conflict exists. -> the conflict."""
+        def payload(st):
+            for c in st.values("conflicts"):
+                if c["state"] == "open" and c.get("kind") == conflict.get("kind") and \
+                        c.get("task") == task and c.get("attempt") == attempt:
+                    return None
+            c = dict(conflict, id=st.next_id("conflict"), state="open", ts=self.ts(), task=task, attempt=attempt)
+            return {"conflict": c}
+
+        ev = self.record(ctx, "conflict.open", payload, task, attempt, idem)
+        with self.wlock:
+            if ev:
+                return self.state.get("conflicts", ev["payload"]["conflict"]["id"])
+            for c in self.state.values("conflicts"):
+                if c["state"] == "open" and c.get("kind") == conflict.get("kind") and \
+                        c.get("task") == task and c.get("attempt") == attempt:
+                    return c
+        return None
+
+    def attempt_end(self, ctx, task, n, body, idem=None):
+        """POST /api/attempts/<task>/<n>/end (lead): the collector's final view of an attempt."""
+        self._require(ctx, "lead")
+        if not isinstance(body, dict) or body.get("state") not in ("reported", "failed", "timed_out", "stopped",
+                                                                   "lost", "abandoned"):
+            raise ApiError("bad_request", "need {state, pr_url?, pr_error?, conflicts?}")
+        keep = ("state",) + State.END_KEYS
+        self.record(ctx, "attempt.end", {k: body[k] for k in keep if k in body}, task, n, idem)
         return self.attempt(ctx, task, n)
 
     # ----- rollback -----

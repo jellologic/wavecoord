@@ -1,0 +1,86 @@
+{
+  "tasks": [
+    {
+      "id": "api-auth",
+      "title": "Token rotation",
+      "phase": "p1",
+      "needs": [
+        "session-store"
+      ],
+      "paths": [
+        "src/auth/**",
+        "tests/test_rotate.py"
+      ],
+      "shared_paths": [
+        "docs/api.md"
+      ],
+      "class": "B",
+      "size": "M",
+      "state": "todo",
+      "exec": {
+        "model": "opus",
+        "fallback_model": "sonnet",
+        "effort": "high",
+        "max_turns": 80,
+        "budget_usd": 5,
+        "timeout_min": 60,
+        "host_needs": [
+          "python3"
+        ],
+        "split_if": "the change needs a storage schema migration",
+        "autocompact_window": 160000,
+        "provider": "zai",
+        "provider_fallback": [
+          "openrouter",
+          "anthropic"
+        ]
+      },
+      "sections": {
+        "context": "Refresh tokens never rotate today. The session store owns token persistence.",
+        "risks": [
+          {
+            "risk": "The model edits the session store instead of using its interface",
+            "mitigation": "session store paths are not in paths; the fence denies them",
+            "kind": "llm"
+          },
+          {
+            "risk": "Clock skew in expiry tests",
+            "mitigation": "inject a fake clock",
+            "kind": "technical"
+          }
+        ],
+        "acceptance": [
+          "python -m unittest tests.test_rotate",
+          "python -m unittest discover -s tests"
+        ],
+        "prompt": "Implement refresh-token rotation in src/auth. Write the tests first. Do not change the session store."
+      }
+    },
+    {
+      "id": "readme-install",
+      "phase": "p0",
+      "needs": [],
+      "paths": [
+        "README.md"
+      ],
+      "class": "C",
+      "size": "XS",
+      "state": "done",
+      "exec": {
+        "model": "sonnet",
+        "effort": "low",
+        "max_turns": 10,
+        "budget_usd": 0.5,
+        "timeout_min": 10
+      },
+      "sections": {
+        "context": "The README has no install line.",
+        "risks": [],
+        "acceptance": [
+          "grep -q 'plugin install' README.md"
+        ],
+        "prompt": "Add the install line to README.md."
+      }
+    }
+  ]
+}

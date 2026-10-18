@@ -43,7 +43,7 @@ Why the task exists and what the worker must know first.
 The worker prompt. Imperative, self-contained.
 ```
 
-The frontmatter is a small YAML subset (scalars, flow lists `[a, b]`, one nested map `exec`). The P4 parser is stdlib-only and rejects anything outside the subset.
+The frontmatter is a small YAML subset (scalars, flow lists `[a, b]`, one nested map `exec`). The parser (`src/wavecoord/plan/spec.py`) is stdlib-only and rejects anything outside the subset: block lists, multi-line values, tabs, nested lists, duplicate keys, `null`. A scalar is an integer, a decimal, `true`/`false`, `'single'` or `"double"` quoted text, or bare text. Quote a value that starts with `*`, `&`, `!`, `[`, `{`, `|`, `>`, `%`, `@` or a backquote (for example a glob `'**/*.md'`). A `## ` heading that is not one of the sections below is an error, and so is text before the first section (a `# ` title line is allowed). `## Risks` may be empty. An item of `## Acceptance` in backquotes is unquoted. `wavecoord plan validate` checks a plan offline.
 
 ## Fields
 
@@ -82,4 +82,6 @@ The frontmatter is a small YAML subset (scalars, flow lists `[a, b]`, one nested
 
 ## Ready
 
-A task is ready when its `state` is `todo`, every task in `needs` is `done`, and none of its `paths` overlaps an exclusive reservation of a non-released lease (or its own exclusive `paths` overlaps any reservation). `dispatch_wave` picks ready tasks in plan order, skipping any that overlap a task already picked in the same wave, up to `wip_cap`.
+The lead tools use the **effective state**: a `done` or `dropped` spec state always wins; otherwise a task with a merged attempt (`refinery.merge`) is `done`, a task with an `active` or `stale` lease or an attempt in flight is `active`, and a task with a `parked` lease is `review`. So a merge makes the dependents ready before the spec file says `done`.
+
+A task is ready when its effective `state` is `todo`, every task in `needs` is `done`, and none of its `paths` overlaps an exclusive reservation of a non-released lease (or its own exclusive `paths` overlaps any reservation). `dispatch_wave` picks ready tasks in plan order, skipping any that overlap a task already picked in the same wave, up to `wip_cap`.

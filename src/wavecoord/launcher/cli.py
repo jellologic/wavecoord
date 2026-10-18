@@ -78,10 +78,27 @@ def cmd_launch(args):
         if not args.json:
             sys.stderr.write("wavecoord: launched %s on %s; waiting\n" % (rec["id"], rec["host"]))
         res = L.wait(rec["id"])
+        if res.get("pr_ready"):
+            res["pr_url"], res["pr_error"] = L.open_pr(res)  # the PR is opened here, on the client
+            _record_end(L, res)
         _print(res, True) if args.json else _print_result(res)
         return 0 if res.get("state") == "reported" else 1
     except (LauncherError, OSError) as e:
         return _err(e)
+
+
+def _record_end(L, res):
+    """Tell the coordinator the PR (best effort; needs a lead token). `wavecoord collect` does it too."""
+    from . import coord as coordmod
+    if not L.coord_url:
+        return
+    body = {k: res.get(k) for k in ("state", "pr_url", "pr_error") if res.get(k) is not None}
+    try:
+        coordmod.Coord(L.coord_url, agent="lead").request(
+            "POST", "/api/attempts/%s/%s/end" % (res["task"], res["attempt"]), body,
+            idem="end:%s:%s" % (res.get("id"), res.get("pr_url")))
+    except LauncherError:
+        pass
 
 
 def _print_result(r):

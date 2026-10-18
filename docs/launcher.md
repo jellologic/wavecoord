@@ -1,8 +1,8 @@
 # Worker launcher
 
-The launcher starts one worker **attempt** of one task on one host, watches it, and turns its end into a pushed branch, a PR and one report. It runs on the lead's machine (the client) and on each host (the host side). Stdlib Python only; the same zipapp is both sides.
+The launcher starts one worker **attempt** of one task on one host, watches it, and turns its end into a pushed branch and one report. The PR is opened on the lead's machine, never on the host. It runs on the lead's machine (the client) and on each host (the host side). Stdlib Python only; the same zipapp is both sides.
 
-Status: P3. The lead tools (P4) will call the same code through `POST /api/dispatch`; until then, run it from the CLI.
+Status: P4. The lead tools (`dispatch`, `dispatch_wave`, `resolve`, `collect`; contract section 8) call the same code in the server process. The CLI below still works on its own.
 
 ## Commands
 
@@ -75,7 +75,7 @@ After the run:
 
 1. **Report.** The `structured_output` of the final result must validate against `schemas/report.schema.json`. Otherwise, or on any failure, the report is a synthetic `failed` one that says why. `report.commits` is set to the commits on the branch as pushed.
 2. **Push.** When the branch has commits ahead of `origin/<default>`, fetch the default branch and run `git merge-tree --write-tree` against it. If that is clean and the branch is behind, rebase onto it (only in a clean worktree). Push `HEAD:refs/heads/<branch>` without force. Only after its own rebase, and only if the remote branch is where it was before, does it retry with `--force-with-lease=<branch>:<seen sha>`. A run with commits that does not push is `failed`. Nothing is pushed after a stop or a lost lease.
-3. **PR.** Only for a `reported`, pushed attempt whose merge-tree is clean (a conflict posts a `conflict` notice instead). `pr_cmd` runs in the worktree; see `adapters.md` for placeholders. The body starts with `Task: <task>`, `Attempt: <n>` and `Lease: <task>@<epoch>` (`none` without a lease), then the report summary, checks, questions, risks and commits. A `--continue` run keeps the PR of the earlier run.
+3. **PR readiness.** The host never runs `pr_cmd`. For a `reported`, pushed attempt whose merge-tree is clean, the result has `pr_ready: true`, `pr_title` and `pr_body` (also in `pr-body.md`). The body starts with `Task: <task>`, `Attempt: <n>` and `Lease: <task>@<epoch>` (`none` without a lease), then the report summary, checks, questions, risks and commits. A conflict posts a `conflict` notice and sets `pr_error` instead. The client then opens the PR (below).
 4. **Report and finish.** `POST /api/attempts/<task>/<n>/report`, then `POST /api/agents/<agent>/finish`. A write that cannot reach the coordinator is spooled in `~/.wavecoord/spool/` and sent again at the next probe or attempt end; its `Idempotency-Key` makes a resend safe.
 
 ### Attempt states
@@ -99,6 +99,16 @@ Writes carry an `Idempotency-Key` header (as in the hooks client). All calls car
 | end | `POST /api/agents/<agent>/finish` | `finish_request`: state done, failed or stopped; pushed; `source: launcher` |
 
 The report body is `report_request` in `api.schema.json`.
+
+## Client side: PRs, the collector and the dispatcher
+
+The lead's machine opens every PR with `pr_cmd` in the consumer repo root (`adapters.md`, "PR command"):
+
+- `wavecoord launch --wait` opens the PR after the wait and tells the coordinator (`POST /api/attempts/<task>/<n>/end`, best effort; it needs a lead token).
+- `wavecoord collect` (and the `collect` tool) reads the client index (`~/.wavecoord/client/<project>/<task>-<n>.json`), asks each host for its finished attempts, and per attempt: resends the report when the coordinator does not have it (same idempotency key), opens the PR or logs `conflict.open` for a merge-tree conflict, logs `attempt.end`, ends a resolver run (`resolve.end`, `conflict.close` when it is clean), dispatches a resolver when `auto_resolve` is on, and starts the next attempt on `next_provider` after a rate-limited failure. Each attempt is collected once; a `--continue` run makes it collectable again and keeps its PR.
+- `wavecoord dispatch --loop [--interval S] [--dry-run]` repeats: collect, then dispatch the ready wave (`dispatch_wave`). `--dry-run` only prints what it would do.
+
+Dispatch (`dispatch`, `dispatch_wave`) claims the lease on the coordinator first (the spec's `paths` exclusive, `shared_paths` shared, holder `worker-<task>-<n>-<4 hex>`), then launches with the spec's `exec` values on the hosts whose name or `labels` cover `exec.host_needs`. It respects `wip_cap` (attempts `dispatched` or `running`). It picks the first provider of `[exec.provider] + exec.provider_fallback` that a candidate host has and that is not backed off: a provider is backed off for `PROVIDER_BACKOFF_S` after a throttled attempt or a `rate_limit` notice that names it. A launch failure releases the lease again. A resolver (`resolve`) is a `--continue` run of the same attempt: it steals the parked lease (a new epoch), and its report has its own idempotency key `report:<task>:<n>:<agent>`.
 
 ## gc
 

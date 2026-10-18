@@ -15,7 +15,7 @@ from wavecoord import zipapp
 from . import coord as coordmod
 from .providers import ANTHROPIC, cost_basis
 from .common import (FINAL, TASK_RE, LauncherError, Unreachable, ensure_dir, git_run, now, rand4, read_json,
-                     wc_home, write_json)
+                     run_cmd, wc_home, write_json)
 from .transport import Host
 
 POLL_S = 10.0
@@ -216,7 +216,7 @@ class Launcher(object):
             if not self.cfg.known_provider(p):
                 raise LauncherError("unknown provider %r (configured: %s)"
                                     % (p, ", ".join(sorted(set(self.cfg.providers) | {ANTHROPIC}))))
-        names = [opts["host"]] if opts.get("host") else sorted(self.hosts)
+        names = [opts["host"]] if opts.get("host") else sorted(opts.get("hosts") or self.hosts)
         for n in names:
             self.host(n)
         names = [n for n in names if provider in self.cfg.host_providers(n)]
@@ -261,7 +261,8 @@ class Launcher(object):
         lease_id, epoch = opts.get("lease_id"), opts.get("lease_epoch")
         lease_note = "given" if epoch else None
         if not epoch and not opts.get("no_claim"):
-            lease, lease_note = self.claim(task, attempt, agent, name, opts.get("reservations"))
+            claim = opts.get("claim") or self.claim
+            lease, lease_note = claim(task, attempt, agent, name, opts.get("reservations"))
             if lease:
                 lease_id, epoch = lease["id"], lease["epoch"]
             else:
@@ -276,19 +277,50 @@ class Launcher(object):
         self.ensure_plugin(h, probe)
         self.ensure_token(h, probe)
         self.ensure_tunnel(h, probe)
-        payload = dict(self.base_payload(), spec=spec, pr_cmd=self.cfg.pr_cmd)
+        # PRs are opened on the client (open_pr), never on the host: the host only pushes.
+        payload = dict(self.base_payload(), spec=spec)
         out = h.call("launch", payload, timeout=900)
         if out.get("need_plugin"):
             self.ensure_plugin(h, {})
             out = h.call("launch", payload, timeout=900)
         if not out.get("ok"):
             raise LauncherError(out.get("error") or "launch failed")
+        old = self.index_get(aid) or {}
         rec = {"id": aid, "host": name, "task": task, "attempt": attempt, "branch": branch, "agent": agent,
                "session_id": spec["session_id"], "lease_id": lease_id, "lease_epoch": epoch, "lease_note": lease_note,
-               "worktree": out.get("worktree"), "provider": provider, "provider_fallback": fallback, "created": now()}
+               "worktree": out.get("worktree"), "provider": provider, "provider_fallback": fallback, "created": now(),
+               "continue": bool(opts.get("continue")), "collected": False}
+        if opts.get("continue") and old.get("pr_url"):
+            rec["pr_url"] = old["pr_url"]  # a --continue run keeps the PR of the earlier run
+        for k, v in (opts.get("record") or {}).items():
+            rec[k] = v
         self.index_put(rec)
         rec["state_dir"] = out.get("state_dir")
         return rec
+
+    # -- the PR, on the client side
+    def open_pr(self, res):
+        """Open the PR of a finished attempt with pr_cmd, in the consumer repo root on this machine.
+
+        Only for a `reported`, pushed attempt whose merge-tree is clean (`pr_ready` in the
+        host result). A --continue run keeps the PR of the earlier run. -> (url or None, error or None)."""
+        aid = res.get("id") or "%s-%s" % (res.get("task"), res.get("attempt"))
+        rec = self.index_get(aid) or {}
+        if rec.get("pr_url"):
+            return rec["pr_url"], None
+        if not res.get("pr_ready"):
+            return None, "not ready for a PR (state %s, pushed %s, conflicts %s)" % (
+                res.get("state"), res.get("pushed"), ", ".join((res.get("conflicts") or [])[:5]) or "none")
+        title = res.get("pr_title") or "%s: attempt %s" % (res.get("task"), res.get("attempt"))
+        body = res.get("pr_body") or "Task: %s\nAttempt: %s\n" % (res.get("task"), res.get("attempt"))
+        url, err = run_pr_cmd(self.cfg, res["branch"], res.get("default_branch") or "main", title, body,
+                              os.path.join(self.index_dir(), aid + ".pr-body.md"),
+                              task=res.get("task"), attempt=res.get("attempt"))
+        if url:
+            rec = self.index_get(aid) or {"id": aid}
+            rec["pr_url"] = url
+            self.index_put(rec)
+        return url, err
 
     # -- attempts
     def locate(self, aid):
@@ -342,6 +374,37 @@ class Launcher(object):
             if end and now() > end:
                 return r
             time.sleep(poll)
+
+
+def run_pr_cmd(cfg, branch, base, title, body, body_file, task=None, attempt=None):
+    """Run the configured pr_cmd in the consumer repo root (docs/adapters.md, "PR command").
+
+    -> (url or None, error or None). The last http(s) line of stdout is the URL."""
+    cmd = cfg.pr_cmd
+    if not cmd:
+        return None, "no pr_cmd configured"
+    with open(body_file, "w", encoding="utf-8") as f:
+        f.write(body)
+    title = title[:100]
+    values = {"branch": branch, "base": base, "title": title, "body_file": body_file,
+              "task": str(task or ""), "attempt": str(attempt or "")}
+    if isinstance(cmd, list):
+        cmd = [fill(a, values) for a in cmd]
+    env = dict(os.environ, WAVECOORD_BRANCH=branch, WAVECOORD_BASE=base, WAVECOORD_PR_TITLE=title,
+               WAVECOORD_PR_BODY_FILE=body_file, WAVECOORD_TASK=str(task or ""), WAVECOORD_ATTEMPT=str(attempt or ""))
+    rc, out, err = run_cmd(cmd, cfg.root, env=env, timeout=300)
+    if rc != 0:
+        return None, "pr_cmd exit %s: %s" % (rc, (err or out).strip()[-400:])
+    urls = [l.strip() for l in out.splitlines() if l.strip().startswith(("http://", "https://"))]
+    url = urls[-1] if urls else ((out.strip().splitlines() or [None])[-1])
+    return url, None if url else "pr_cmd printed no PR URL"
+
+
+def fill(arg, values):
+    """Replace `{name}` placeholders in one argument of an array command."""
+    for k, v in values.items():
+        arg = arg.replace("{%s}" % k, v)
+    return arg
 
 
 def prompt_from_spec(spec):
