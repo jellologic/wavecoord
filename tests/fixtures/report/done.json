@@ -1,0 +1,23 @@
+{
+  "status": "done",
+  "summary": "Added token rotation behind the session-store interface; unit tests pass.",
+  "commits": [
+    "3f9a1c2"
+  ],
+  "files": [
+    "src/auth/rotate.py",
+    "tests/test_rotate.py"
+  ],
+  "checks_run": [
+    {
+      "cmd": "python -m unittest discover -s tests",
+      "result": "Ran 41 tests OK",
+      "ok": true
+    }
+  ],
+  "acceptance_met": true,
+  "questions": [],
+  "proposals": [],
+  "plan_feedback": "",
+  "risks_hit": []
+}

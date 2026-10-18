@@ -1,0 +1,20 @@
+{
+  "schema": "event",
+  "doc": {
+    "schema": 1,
+    "seq": 5,
+    "ts": "2026-10-18T12:00:00Z",
+    "kind": "lease.grant",
+    "actor": {
+      "agent": "lead",
+      "host": "local",
+      "session_id": "0b7e2d4c-1a3f-4e5b-8c9d-2f1e0a3b4c5d",
+      "principal": "lead"
+    },
+    "task": "t",
+    "attempt": 1,
+    "payload": {},
+    "idem": null,
+    "prev": "abc"
+  }
+}

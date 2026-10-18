@@ -1,0 +1,156 @@
+#!/usr/bin/env python3
+"""A fake of `claude -p` for tests. Stdlib only. It never calls a model.
+
+It reads the prompt from the arguments or stdin and prints a result in the
+same shapes as Claude Code:
+
+  --output-format stream-json  one JSON object per line: system/init,
+                               assistant, result (with structured_output)
+  --output-format json         one result object
+  --output-format text         the result text (default)
+
+Flags it honors: -p/--print, --output-format, --session-id (must be a UUID),
+--model. --json-schema is accepted but not read: structured_output is always
+the report below. Unknown flags are ignored.
+
+Environment:
+  FAKE_CLAUDE_COMMIT=1     write a file in cwd and `git commit` it; the report
+                           lists the commit and the file
+  FAKE_CLAUDE_STATUS=<s>   report status (default done)
+  FAKE_CLAUDE_REPORT=<p>   use the JSON file at <p> as structured_output
+  FAKE_CLAUDE_EXIT=<n>     exit code (default 0); non-zero gives is_error
+  FAKE_CLAUDE_SLEEP=<s>    sleep before the result (seconds, float)
+  FAKE_CLAUDE_COST=<usd>   total_cost_usd (default 0.0)
+"""
+
+import argparse
+import json
+import os
+import subprocess
+import sys
+import time
+import uuid
+
+VERSION = "0.0.0 (fake-claude)"
+
+
+def parse(argv):
+    ap = argparse.ArgumentParser(prog="claude", add_help=False)
+    ap.add_argument("-p", "--print", action="store_true", dest="print_mode")
+    ap.add_argument("--output-format", default="text", choices=["text", "json", "stream-json"])
+    ap.add_argument("--session-id")
+    ap.add_argument("--model", default="fake-model")
+    ap.add_argument("--json-schema")
+    ap.add_argument("--verbose", action="store_true")
+    ap.add_argument("--version", action="store_true")
+    ap.add_argument("prompt", nargs="?")
+    args, _unknown = ap.parse_known_args(argv)
+    return args
+
+
+def git_commit(session_id):
+    name = "fake-claude-%s.txt" % session_id[:8]
+    with open(name, "w", encoding="utf-8") as f:
+        f.write("written by fake claude, session %s\n" % session_id)
+    env = dict(os.environ)
+    env.setdefault("GIT_AUTHOR_NAME", "fake-claude")
+    env.setdefault("GIT_AUTHOR_EMAIL", "fake-claude@example.invalid")
+    env.setdefault("GIT_COMMITTER_NAME", env["GIT_AUTHOR_NAME"])
+    env.setdefault("GIT_COMMITTER_EMAIL", env["GIT_AUTHOR_EMAIL"])
+    subprocess.run(["git", "add", "--", name], check=True, env=env)
+    subprocess.run(["git", "commit", "-q", "-m", "fake claude: " + name], check=True, env=env)
+    sha = subprocess.run(["git", "rev-parse", "HEAD"], check=True, env=env,
+                         stdout=subprocess.PIPE, universal_newlines=True).stdout.strip()
+    return sha, name
+
+
+def report_for(prompt, session_id):
+    path = os.environ.get("FAKE_CLAUDE_REPORT")
+    if path:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f)
+    first = (prompt.strip().splitlines() or [""])[0][:200]
+    rep = {
+        "status": os.environ.get("FAKE_CLAUDE_STATUS", "done"),
+        "summary": "fake claude handled: " + (first or "(empty prompt)"),
+        "commits": [],
+        "files": [],
+        "checks_run": [],
+        "acceptance_met": True,
+        "questions": [],
+        "proposals": [],
+        "plan_feedback": "",
+        "risks_hit": [],
+    }
+    if os.environ.get("FAKE_CLAUDE_COMMIT") == "1":
+        sha, name = git_commit(session_id)
+        rep["commits"].append(sha)
+        rep["files"].append(name)
+    return rep
+
+
+def main(argv):
+    args = parse(argv)
+    if args.version:
+        print(VERSION)
+        return 0
+    if args.session_id:
+        try:
+            session_id = str(uuid.UUID(args.session_id))
+        except ValueError:
+            sys.stderr.write("Error: Invalid session ID. Must be a valid UUID.\n")
+            return 1
+    else:
+        session_id = str(uuid.uuid4())
+
+    prompt = args.prompt if args.prompt is not None else ""
+    if not sys.stdin.isatty():
+        data = sys.stdin.read()
+        prompt = (prompt + "\n" + data) if prompt else data
+
+    started = time.time()
+    if os.environ.get("FAKE_CLAUDE_SLEEP"):
+        time.sleep(float(os.environ["FAKE_CLAUDE_SLEEP"]))
+    exit_code = int(os.environ.get("FAKE_CLAUDE_EXIT", "0"))
+    structured = report_for(prompt, session_id)
+    text = str(structured.get("summary") or "fake claude done")
+    usage = {"input_tokens": len(prompt.split()), "output_tokens": len(text.split()),
+             "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
+    result = {
+        "type": "result",
+        "subtype": "success" if exit_code == 0 else "error_during_execution",
+        "is_error": exit_code != 0,
+        "duration_ms": int((time.time() - started) * 1000),
+        "duration_api_ms": 0,
+        "num_turns": 1,
+        "result": text,
+        "session_id": session_id,
+        "total_cost_usd": float(os.environ.get("FAKE_CLAUDE_COST", "0")),
+        "usage": usage,
+    }
+    result["structured_output"] = structured
+
+    out = sys.stdout
+    if args.output_format == "stream-json":
+        lines = [
+            {"type": "system", "subtype": "init", "session_id": session_id, "cwd": os.getcwd(),
+             "model": args.model, "tools": [], "mcp_servers": [], "permissionMode": "default",
+             "apiKeySource": "none", "claude_code_version": VERSION},
+            {"type": "assistant", "session_id": session_id, "parent_tool_use_id": None,
+             "message": {"id": "msg_fake_" + session_id[:8], "type": "message", "role": "assistant",
+                         "model": args.model, "content": [{"type": "text", "text": text}],
+                         "stop_reason": "end_turn", "usage": usage}},
+            result,
+        ]
+        for obj in lines:
+            out.write(json.dumps(obj) + "\n")
+            out.flush()
+    elif args.output_format == "json":
+        out.write(json.dumps(result) + "\n")
+    else:
+        out.write(text + "\n")
+    return exit_code
+
+
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

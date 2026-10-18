@@ -1,0 +1,17 @@
+{
+  "description": "wavecoord hooks. P0: SessionStart is a no-op that exits 0. Later milestones add the hook set in docs/hooks.md.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": ["hook", "SessionStart"],
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

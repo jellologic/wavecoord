@@ -1,0 +1,19 @@
+{
+  "now": "2026-10-18T12:00:30Z",
+  "task": "api-auth",
+  "last_epoch": 1792324800000,
+  "lease": {
+    "id": 7,
+    "task": "api-auth",
+    "attempt": 1,
+    "holder": "worker-20261018-120000-ab12",
+    "epoch": 1792324800000,
+    "state": "active",
+    "acquired": "2026-10-18T12:00:00Z",
+    "renewed": "2026-10-18T12:00:30Z",
+    "expires_at": "2026-10-18T12:10:30Z",
+    "released_at": null,
+    "released_by": null,
+    "reason": null
+  }
+}

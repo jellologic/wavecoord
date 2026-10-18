@@ -1,0 +1,22 @@
+{
+  "schema": 1,
+  "seq": 1040,
+  "ts": "2026-10-18T12:00:00Z",
+  "kind": "dispatch.decide",
+  "actor": {
+    "agent": "lead",
+    "host": "local",
+    "session_id": "0b7e2d4c-1a3f-4e5b-8c9d-2f1e0a3b4c5d",
+    "principal": "lead"
+  },
+  "task": "api-auth",
+  "attempt": 1,
+  "payload": {
+    "host": "build-1",
+    "slot": 2,
+    "branch": "wave/api-auth-1",
+    "reason": "ready; no path overlap; most free slots"
+  },
+  "idem": "wave:3:api-auth",
+  "prev": "9f2b6c1d4e8a7b3c5d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e"
+}

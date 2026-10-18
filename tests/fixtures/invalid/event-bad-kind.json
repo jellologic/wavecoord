@@ -1,0 +1,20 @@
+{
+  "schema": "event",
+  "doc": {
+    "schema": 1,
+    "seq": 5,
+    "ts": "2026-10-18T12:00:00Z",
+    "kind": "agent.heartbeat",
+    "actor": {
+      "agent": "lead",
+      "host": "local",
+      "session_id": "0b7e2d4c-1a3f-4e5b-8c9d-2f1e0a3b4c5d",
+      "principal": "lead"
+    },
+    "task": null,
+    "attempt": null,
+    "payload": {},
+    "idem": null,
+    "prev": "9f2b6c1d4e8a7b3c5d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e"
+  }
+}

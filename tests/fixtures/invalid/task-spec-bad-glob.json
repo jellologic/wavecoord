@@ -1,0 +1,29 @@
+{
+  "schema": "task-spec",
+  "doc": {
+    "id": "x",
+    "phase": "p0",
+    "needs": [],
+    "paths": [
+      "../etc/**"
+    ],
+    "class": "C",
+    "size": "XS",
+    "state": "todo",
+    "exec": {
+      "model": "sonnet",
+      "effort": "low",
+      "max_turns": 1,
+      "budget_usd": 1,
+      "timeout_min": 1
+    },
+    "sections": {
+      "context": "c",
+      "risks": [],
+      "acceptance": [
+        "true"
+      ],
+      "prompt": "p"
+    }
+  }
+}

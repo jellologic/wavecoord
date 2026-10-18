@@ -1,0 +1,16 @@
+{
+  "task": "api-auth",
+  "attempt": 1,
+  "holder": "worker-20261018-120000-ab12",
+  "host": "build-1",
+  "reservations": [
+    {
+      "glob": "src/auth/**",
+      "mode": "exclusive"
+    },
+    {
+      "glob": "docs/api.md",
+      "mode": "shared"
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+{
+  "now": "2026-10-18T12:00:30Z",
+  "error": {
+    "code": "misdirected",
+    "message": "Host evil.example:18741 is not allowed"
+  }
+}

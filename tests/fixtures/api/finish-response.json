@@ -1,0 +1,31 @@
+{
+  "now": "2026-10-18T12:40:00Z",
+  "agent": {
+    "id": "worker-20261018-120000-ab12",
+    "kind": "worker",
+    "host": "build-1",
+    "session_id": "5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10",
+    "task": "api-auth",
+    "attempt": 1,
+    "branch": "wave/api-auth-1",
+    "worktree": "/srv/wt/api-auth-1",
+    "started": "2026-10-18T12:00:02Z",
+    "last_seen": "2026-10-18T12:40:00Z",
+    "last_tool": "Bash: python -m unittest discover -s tests",
+    "state": "gone"
+  },
+  "lease": {
+    "id": 7,
+    "task": "api-auth",
+    "attempt": 1,
+    "holder": "worker-20261018-120000-ab12",
+    "epoch": 1792324800000,
+    "state": "parked",
+    "acquired": "2026-10-18T12:00:00Z",
+    "renewed": "2026-10-18T12:40:00Z",
+    "expires_at": null,
+    "released_at": null,
+    "released_by": null,
+    "reason": null
+  }
+}

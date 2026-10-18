@@ -1,0 +1,152 @@
+"""The wavecoord command line. Stdlib only, Python >= 3.9.
+
+P0 implements `version`, `status` and a no-op `hook`. Other commands are stubs.
+"""
+
+import argparse
+import json
+import os
+import sys
+import urllib.error
+import urllib.request
+
+from wavecoord import __version__
+
+NOT_IMPLEMENTED_EXIT = 2
+STATUS_TIMEOUT_S = 3.0
+CONFIG_REL_PATH = os.path.join(".claude", "wavecoord.json")
+
+# Planned hook events (docs/hooks.md). Unknown events are accepted too, so a
+# newer Claude Code event never breaks a session.
+HOOK_EVENTS = (
+    "SessionStart",
+    "UserPromptSubmit",
+    "PreToolUse",
+    "PostToolUse",
+    "PostToolBatch",
+    "Stop",
+    "SubagentStart",
+    "SubagentStop",
+    "StopFailure",
+    "Notification",
+    "PreCompact",
+    "SessionEnd",
+)
+
+STUBS = {
+    "serve": "run the coordinator server",
+    "launch": "launch a worker attempt on a host",
+    "log": "inspect the coord/log event branch",
+    "revert": "revert one coordination event",
+    "rebuild": "rebuild the state cache from the event log",
+}
+
+
+def _find_repo_config(start):
+    """Return the parsed .claude/wavecoord.json above `start`, or None."""
+    d = os.path.abspath(start)
+    while True:
+        p = os.path.join(d, CONFIG_REL_PATH)
+        if os.path.isfile(p):
+            try:
+                with open(p, encoding="utf-8") as f:
+                    data = json.load(f)
+                return data if isinstance(data, dict) else None
+            except (OSError, ValueError):
+                return None
+        parent = os.path.dirname(d)
+        if parent == d:
+            return None
+        d = parent
+
+
+def resolve_coord_url(env=None, cwd=None):
+    """The coordinator URL, or None when not configured.
+
+    Order: WAVECOORD_URL, then the plugin option CLAUDE_PLUGIN_OPTION_COORD_URL,
+    then coord_url in .claude/wavecoord.json. The plugin default value counts
+    as configured only when it comes through the plugin option.
+    """
+    env = os.environ if env is None else env
+    for key in ("WAVECOORD_URL", "CLAUDE_PLUGIN_OPTION_COORD_URL"):
+        v = env.get(key, "").strip()
+        if v:
+            return v.rstrip("/")
+    cfg = _find_repo_config(cwd or os.getcwd())
+    if cfg and isinstance(cfg.get("coord_url"), str) and cfg["coord_url"].strip():
+        return cfg["coord_url"].strip().rstrip("/")
+    return None
+
+
+def cmd_version(_args):
+    print("wavecoord " + __version__)
+    return 0
+
+
+def cmd_status(args):
+    url = resolve_coord_url()
+    if not url:
+        print("not configured")
+        return 0
+    health = url + "/api/health"
+    try:
+        with urllib.request.urlopen(health, timeout=args.timeout) as r:
+            body = json.loads(r.read().decode("utf-8"))
+    except (urllib.error.URLError, OSError, ValueError) as e:
+        # P0 rule: anything short of a reachable coordinator is "not configured".
+        print("not configured: no coordinator reachable at %s (%s)" % (url, getattr(e, "reason", e)))
+        return 0
+    print("ok: %s version=%s api=%s" % (url, body.get("version"), body.get("api")))
+    return 0
+
+
+def cmd_hook(args):
+    """Read the hook input, do nothing, exit 0. P2 adds behavior.
+
+    A hook must never break a session: bad or empty input is ignored.
+    """
+    try:
+        raw = sys.stdin.read()
+        if raw.strip():
+            json.loads(raw)
+    except (ValueError, OSError):
+        pass
+    return 0
+
+
+def _stub(name):
+    def run(_args):
+        sys.stderr.write("wavecoord %s: not implemented in P0\n" % name)
+        return NOT_IMPLEMENTED_EXIT
+
+    return run
+
+
+def build_parser():
+    p = argparse.ArgumentParser(prog="wavecoord", description=__doc__.splitlines()[0])
+    sub = p.add_subparsers(dest="command", metavar="<command>")
+    sub.required = True
+
+    sp = sub.add_parser("version", help="print the version")
+    sp.set_defaults(func=cmd_version)
+
+    sp = sub.add_parser("status", help="show whether the coordinator is configured and reachable")
+    sp.add_argument("--timeout", type=float, default=STATUS_TIMEOUT_S)
+    sp.set_defaults(func=cmd_status)
+
+    sp = sub.add_parser("hook", help="Claude Code hook entry point (reads JSON on stdin)")
+    sp.add_argument("event", help="hook event name, for example SessionStart")
+    sp.set_defaults(func=cmd_hook)
+
+    for name, helptext in STUBS.items():
+        sp = sub.add_parser(name, help=helptext + " (not implemented in P0)")
+        sp.set_defaults(func=_stub(name), accepts_extra=True)
+    return p
+
+
+def main(argv=None):
+    parser = build_parser()
+    args, extra = parser.parse_known_args(argv)
+    if extra and not getattr(args, "accepts_extra", False):
+        parser.error("unrecognized arguments: %s" % " ".join(extra))
+    return args.func(args)

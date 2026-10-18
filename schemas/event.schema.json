@@ -1,0 +1,52 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jellologic/wavecoord/schemas/event.schema.json",
+  "title": "wavecoord coordination event",
+  "description": "One file on the coord/log branch: events/<yyyy>/<mm>/<dd>/<seq>-<hash12>.json. Only state transitions are logged. See docs/contract.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema", "seq", "ts", "kind", "actor", "task", "attempt", "payload", "idem", "prev"],
+  "properties": {
+    "schema": {"const": 1},
+    "seq": {"type": "integer", "minimum": 1},
+    "ts": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$"},
+    "kind": {
+      "enum": [
+        "server.start", "server.gap", "server.clock",
+        "agent.register", "agent.gone",
+        "lease.grant", "lease.steal", "lease.stale", "lease.revive", "lease.park", "lease.release",
+        "reservation.add", "reservation.remove",
+        "attempt.start", "attempt.end",
+        "report.post",
+        "message.new", "message.ack",
+        "notify.post",
+        "dispatch.request", "dispatch.decide",
+        "conflict.open", "conflict.close",
+        "resolve.start", "resolve.end",
+        "refinery.queue", "refinery.merge", "refinery.block",
+        "proposal.new", "proposal.decide",
+        "revert"
+      ]
+    },
+    "actor": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["agent", "host", "session_id"],
+      "properties": {
+        "agent": {"type": ["string", "null"], "maxLength": 128},
+        "host": {"type": ["string", "null"], "maxLength": 64},
+        "session_id": {"type": ["string", "null"], "maxLength": 128},
+        "principal": {"type": "string", "maxLength": 128}
+      }
+    },
+    "task": {"type": ["string", "null"], "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "attempt": {"type": ["integer", "null"], "minimum": 1},
+    "payload": {"type": "object"},
+    "idem": {"type": ["string", "null"], "minLength": 1, "maxLength": 128},
+    "prev": {
+      "description": "sha256 hex of the canonical JSON of the event with seq-1; null for seq 1.",
+      "type": ["string", "null"],
+      "pattern": "^[0-9a-f]{64}$"
+    }
+  }
+}

@@ -1,0 +1,67 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jellologic/wavecoord/schemas/config.schema.json",
+  "title": "wavecoord consumer config",
+  "description": "The git-tracked file .claude/wavecoord.json in a consumer repo. It holds no secrets. See docs/adapters.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["project"],
+  "properties": {
+    "$schema": {"type": "string"},
+    "coord_url": {"type": "string", "pattern": "^https?://[^\\s/]+(:[0-9]+)?/?$"},
+    "project": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"},
+    "log_branch": {"type": "string", "minLength": 1, "default": "coord/log"},
+    "plan": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["adapter"],
+      "properties": {
+        "adapter": {"enum": ["builtin", "commands"]},
+        "dir": {"type": "string", "minLength": 1},
+        "commands": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "ready": {"$ref": "#/definitions/cmd"},
+            "get": {"$ref": "#/definitions/cmd"},
+            "graph": {"$ref": "#/definitions/cmd"},
+            "validate": {"$ref": "#/definitions/cmd"},
+            "edit": {"$ref": "#/definitions/cmd"}
+          }
+        }
+      }
+    },
+    "hosts": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["name", "slots", "repo_path"],
+        "properties": {
+          "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
+          "ssh": {"type": ["string", "null"], "description": "ssh destination (user@host or an ssh config alias); null or absent means local"},
+          "slots": {"type": "integer", "minimum": 1, "maximum": 256},
+          "repo_path": {"type": "string", "minLength": 1},
+          "env": {"type": "object", "additionalProperties": {"type": "string"}},
+          "prepare_cmd": {"$ref": "#/definitions/cmd"},
+          "claude_flags": {"type": "array", "items": {"type": "string"}}
+        }
+      }
+    },
+    "merge_cmd": {"$ref": "#/definitions/cmd"},
+    "pr_cmd": {"$ref": "#/definitions/cmd"},
+    "check_cmd": {"$ref": "#/definitions/cmd"},
+    "protected_paths_cmd": {"$ref": "#/definitions/cmd"},
+    "wip_cap": {"type": "integer", "minimum": 1},
+    "branch_prefix": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,31}$"}
+  },
+  "definitions": {
+    "cmd": {
+      "description": "A command, run without a shell when it is an array; as a shell string otherwise.",
+      "type": ["string", "array"],
+      "minLength": 1,
+      "minItems": 1,
+      "items": {"type": "string"}
+    }
+  }
+}

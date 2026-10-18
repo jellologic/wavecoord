@@ -1,0 +1,9 @@
+{
+  "schema": "config",
+  "doc": {
+    "project": "demo",
+    "plan": {
+      "adapter": "yaml"
+    }
+  }
+}

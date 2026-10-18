@@ -1,0 +1,21 @@
+{
+  "schema": 1,
+  "seq": 1,
+  "ts": "2026-10-18T12:00:00Z",
+  "kind": "server.start",
+  "actor": {
+    "agent": null,
+    "host": "local",
+    "session_id": null,
+    "principal": "server"
+  },
+  "task": null,
+  "attempt": null,
+  "payload": {
+    "version": "0.0.1",
+    "api": 1,
+    "schema": 1
+  },
+  "idem": null,
+  "prev": null
+}

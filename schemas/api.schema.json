@@ -1,0 +1,237 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jellologic/wavecoord/schemas/api.schema.json",
+  "title": "wavecoord REST bodies",
+  "description": "Definitions of the REST request and response bodies in docs/contract.md. Validate a body against #/definitions/<name>.",
+  "definitions": {
+    "time": {"type": "string", "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}(\\.[0-9]{1,6})?Z$"},
+    "time_or_null": {"anyOf": [{"$ref": "#/definitions/time"}, {"type": "null"}]},
+    "task_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "agent_id": {"type": "string", "minLength": 1, "maxLength": 128},
+    "host": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
+    "glob": {"type": "string", "minLength": 1, "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\s{}]+$"},
+
+    "health": {
+      "type": "object", "additionalProperties": false,
+      "required": ["now", "ok", "api", "schema", "version", "started"],
+      "properties": {
+        "now": {"$ref": "#/definitions/time"}, "ok": {"type": "boolean"},
+        "api": {"type": "integer"}, "schema": {"type": "integer"},
+        "version": {"type": "string"}, "started": {"$ref": "#/definitions/time"}
+      }
+    },
+    "agent": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "kind", "host", "session_id", "task", "attempt", "branch", "worktree", "started", "last_seen", "last_tool", "state"],
+      "properties": {
+        "id": {"$ref": "#/definitions/agent_id"},
+        "kind": {"enum": ["worker", "resolver", "lead", "shell", "other"]},
+        "host": {"$ref": "#/definitions/host"},
+        "session_id": {"type": ["string", "null"]},
+        "task": {"anyOf": [{"$ref": "#/definitions/task_id"}, {"type": "null"}]},
+        "attempt": {"type": ["integer", "null"], "minimum": 1},
+        "branch": {"type": ["string", "null"]},
+        "worktree": {"type": ["string", "null"]},
+        "started": {"$ref": "#/definitions/time"},
+        "last_seen": {"$ref": "#/definitions/time"},
+        "last_tool": {"type": ["string", "null"], "maxLength": 200},
+        "state": {"enum": ["live", "stale", "gone"]}
+      }
+    },
+    "lease": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "task", "attempt", "holder", "epoch", "state", "acquired", "renewed", "expires_at", "released_at", "released_by", "reason"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "task": {"$ref": "#/definitions/task_id"},
+        "attempt": {"type": "integer", "minimum": 1},
+        "holder": {"$ref": "#/definitions/agent_id"},
+        "epoch": {"type": "integer", "minimum": 1},
+        "state": {"enum": ["active", "parked", "stale", "released"]},
+        "acquired": {"$ref": "#/definitions/time"},
+        "renewed": {"$ref": "#/definitions/time"},
+        "expires_at": {"$ref": "#/definitions/time_or_null"},
+        "released_at": {"$ref": "#/definitions/time_or_null"},
+        "released_by": {"type": ["string", "null"]},
+        "reason": {"type": ["string", "null"]}
+      }
+    },
+    "reservation": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "lease_id", "task", "glob", "mode"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "lease_id": {"type": "integer", "minimum": 1},
+        "task": {"$ref": "#/definitions/task_id"},
+        "glob": {"$ref": "#/definitions/glob"},
+        "mode": {"enum": ["exclusive", "shared"]}
+      }
+    },
+    "conflict": {
+      "type": "object", "additionalProperties": false,
+      "required": ["glob", "lease_id", "task", "other_glob", "mode"],
+      "properties": {
+        "glob": {"$ref": "#/definitions/glob"},
+        "lease_id": {"type": "integer"},
+        "task": {"$ref": "#/definitions/task_id"},
+        "other_glob": {"$ref": "#/definitions/glob"},
+        "mode": {"enum": ["exclusive", "shared"]}
+      }
+    },
+    "recipient": {
+      "type": "object", "additionalProperties": false, "required": ["kind"],
+      "properties": {"kind": {"enum": ["agent", "task", "lead", "all"]}, "id": {"type": "string"}}
+    },
+    "message": {
+      "type": "object", "additionalProperties": false,
+      "required": ["id", "ts", "sender", "to", "body", "reply_to", "acked"],
+      "properties": {
+        "id": {"type": "integer", "minimum": 1},
+        "ts": {"$ref": "#/definitions/time"},
+        "sender": {"type": "string"},
+        "to": {"$ref": "#/definitions/recipient"},
+        "body": {"type": "string", "maxLength": 4096},
+        "reply_to": {"type": ["integer", "null"]},
+        "acked": {"type": "boolean"}
+      }
+    },
+    "error_body": {
+      "type": "object", "additionalProperties": false, "required": ["now", "error"],
+      "properties": {
+        "now": {"$ref": "#/definitions/time"},
+        "error": {
+          "type": "object", "additionalProperties": false, "required": ["code", "message"],
+          "properties": {
+            "code": {"enum": ["bad_request", "unauthorized", "forbidden", "not_found", "method_not_allowed", "held", "agent_busy", "conflict", "too_large", "misdirected", "unavailable", "clock"]},
+            "message": {"type": "string"}
+          }
+        },
+        "lease": {"$ref": "#/definitions/lease"}
+      }
+    },
+    "hb_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["agent", "kind", "host", "source", "seq"],
+      "properties": {
+        "agent": {"$ref": "#/definitions/agent_id"},
+        "kind": {"enum": ["worker", "resolver", "lead", "shell", "other"]},
+        "host": {"$ref": "#/definitions/host"},
+        "source": {"enum": ["launcher", "hook", "mcp"]},
+        "seq": {"type": "integer", "minimum": 1},
+        "session_id": {"type": "string"},
+        "task": {"$ref": "#/definitions/task_id"},
+        "attempt": {"type": "integer", "minimum": 1},
+        "branch": {"type": "string"},
+        "worktree": {"type": "string"},
+        "last_tool": {"type": "string", "maxLength": 200}
+      }
+    },
+    "hb_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["now", "agent", "lease", "lost", "inbox", "more"],
+      "properties": {
+        "now": {"$ref": "#/definitions/time"},
+        "agent": {"$ref": "#/definitions/agent"},
+        "lease": {"anyOf": [{"$ref": "#/definitions/lease"}, {"type": "null"}]},
+        "lost": {"type": "array", "items": {"type": "object", "required": ["lease_id", "task", "epoch", "reason", "by"]}},
+        "inbox": {"type": "array", "items": {"$ref": "#/definitions/message"}},
+        "more": {"type": "boolean"},
+        "duplicate": {"type": "boolean"}
+      }
+    },
+    "claim_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["task", "attempt", "holder", "host"],
+      "properties": {
+        "task": {"$ref": "#/definitions/task_id"},
+        "attempt": {"type": "integer", "minimum": 1},
+        "holder": {"$ref": "#/definitions/agent_id"},
+        "host": {"$ref": "#/definitions/host"},
+        "steal": {"type": "boolean"},
+        "reservations": {
+          "type": "array",
+          "items": {"type": "object", "additionalProperties": false, "required": ["glob", "mode"],
+                    "properties": {"glob": {"$ref": "#/definitions/glob"}, "mode": {"enum": ["exclusive", "shared"]}}}
+        }
+      }
+    },
+    "claim_response": {
+      "type": "object", "additionalProperties": false,
+      "required": ["now", "lease", "reservations", "conflicts"],
+      "properties": {
+        "now": {"$ref": "#/definitions/time"},
+        "lease": {"$ref": "#/definitions/lease"},
+        "reservations": {"type": "array", "items": {"$ref": "#/definitions/reservation"}},
+        "conflicts": {"type": "array", "items": {"$ref": "#/definitions/conflict"}}
+      }
+    },
+    "finish_request": {
+      "type": "object", "additionalProperties": false,
+      "required": ["state", "pushed", "source", "seq"],
+      "properties": {
+        "state": {"enum": ["done", "failed", "stopped"]},
+        "pushed": {"type": "boolean"},
+        "source": {"enum": ["launcher", "hook", "mcp"]},
+        "seq": {"type": "integer", "minimum": 1}
+      }
+    },
+    "finish_response": {
+      "type": "object", "additionalProperties": false, "required": ["now", "agent", "lease"],
+      "properties": {
+        "now": {"$ref": "#/definitions/time"},
+        "agent": {"$ref": "#/definitions/agent"},
+        "lease": {"anyOf": [{"$ref": "#/definitions/lease"}, {"type": "null"}]}
+      }
+    },
+    "task_lease": {
+      "type": "object", "additionalProperties": false, "required": ["now", "task", "last_epoch", "lease"],
+      "properties": {
+        "now": {"$ref": "#/definitions/time"},
+        "task": {"$ref": "#/definitions/task_id"},
+        "last_epoch": {"type": ["integer", "null"]},
+        "lease": {"anyOf": [{"$ref": "#/definitions/lease"}, {"type": "null"}]}
+      }
+    },
+    "message_request": {
+      "type": "object", "additionalProperties": false, "required": ["to", "body"],
+      "properties": {
+        "to": {"$ref": "#/definitions/recipient"},
+        "body": {"type": "string", "minLength": 1, "maxLength": 4096},
+        "reply_to": {"type": ["integer", "null"]}
+      }
+    },
+    "inbox": {
+      "type": "object", "additionalProperties": false, "required": ["now", "messages", "more"],
+      "properties": {
+        "now": {"$ref": "#/definitions/time"},
+        "messages": {"type": "array", "items": {"$ref": "#/definitions/message"}},
+        "more": {"type": "boolean"}
+      }
+    },
+    "tokens_file": {
+      "type": "object", "additionalProperties": false, "required": ["version", "tokens"],
+      "properties": {
+        "version": {"const": 1},
+        "tokens": {
+          "type": "object",
+          "propertyNames": {"pattern": "^[0-9a-f]{64}$"},
+          "additionalProperties": {
+            "type": "object", "additionalProperties": false, "required": ["principal", "role", "created"],
+            "properties": {
+              "principal": {"type": "string", "minLength": 1},
+              "role": {"enum": ["agent", "lead", "ui", "gate"]},
+              "created": {"$ref": "#/definitions/time"}
+            }
+          }
+        }
+      }
+    },
+    "jsonrpc_exchange": {
+      "type": "object", "additionalProperties": false, "required": ["request", "response"],
+      "properties": {
+        "request": {"type": "object", "required": ["jsonrpc", "method"], "properties": {"jsonrpc": {"const": "2.0"}, "method": {"type": "string"}}},
+        "response": {"type": "object", "required": ["jsonrpc", "id"], "properties": {"jsonrpc": {"const": "2.0"}}}
+      }
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "wavecoord",
+  "description": "Marketplace for wavecoord, a plan-driven lead/worker coordinator for Claude Code",
+  "owner": {
+    "name": "jellologic",
+    "url": "https://github.com/jellologic"
+  },
+  "plugins": [
+    {
+      "name": "wavecoord",
+      "source": "./plugin",
+      "description": "Plan tasks in git, dispatch parallel Claude Code workers to local or SSH hosts, collect structured reports, and keep all coordination state in git with rollback"
+    }
+  ]
+}

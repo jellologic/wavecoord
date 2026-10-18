@@ -1,0 +1,28 @@
+{
+  "status": "needs_decision",
+  "summary": "Two token formats are possible; the spec does not pick one.",
+  "commits": [],
+  "files": [],
+  "checks_run": [],
+  "acceptance_met": false,
+  "questions": [
+    "Use opaque tokens or signed tokens for refresh?"
+  ],
+  "proposals": [
+    {
+      "kind": "plan_edit",
+      "summary": "Add the token format decision to the context of api-auth",
+      "task": "api-auth"
+    },
+    {
+      "kind": "split",
+      "summary": "Split rotation from revocation",
+      "task": "api-auth",
+      "detail": "Revocation needs a schema change; rotation does not."
+    }
+  ],
+  "plan_feedback": "The acceptance commands do not cover revocation.",
+  "risks_hit": [
+    "Ambiguous requirement: token format"
+  ]
+}
