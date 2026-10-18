@@ -335,6 +335,65 @@ class RefineryTest(LeadTestCase):
         # the resolver run is in flight, so late is out of the queue until it reports again
         self.assertNotIn("late", [i["task"] for i in self.lead.refinery_status()["queue"]])
 
+    def test_fence_blocks_a_merge_outside_the_lease(self):
+        """P6 E4/E5 in the refinery: with fence merge enforce, a PR outside its lease is not merged."""
+        cfgp = os.path.join(self.repo, ".claude", "wavecoord.json")
+        with open(cfgp) as f:
+            cfg = json.load(f)
+        cfg["fence"] = {"merge": "enforce"}
+        with open(cfgp, "w") as f:
+            json.dump(cfg, f)
+        os.utime(cfgp, (time.time() + 5, time.time() + 5))
+        self.run_task("solo", "elsewhere.txt")  # the lease is solo/**
+        self.assertEqual(self.attempt("solo", 1)["fence"]["verdict"], "fail")
+        out = self.lead.refinery_merge()
+        r = out["results"][0]
+        self.assertEqual((r["state"], r["reason"]), ("blocked", "fence"))
+        self.assertIn("E4: the report's fence verdict is fail", r["detail"])
+        self.assertIn("E5: gate-check exit 1", r["detail"])
+        self.assertEqual([c for c in self.gh()["calls"] if c[:2] == ["pr", "merge"]], [])
+        self.run_task("late", "late/f.txt")  # inside the lease: merged
+        out = self.lead.refinery_merge("late/1")
+        self.assertEqual(out["results"][0]["state"], "merged")
+
+    def test_refinery_refuses_a_stale_lease_line(self):
+        """In every fence mode (here the default, advisory), a PR whose Lease: epoch is not the
+        attempt's lease is not merged."""
+        self.run_task("solo", "solo/f.txt")
+        st = self.gh()
+        epoch = self.core.state.task_lease("solo")["epoch"]
+        st["prs"][0]["body"] = st["prs"][0]["body"].replace("Lease: solo@%d" % epoch, "Lease: solo@%d" % (epoch - 1))
+        with open(self.gh_state, "w") as f:
+            json.dump(st, f)
+        out = self.lead.refinery_merge()
+        self.assertEqual((out["results"][0]["state"], out["results"][0]["reason"]), ("blocked", "stale_lease"))
+        self.assertEqual([c for c in self.gh()["calls"] if c[:2] == ["pr", "merge"]], [])
+        st = self.gh()
+        st["prs"][0]["body"] = st["prs"][0]["body"].replace("Lease: solo@%d" % (epoch - 1), "Lease: solo@%d" % epoch)
+        with open(self.gh_state, "w") as f:
+            json.dump(st, f)
+        self.assertEqual(self.lead.refinery_merge()["results"][0]["state"], "merged")
+
+    def test_resolver_updates_the_pr_lease_line(self):
+        """A resolver takes over the attempt with a new epoch: collect sets the PR's Lease: line (P6, E5)."""
+        self.run_task("head", "x.txt")
+        self.run_task("late", "x.txt")
+        old = self.core.state.task_lease("late")["epoch"]
+        pr = [p for p in self.gh()["prs"] if p["head"] == "wave/late-1"][0]
+        self.assertIn("Lease: late@%d" % old, pr["body"])
+        for k in ("FAKE_CLAUDE_COMMIT", "FAKE_CLAUDE_COMMIT_FILE", "FAKE_CLAUDE_COMMIT_TEXT"):
+            os.environ.pop(k, None)
+        os.environ["FAKE_CLAUDE_MERGE"] = "origin/main"
+        out = self.lead.refinery_merge()
+        self.assertEqual([r["state"] for r in out["results"]], ["merged", "blocked"])
+        item = self.collect_until("late-1")
+        new = self.core.state.task_lease("late")["epoch"]
+        self.assertGreater(new, old)
+        self.assertIn("pr.lease", item["actions"])
+        pr = [p for p in self.gh()["prs"] if p["head"] == "wave/late-1"][0]
+        self.assertIn("Lease: late@%d" % new, pr["body"])
+        self.assertNotIn("Lease: late@%d" % old, pr["body"])
+
     def test_protected_paths_and_check_cmd(self):
         prot = os.path.join(self.tmp, "protected")
         with open(prot, "w") as f:

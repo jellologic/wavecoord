@@ -218,7 +218,7 @@ class State(object):
         if lease["epoch"] > self.d["epochs"].get(t, 0):
             self.put("epochs", t, lease["epoch"])
         for r in reservations or []:
-            self.put("reservations", r["id"], dict(r))
+            self.put("reservations", r["id"], dict(r, origin=r.get("origin") or "claim"))
             self._bump("reservation", r["id"])
         key = "%s/%d" % (t, lease["attempt"])
         att = self.get("attempts", key) or {"task": t, "n": lease["attempt"], "state": "running",
@@ -269,7 +269,7 @@ class State(object):
 
     def _on_reservation_add(self, ev, p, h):
         for r in p.get("reservations", []):
-            self.put("reservations", r["id"], dict(r))
+            self.put("reservations", r["id"], dict(r, origin=r.get("origin") or "hot"))
             self._bump("reservation", r["id"])
 
     def _on_reservation_remove(self, ev, p, h):
@@ -309,7 +309,7 @@ class State(object):
         a = dict(a, report=rep, cost_usd=p.get("cost_usd"), turns=p.get("turns"), ended=ev["ts"],
                  state="failed" if rep.get("status") == "failed" else "reported")
         for k in ("cost_basis", "usage", "model_usage", "provider", "throttled", "throttle", "next_provider",
-                  "pushed", "pr_url"):
+                  "pushed", "pr_url", "fence"):
             if p.get(k) is not None:
                 a[k] = p[k]
         self.put("attempts", key, a)

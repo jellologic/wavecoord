@@ -60,7 +60,9 @@ Rules:
 
 - A claim reserves the spec's `paths` as `exclusive` and `shared_paths` as `shared`. Globs are repo-relative: no space, no leading `/`, no `..`, no braces.
 - Two reservations **conflict** when the globs overlap, they belong to different non-released leases, and at least one is `exclusive`.
-- Until the fence ships (P6), a conflict is a warning in the response and the reservation is made. After P6, the `PreToolUse` fence denies an edit inside another lease's exclusive glob (see `hooks.md`).
+- A conflict is a warning in the response and the reservation is made, except when a `fence` point is in `enforce` mode: then the server refuses a claim or a lead reservation that conflicts with a grant of another lease with 409 `conflict` (and the list of `conflicts`). The lead may force it with `force: true`.
+- Each reservation has an `origin`: `claim` (made by a grant or a steal), `lead` (added with the lead token) or `hot` (a hot-file mark from `PostToolUse`). The grant set of a lease is its `claim` and `lead` reservations; a `hot` mark never widens a lease. An `agent` token may add only `shared` `hot` marks. A reservation of an older log without `origin` is `claim` when a grant or steal made it, else `hot`.
+- The fence (`docs/design/edit-fence.md`, `hooks.md`) checks a write with `covers` (`globs.covers`: `*`, `?`, `**`, every other character literal, a match also covers the paths below it). `globs_overlap` is only for conflicts between globs.
 
 ### 3.3 Attempt
 
@@ -78,7 +80,7 @@ Full rules in `security.md`. In short:
 | `agent` | one per host: `host:<name>` | for agents bound to its own host: heartbeat, finish, claim, release, reserve, inbox, ack, report; send; read |
 | `lead` | `lead` | everything, for any agent and host: dispatch, steal, release, resolve, merge, plan edits, revert |
 | `ui` | `ui` | read; send; add a dispatch request; release a `stale` lease. Writes need `Origin` in the allowlist and the header `X-Wavecoord: 1` |
-| `gate` | `gate` | read leases and health only (for an external merge gate) |
+| `gate` | `gate` | read leases and health, and send a gate check (`POST /api/check` with `source: "gate"`) (for an external merge gate) |
 
 - **Agent identity.** The agent id is `WAVECOORD_AGENT_ID`, else the launcher's attempt id, else `claude:<session_id>`. The first heartbeat or claim binds the id to a host, forever. An `agent` token can act only for ids bound to its own host. REST and MCP calls name the caller in `X-Wavecoord-Agent`. The ids `lead` and `ui` are reserved for those roles.
 - **Messages are data, never consent.** A message, report, proposal or channel event never counts as user approval for anything. Approval for a protected path comes from the user in the lead session, and the refinery asks the lead for it (`protected_paths_cmd`). Every client shows a message to a model in this one-line frame, with the body as a JSON string so it cannot break out of the frame:
@@ -126,9 +128,9 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `POST /api/leases` | agent (own), lead | Claim (`steal` and `user_set` are lead only); returns lease, reservations, conflicts |
 | `GET /api/leases`, `GET /api/tasks/<task>/lease` | read, gate | Current leases; `last_epoch` per task |
 | `POST /api/leases/<id>/release` | agent (own), ui (stale only), lead | Release |
-| `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease), lead | Add (`reservation_request`, or `{lease_id, reservations: [{glob, mode}]}` for several) or remove reservations |
+| `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease, `shared` `hot` marks only), lead | Add (`reservation_request`, or `{lease_id, reservations: [{glob, mode, origin?}], force?}` for several) or remove reservations |
 | `GET /api/conflicts?globs=&lease_id=` | read | Overlap check without reserving; `?full=1` gives the `conflicts` tool answer (section 8) |
-| `POST /api/check` | agent, lead | Path check for the hooks and the git guards (`check_request`, `check_response`). A violation is `foreign_exclusive` (inside an exclusive glob of another non-released lease), `outside_lease` (the caller holds an active lease and the path matches none of its globs) or `stale_epoch` (the given epoch is not the current epoch of the task). Reads only; logs nothing |
+| `POST /api/check` | agent, lead, gate (`source: "gate"` only) | The fence check (`check_request`, `check_response`), the predicate `ok(W)` of `docs/design/edit-fence.md` section 2.2. A write is a worker write when the request names a task or an epoch, or the agent holds a lease. Violations: `no_lease` (the agent holds no non-released lease of the claimed task), `stale_epoch` (the claimed epoch is not the epoch of the agent's lease and of the task's current lease), `outside_lease` (no `claim` or `lead` reservation of the lease covers the path; checked for every non-released lease, also a stale or parked one), `foreign_exclusive` (an exclusive reservation of another non-released lease covers the path; case-folded with `fold_case`). For the lead and other sessions only `foreign_exclusive` applies. With `source: "gate"` the writer is the holder of attempt `task`/`attempt`, and the answer has the attempt's `lease`; an older epoch of the same attempt counts as the current one (resolver lineage, `lease.from_epoch`). A path that is absolute, has a `.`, `..` or empty segment, or a backslash is refused with 400. `seq` is the decision point. Reads only; logs nothing; counts go to `GET /api/live` as `fence` |
 | `POST /api/messages`, `GET /api/inbox?agent=`, `POST /api/messages/<id>/ack` | see section 4 | Messages |
 | `GET /api/plan/ready`, `GET /api/plan/tasks/<id>`, `GET /api/plan/graph`, `POST /api/plan/validate` | read | Through the plan adapter (`adapters.md`); the same answers as the tools of section 8 |
 | `POST /api/plan/edit` | lead | `{edits, branch?, title?, body?}`: the `plan_edit` tool |
@@ -136,11 +138,11 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `POST /api/collect` | lead | `{dry_run?, attempt?}`: the `collect` tool |
 | `POST /api/attempts/<task>/<n>/end` | lead | `{state, pr_url?, pr_error?, conflicts?, ...}`: the client's final view of an attempt, logged as `attempt.end` |
 | `GET /api/attempts`, `GET /api/attempts/<task>/<n>` | read | Attempts with their reports |
-| `POST /api/attempts/<task>/<n>/report` | agent (own), lead | Post the report (`report_request`; the report is validated against `report.schema.json`). The launcher stats (cost basis, usage, provider, throttling, push, PR) are kept on the attempt |
+| `POST /api/attempts/<task>/<n>/report` | agent (own), lead | Post the report (`report_request`; the report is validated against `report.schema.json`). The launcher stats (cost basis, usage, provider, throttling, push, PR) are kept on the attempt. With `changed_paths` (and `lease_epoch`), the server stores the fence verdict on the attempt as `fence` (E4) |
 | `POST /api/resolve` | lead | `{attempt?, branch?, conflict?, dry_run?}`: start a resolver attempt |
 | `GET /api/refinery`, `POST /api/refinery/merge` | read / lead | Merge queue status; `{pr?, approved_protected?}` merges through `merge_cmd` |
 | `POST /api/proposals`, `PATCH /api/proposals/<id>` | agent, lead / lead | Plan proposals and their decisions |
-| `POST /api/notify` | agent, lead | A notice for the lead (`notify_request`: CI result, rate limit, `waiting_on_you`, handoff note) |
+| `POST /api/notify` | agent, lead | A notice for the lead (`notify_request`: CI result, rate limit, `waiting_on_you`, handoff note, `fence_override` with the journal of the writes that the offline override let through) |
 | `GET /api/proposals`, `GET /api/requests`, `POST /api/requests` | read / read, ui, lead | List proposals; dispatch requests (`{task, note?}`, logged as `dispatch.request`) |
 | `GET /api/config` | read | The effective consumer config (no secrets) |
 | `POST /api/revert` | lead | `{seq, reason?}` reverts one event; `{at_sha, reason?}` rolls back to a commit (section 9) |

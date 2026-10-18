@@ -338,8 +338,9 @@ class Handler(BaseHTTPRequestHandler):
             raise ApiError("method_not_allowed", "%s is not allowed on %s" % (method, path))
         if method != "GET":
             self._ui_write_check(ctx)
-        if ctx.role == "gate" and not (method == "GET" and (path == "/api/leases" or path.startswith("/api/tasks/"))):
-            raise ApiError("forbidden", "the gate role may read leases and health only")
+        if ctx.role == "gate" and not (method == "GET" and (path == "/api/leases" or path.startswith("/api/tasks/"))) \
+                and not (method == "POST" and path == "/api/check"):
+            raise ApiError("forbidden", "the gate role may read leases and health, and send a gate check, only")
         body = self._json(raw) if method in ("POST", "PATCH", "PUT") else None
         idem = self.headers.get("Idempotency-Key")
         self._send_json(200, route(app, ctx, match, body, query, idem))

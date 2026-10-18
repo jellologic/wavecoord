@@ -16,7 +16,7 @@ import os
 import threading
 import time
 
-from wavecoord import __version__, const, schemaload
+from wavecoord import __version__, const, fencecore, schemaload
 from wavecoord.globs import globs_overlap, valid_glob
 from wavecoord.log import EventLog, LogError
 from wavecoord.store import REVERTIBLE, State, Store, fold
@@ -152,6 +152,8 @@ class Coord(object):
         self._stop = threading.Event()
         self._reaper = None
         self.server_url = None  # set by the HTTP server; the lead tools give it to workers
+        self.fence_counts = {}  # (source, verdict or kind) -> count; in memory only (GET /api/live)
+        self.check_trace = None  # a list in tests: one record per check, with the decision seq
 
     # ----- lifecycle -----
 
@@ -161,7 +163,8 @@ class Coord(object):
         self.store = Store(os.path.join(self.home, "cache.sqlite"))
         st = self.store.load()
         meta = st.d["meta"]
-        if meta.get("last_seq", 0) != self.log.last_seq or meta.get("last_hash") != self.log.last_hash:
+        if meta.get("last_seq", 0) != self.log.last_seq or meta.get("last_hash") != self.log.last_hash \
+                or any("origin" not in r for r in st.values("reservations")):
             st = self.state_at(self.log.last_seq)
             self.store.save(st, full=True)
         self.state = st
@@ -414,6 +417,7 @@ class Coord(object):
                 "drift": [l for l in leases if l["state"] == "parked"
                           and self.now() - const.parse_ts(l["renewed"]) > drift_s],
                 "notices": st.values("notices")[-50:],
+                "fence": self.fence_metrics(),
                 "server": {"last_seq": self.log.committed_seq, "pushed_seq": self.log.pushed_seq,
                            "push_error": self.log.push_error, "clock_ok": not self.clock_bad,
                            "branch": self.branch, "project": self.project},
@@ -450,43 +454,70 @@ class Coord(object):
                                     for c in self.state.path_conflicts()]
             return out
 
-    def check(self, ctx, body):
-        """Path check for hooks and guards (check_request -> check_response). Logs nothing.
+    def fence_modes(self):
+        """The fence config of the consumer repo (docs/design/edit-fence.md, section 8)."""
+        return fencecore.parse_modes(self.cfg.get("fence"))
 
-        foreign_exclusive: the path is inside an exclusive glob of another non-released lease.
-        outside_lease: the caller holds an active lease and the path matches none of its globs.
-        stale_epoch: the given epoch is not the current epoch of the task.
+    def fence_metrics(self):
+        out = {}
+        for (src, what), n in sorted(self.fence_counts.items()):
+            out.setdefault(src, {})[what] = n
+        return {"checks": out, "modes": self.fence_modes()}
+
+    def _count(self, source, violations):
+        kinds = sorted(set(v["kind"] for v in violations)) or ["allow"]
+        for k in kinds:
+            self.fence_counts[(source, k)] = self.fence_counts.get((source, k), 0) + 1
+
+    def check(self, ctx, body):
+        """The fence check (check_request -> check_response). Logs nothing.
+
+        The predicate is fencecore.evaluate (docs/design/edit-fence.md, section 2.2):
+        no_lease, stale_epoch, outside_lease and foreign_exclusive. With
+        source "gate", the writer is the holder of attempt `task`/`attempt`.
+        `seq` in the answer is the decision point: the last event seq under the lock.
         """
-        self._require(ctx, "agent", "lead")
+        self._require(ctx, "agent", "lead", "gate")
         _schema_check(body, "check_request")
+        source = body["source"]
+        if (ctx.role == "gate" and source != "gate") or (source == "gate" and ctx.role not in ("gate", "lead")):
+            raise ApiError("forbidden", "role %s may not send a %s check" % (ctx.role, source))
+        for p in body["paths"]:
+            why = fencecore.path_syntax_error(p)
+            if why:
+                raise ApiError("bad_request", why)
         agent = body.get("agent")
         if ctx.role == "agent" and agent:
             self._check_agent(ctx, agent)
-        out = []
+        fold = bool(body.get("fold_case"))
+        out = {"now": None, "violations": []}
         with self.wlock:
             st = self.state
-            mine = st.agent_lease(agent) if agent else None
-            my_globs = [r["glob"] for r in st.live_reservations()
-                        if mine is not None and r["lease_id"] == mine["id"]]
-            task = body.get("task") or (mine or {}).get("task")
-            cur_epoch = None
-            if task:
-                cur = st.task_lease(task)
-                cur_epoch = cur["epoch"] if cur else st.last_epoch(task)
-            for path in body["paths"]:
-                for r in st.live_reservations():
-                    l = st.lease(r["lease_id"])
-                    if r["mode"] == "exclusive" and l["holder"] != agent and globs_overlap(path, r["glob"]):
-                        out.append({"path": path, "kind": "foreign_exclusive", "lease_id": l["id"],
-                                    "task": l["task"], "holder": l["holder"], "glob": r["glob"]})
-                if mine is not None and mine["state"] == "active" \
-                        and not any(globs_overlap(path, g) for g in my_globs):
-                    out.append({"path": path, "kind": "outside_lease", "lease_id": mine["id"],
-                                "task": mine["task"], "holder": agent, "glob": None})
-                if body.get("epoch") is not None and body["epoch"] != cur_epoch:
-                    out.append({"path": path, "kind": "stale_epoch", "lease_id": None, "task": task,
-                                "holder": None, "glob": None})
-        return {"now": self.ts(), "violations": out}
+            if source == "gate":
+                if body.get("task") is None or body.get("attempt") is None or body.get("epoch") is None:
+                    raise ApiError("bad_request", "a gate check needs task, attempt and epoch")
+                att, lease = fencecore.attempt_lease(st, body["task"], body["attempt"])
+                if att is None:
+                    raise ApiError("not_found", "no attempt %s/%d" % (body["task"], body["attempt"]))
+                agent = att.get("holder")
+                epoch, from_epoch = body["epoch"], None
+                if fencecore.lineage_ok(st, body["task"], body["attempt"], body["epoch"], lease):
+                    # resolver lineage: a newer lease of the same attempt (same branch) took over
+                    epoch, from_epoch = lease["epoch"], body["epoch"]
+                out["lease"] = None if lease is None else {
+                    "id": lease["id"], "task": lease["task"], "epoch": lease["epoch"], "state": lease["state"],
+                    "holder": lease["holder"]}
+                if from_epoch is not None:
+                    out["lease"]["from_epoch"] = from_epoch
+                viol = fencecore.evaluate(st, agent, body["paths"], body["task"], epoch, fold)
+            else:
+                viol = fencecore.evaluate(st, agent, body["paths"], body.get("task"), body.get("epoch"), fold)
+            seq = self.log.last_seq
+            self._count(source, viol)
+            if self.check_trace is not None:
+                self.check_trace.append({"body": dict(body, agent=agent), "seq": seq, "violations": viol})
+            out.update(now=self.ts(), violations=viol, seq=seq)
+        return out
 
     def inbox(self, ctx, agent=None, limit=None):
         self._require(ctx, *READ_ROLES)
@@ -640,6 +671,15 @@ class Coord(object):
 
     # ----- leases and reservations -----
 
+    def _enforce_grants(self, items, exclude_lease, force):
+        """With the fence in enforce mode, refuse a grant that overlaps a grant of another lease (409)."""
+        if force or not items or not fencecore.any_enforce(self.fence_modes()):
+            return
+        bad = fencecore.grant_conflicts(self.state, items, exclude_lease)
+        if bad:
+            raise ApiError("conflict", "the fence is in enforce mode: %s overlaps %s of task %s (the lead may force it)"
+                           % (bad[0]["glob"], bad[0]["other_glob"], bad[0]["task"]), conflicts=bad)
+
     def _check_reservations(self, items):
         for it in items:
             if not valid_glob(it["glob"]):
@@ -654,6 +694,9 @@ class Coord(object):
             raise ApiError("forbidden", "only the lead may steal a lease")
         if body.get("user_set") and ctx.role != "lead":
             raise ApiError("forbidden", "only the lead may set user_set")
+        force = bool(body.get("force"))
+        if force and ctx.role != "lead":
+            raise ApiError("forbidden", "only the lead may force an overlapping grant")
         self._check_agent(ctx, holder, host)
         items = body.get("reservations", [])
         self._check_reservations(items)
@@ -686,8 +729,9 @@ class Coord(object):
             if body.get("user_set"):
                 lease["user_set"] = True  # the watchdog never touches it
             rid = self.state.next_id("reservation")
-            res = [{"id": rid + i, "lease_id": lid, "task": task, "glob": it["glob"], "mode": it["mode"]}
-                   for i, it in enumerate(items)]
+            res = [{"id": rid + i, "lease_id": lid, "task": task, "glob": it["glob"], "mode": it["mode"],
+                    "origin": "claim"} for i, it in enumerate(items)]
+            self._enforce_grants(items, cur["id"] if cur else None, force)
             conflicts = self.state.conflicts_for(items, exclude_lease=cur["id"] if cur else None)
             if cur is not None:
                 conflicts = [c for c in conflicts if c["lease_id"] != cur["id"]]
@@ -749,16 +793,28 @@ class Coord(object):
     def reserve(self, ctx, body, idem=None):
         if isinstance(body, dict) and "glob" in body:  # reservation_request: one glob
             _schema_check(body, "reservation_request")
-            body = {"lease_id": body["lease_id"], "reservations": [{"glob": body["glob"], "mode": body["mode"]}]}
+            one = {"glob": body["glob"], "mode": body["mode"]}
+            if body.get("origin"):
+                one["origin"] = body["origin"]
+            body = {"lease_id": body["lease_id"], "reservations": [one], "force": body.get("force")}
         if not isinstance(body, dict) or not isinstance(body.get("reservations"), list):
             raise ApiError("bad_request", "need {lease_id, glob, mode} or {lease_id, reservations: [{glob, mode}]}")
         lease_id = _int(body.get("lease_id"), "lease_id")
         items = body["reservations"]
         for it in items:
             if not isinstance(it, dict) or it.get("mode") not in ("exclusive", "shared") \
-                    or not isinstance(it.get("glob"), str):
-                raise ApiError("bad_request", "each reservation needs glob and mode (exclusive|shared)")
+                    or not isinstance(it.get("glob"), str) or it.get("origin") not in (None, "lead", "hot"):
+                raise ApiError("bad_request", "each reservation needs glob, mode (exclusive|shared), origin? (lead|hot)")
         self._check_reservations(items)
+        force = bool(body.get("force"))
+        if ctx.role != "lead":
+            if force:
+                raise ApiError("forbidden", "only the lead may force an overlapping grant")
+            for it in items:
+                if not fencecore.agent_reservation_ok(it):
+                    raise ApiError("forbidden", "an agent token may add only shared hot-file marks "
+                                                "(origin hot); a grant needs the lead")
+        items = [dict(it, origin=it.get("origin") or ("lead" if ctx.role == "lead" else "hot")) for it in items]
 
         def build():
             l = self.state.lease(lease_id)
@@ -768,8 +824,9 @@ class Coord(object):
                 self._require(ctx, "agent")
                 self._check_agent(ctx, l["holder"])
             rid = self.state.next_id("reservation")
-            res = [{"id": rid + i, "lease_id": lease_id, "task": l["task"], "glob": it["glob"], "mode": it["mode"]}
-                   for i, it in enumerate(items)]
+            res = [{"id": rid + i, "lease_id": lease_id, "task": l["task"], "glob": it["glob"], "mode": it["mode"],
+                    "origin": it["origin"]} for i, it in enumerate(items)]
+            self._enforce_grants([it for it in items if it["origin"] != "hot"], lease_id, force)
             conflicts = self.state.conflicts_for(items, exclude_lease=lease_id)
             return [self._ev("reservation.add", {"reservations": res, "conflicts": conflicts},
                              l["task"], l["attempt"])], res
@@ -945,6 +1002,8 @@ class Coord(object):
             for k in REPORT_STATS:
                 if body.get(k) is not None:
                     payload[k] = body[k]
+            if isinstance(body.get("changed_paths"), list):
+                payload["fence"] = self._report_fence(task, n, body["changed_paths"], body.get("lease_epoch"))
             return [self._ev("report.post", payload, task, n)]
 
         self.write(ctx, idem or "report:%s:%d" % (task, n), build, expect=("report.post",))
@@ -998,6 +1057,22 @@ class Coord(object):
         keep = ("state",) + State.END_KEYS
         self.record(ctx, "attempt.end", {k: body[k] for k in keep if k in body}, task, n, idem)
         return self.attempt(ctx, task, n)
+
+    def _report_fence(self, task, n, paths, epoch):
+        """E4: the fence verdict on the net diff that the launcher reports. A record only."""
+        att, lease = fencecore.attempt_lease(self.state, task, n)
+        agent = (att or {}).get("holder")
+        if epoch is None and lease is not None:
+            epoch = lease["epoch"]
+        bad = [p for p in paths if fencecore.path_syntax_error(p)]
+        good = [p for p in paths if p not in bad]
+        viol = [{"path": p, "kind": "outside_lease", "lease_id": None, "task": task, "holder": agent, "glob": None}
+                for p in bad]
+        if good:
+            viol += fencecore.evaluate(self.state, agent, good, task, epoch)
+        self._count("report", viol)
+        return {"verdict": fencecore.verdict(viol), "violations": viol[:50], "count": len(viol),
+                "seq": self.log.last_seq, "epoch": epoch}
 
     # ----- rollback -----
 

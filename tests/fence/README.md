@@ -94,3 +94,15 @@ These facts come from the Claude Code hooks reference. The fence depends on them
 ## 5. Performance (`test_fence_perf.py`, opt-in)
 
 `WAVECOORD_PERF=1` runs 200 E1 calls against a loopback server with 200 live reservations, and asserts the p50 and p99 of the design's section 6. It is opt-in because CI runners are noisy. The CI run only asserts that one check stays under the 2.5 s budget.
+
+## 6. Where the tests are (P6)
+
+| File | What |
+|---|---|
+| `tests/fenceworld.py` | the world: a real coordinator with a fake clock behind a fault proxy, the repo and worktrees, and the oracle (its own glob matcher `omatch`, its own log fold `OState`, and the inode-based `truth` of a target) |
+| `tests/fencesim.py` | the random operations and the six assertions |
+| `tests/test_fence_invariant.py` | 50 fixed seeds and one new random seed in parallel processes; on a case-sensitive file system 5 more seeds with a case-insensitive probe |
+| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 22 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
+| `tests/test_fence_points.py` | the failure table, the path table, the output shapes, the override, the modes, the server rules, gate-check, the launcher helpers and the fake-claude hook runs |
+
+`WAVECOORD_FENCE_SEED=<n>` reruns one seed, `WAVECOORD_FENCE_RUNS=<n>` adds n random seeds, and `WAVECOORD_FENCE_OPS=<n>` sets the maximum number of operations per seed (default 80; use 300 for a soak run).

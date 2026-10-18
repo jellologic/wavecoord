@@ -225,7 +225,7 @@ class WorkerHookTest(Base):
             self.assertIsNone(self.hook("PostToolUse", self.fixture("PostToolUse"), env))
             res = fc.find("POST", "/api/reservations")
         self.assertEqual(len(res), 1)
-        self.assertEqual(res[0]["body"], {"lease_id": 7, "glob": "src/auth/session.py", "mode": "shared"})
+        self.assertEqual(res[0]["body"], {"lease_id": 7, "glob": "src/auth/session.py", "mode": "shared", "origin": "hot"})
         self.assertEqual(js.validate(res[0]["body"], API, "#/definitions/reservation_request"), [])
         self.assertEqual(res[0]["headers"]["idempotency-key"], "hot:7:src/auth/session.py")
 
