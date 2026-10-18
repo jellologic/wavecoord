@@ -80,12 +80,26 @@
     "pr_cmd": {"$ref": "#/definitions/cmd"},
     "check_cmd": {"$ref": "#/definitions/cmd"},
     "protected_paths_cmd": {"$ref": "#/definitions/cmd"},
+    "fence": {
+      "description": "The edit fence (docs/design/edit-fence.md, section 8). A mode word sets every point; an object sets each point. Each point is off, advisory (warn only; the default) or enforce. lead is the action for a lead or other session on a foreign exclusive path (default ask). Only the copy on the default branch counts; a worktree copy can only make the fence stricter.",
+      "anyOf": [
+        {"$ref": "#/definitions/fence_mode"},
+        {"type": "object", "additionalProperties": false, "properties": {
+          "edit": {"$ref": "#/definitions/fence_mode"},
+          "commit": {"$ref": "#/definitions/fence_mode"},
+          "push": {"$ref": "#/definitions/fence_mode"},
+          "merge": {"$ref": "#/definitions/fence_mode"},
+          "lead": {"enum": ["warn", "ask", "deny"]}
+        }}
+      ]
+    },
     "wip_cap": {"type": "integer", "minimum": 1},
     "auto_resolve": {"type": "boolean", "default": false, "description": "On a merge-tree conflict, the collector dispatches a resolver attempt by itself"},
     "branch_prefix": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,31}$"}
   },
   "definitions": {
     "provider_name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
+    "fence_mode": {"enum": ["off", "advisory", "enforce"]},
     "cmd": {
       "description": "A command, run without a shell when it is an array; as a shell string otherwise.",
       "type": ["string", "array"],

@@ -1,5 +1,5 @@
 {
-  "description": "wavecoord hooks (docs/hooks.md). Every hook does nothing unless a coordinator URL is configured, and never breaks a session. P2: PreToolUse is advisory.",
+  "description": "wavecoord hooks (docs/hooks.md). Every hook does nothing unless a coordinator URL is configured, and never breaks a session, except the edit fence: PreToolUse blocks when it fails (onFailure: block), and in fence enforce mode it denies a worker edit that it cannot prove is inside the lease (docs/design/edit-fence.md).",
   "hooks": {
     "SessionStart": [
       {
@@ -42,7 +42,8 @@
               "hook",
               "PreToolUse"
             ],
-            "timeout": 6
+            "timeout": 6,
+            "onFailure": "block"
           }
         ]
       }

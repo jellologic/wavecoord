@@ -125,6 +125,14 @@ class CollectMixin(object):
                 self.coord.record(self.ctx, "conflict.close", {"conflict_id": rec["conflict_id"], "by": "resolver"},
                                   task, n, idem="conflict-close:%s" % rec["conflict_id"])
                 act("conflict.close")
+            if ok and pr_url and rec.get("lease_epoch"):
+                # the resolver holds a newer lease of the same attempt: the PR names it (edit-fence.md, E5)
+                from wavecoord import gatecheck
+                err = gatecheck.update_pr_lease(pr_url, task, rec["lease_epoch"], self.root(),
+                                                os.path.join(L.index_dir(), rec["id"] + ".pr-lease.md"))
+                act("pr.lease" if err is None else "pr.lease_error")
+                if err:
+                    item["pr_lease_error"] = err
         # 4. a conflict: dispatch a resolver when auto_resolve is on
         if conflict and auto:
             tried = self._resolver_runs(conflict)

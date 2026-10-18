@@ -98,11 +98,16 @@ def cmd_status(args):
 
 
 def cmd_hook(args):
-    """Run one Claude Code hook event (wavecoord.hooks). Always exits 0."""
+    """Run one Claude Code hook event (wavecoord.hooks). Exits 0, or 2 for a fence deny backstop."""
     try:
         from wavecoord import hooks
         return hooks.main(args.event)
-    except Exception:
+    except Exception as e:
+        if args.event == "PreToolUse" and os.environ.get("WAVECOORD_TASK") and \
+                "enforce" in os.environ.get("WAVECOORD_FENCE", ""):
+            sys.stderr.write("wavecoord fence: the hook failed (%s); the edit is refused (fail closed)\n"
+                             % type(e).__name__)
+            return 2
         return 0
 
 
@@ -155,13 +160,15 @@ def build_parser():
     mode = gp.add_mutually_exclusive_group(required=True)
     mode.add_argument("--staged", action="store_true", help="check the staged paths (pre-commit)")
     mode.add_argument("--push", metavar="RANGE", help="check a revision range, or - for pre-push stdin")
-    gp.add_argument("--enforce", action="store_true", help="fail on a violation (reserved for the P6 fence)")
+    gp.add_argument("--enforce", action="store_true", help="fail closed: refuse on a violation or any failure")
     gp.set_defaults(func=cmd_guard)
 
     sp = sub.add_parser("channel", help="stdio MCP channel that pushes lead events into the session")
     sp.set_defaults(func=cmd_channel)
 
     corecli.register(sub)
+    from wavecoord import fencecli
+    fencecli.register(sub)
     from wavecoord.launcher.cli import register as register_launcher
     register_launcher(sub)
     from wavecoord.leadcli import register as register_lead

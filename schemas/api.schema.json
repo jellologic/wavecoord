@@ -64,7 +64,8 @@
         "lease_id": {"type": "integer", "minimum": 1},
         "task": {"$ref": "#/definitions/task_id"},
         "glob": {"$ref": "#/definitions/glob"},
-        "mode": {"enum": ["exclusive", "shared"]}
+        "mode": {"enum": ["exclusive", "shared"]},
+        "origin": {"description": "claim and lead reservations are the grant set of the lease; a hot-file mark (hot) is not (docs/design/edit-fence.md, section 2.1)", "enum": ["claim", "lead", "hot"]}
       }
     },
     "conflict": {
@@ -106,7 +107,8 @@
             "message": {"type": "string"}
           }
         },
-        "lease": {"$ref": "#/definitions/lease"}
+        "lease": {"$ref": "#/definitions/lease"},
+        "conflicts": {"description": "409 conflict in fence enforce mode: the overlapping grants", "type": "array", "items": {"$ref": "#/definitions/conflict"}}
       }
     },
     "hb_request": {
@@ -149,6 +151,7 @@
         "host": {"$ref": "#/definitions/host"},
         "steal": {"type": "boolean"},
         "user_set": {"type": "boolean", "description": "Lead only: the user set this lease; the watchdog never nudges it or makes it stale"},
+        "force": {"description": "lead only: grant an overlapping exclusive in fence enforce mode (logged)", "type": "boolean"},
         "reservations": {
           "type": "array",
           "items": {"type": "object", "additionalProperties": false, "required": ["glob", "mode"],
@@ -214,9 +217,11 @@
       "properties": {
         "agent": {"anyOf": [{"$ref": "#/definitions/agent_id"}, {"type": "null"}]},
         "paths": {"type": "array", "minItems": 1, "maxItems": 1000, "items": {"type": "string", "minLength": 1}},
-        "source": {"enum": ["hook", "guard"]},
+        "source": {"enum": ["hook", "guard", "push", "gate"]},
         "task": {"$ref": "#/definitions/task_id"},
+        "attempt": {"description": "source gate: the attempt whose holder is the writer", "type": "integer", "minimum": 1},
         "epoch": {"type": "integer", "minimum": 1},
+        "fold_case": {"description": "the client file system is case-insensitive: compare foreign globs case-folded", "type": "boolean"},
         "branch": {"type": "string"}
       }
     },
@@ -230,14 +235,20 @@
             "type": "object", "additionalProperties": false, "required": ["path", "kind"],
             "properties": {
               "path": {"type": "string"},
-              "kind": {"enum": ["foreign_exclusive", "outside_lease", "stale_epoch"]},
+              "kind": {"enum": ["foreign_exclusive", "outside_lease", "stale_epoch", "no_lease"]},
               "lease_id": {"type": ["integer", "null"]},
               "task": {"anyOf": [{"$ref": "#/definitions/task_id"}, {"type": "null"}]},
               "holder": {"anyOf": [{"$ref": "#/definitions/agent_id"}, {"type": "null"}]},
               "glob": {"anyOf": [{"$ref": "#/definitions/glob"}, {"type": "null"}]}
             }
           }
-        }
+        },
+        "seq": {"description": "the decision point: the last event seq when the server decided", "type": "integer", "minimum": 0},
+        "lease": {"description": "source gate: the lease of the attempt", "anyOf": [{"type": "null"}, {
+          "type": "object", "additionalProperties": false, "required": ["id", "task", "epoch", "state", "holder"],
+          "properties": {"id": {"type": "integer"}, "task": {"$ref": "#/definitions/task_id"}, "epoch": {"type": "integer"},
+                         "from_epoch": {"description": "resolver lineage: the older epoch of the same attempt that the request named", "type": "integer"},
+                         "state": {"enum": ["active", "stale", "parked", "released"]}, "holder": {"$ref": "#/definitions/agent_id"}}}]}
       }
     },
     "reservation_request": {
@@ -245,7 +256,9 @@
       "properties": {
         "lease_id": {"type": "integer", "minimum": 1},
         "glob": {"$ref": "#/definitions/glob"},
-        "mode": {"enum": ["exclusive", "shared"]}
+        "mode": {"enum": ["exclusive", "shared"]},
+        "origin": {"description": "lead (default for the lead token) or hot (default, and the only choice, for an agent token)", "enum": ["lead", "hot"]},
+        "force": {"type": "boolean"}
       }
     },
     "report_request": {
@@ -268,13 +281,15 @@
         "state": {"enum": ["reported", "failed", "timed_out", "stopped", "lost"]},
         "branch": {"type": "string"},
         "pushed": {"type": "boolean"},
-        "pr_url": {"type": ["string", "null"]}
+        "pr_url": {"type": ["string", "null"]},
+        "changed_paths": {"description": "E4: the net diff of the pushed branch (--no-renames); the server stores a fence verdict on the attempt", "type": "array", "maxItems": 5000, "items": {"type": "string", "minLength": 1}},
+        "lease_epoch": {"type": "integer", "minimum": 1}
       }
     },
     "notify_request": {
       "type": "object", "additionalProperties": false, "required": ["kind", "agent", "text"],
       "properties": {
-        "kind": {"enum": ["waiting_on_you", "rate_limit", "api_error", "handoff", "ci", "other"]},
+        "kind": {"enum": ["waiting_on_you", "rate_limit", "api_error", "handoff", "ci", "fence_override", "other"]},
         "agent": {"$ref": "#/definitions/agent_id"},
         "task": {"$ref": "#/definitions/task_id"},
         "attempt": {"type": "integer", "minimum": 1},

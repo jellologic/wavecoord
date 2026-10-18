@@ -1,5 +1,8 @@
 #!/usr/bin/env python3
-"""A fake `gh` for tests: `gh pr create` and `gh pr merge`, against the repo's origin. Stdlib only.
+"""A fake `gh` for tests: `gh pr create|view|edit|merge`, against the repo's origin. Stdlib only.
+
+  gh pr view <n|url> --json body      prints {"body", "baseRefName", "headRefName", ...}
+  gh pr edit <n|url> --body-file F    replaces the PR body
 
   gh pr create --head B --base main --title T --body-file F
       records the PR in $FAKE_GH_STATE and prints https://example.invalid/pull/<n>
@@ -47,6 +50,17 @@ def main(argv):
             n = len(st["prs"]) + 1
             st["prs"].append({"number": n, "head": opt(argv, "--head"), "base": opt(argv, "--base") or "main",
                               "title": opt(argv, "--title"), "body": body, "state": "open"})
+            print("https://example.invalid/pull/%d" % n)
+            return 0
+        if argv[:2] in (["pr", "view"], ["pr", "edit"]):
+            n = int(str(argv[2]).rstrip("/").split("/")[-1])
+            pr = st["prs"][n - 1]
+            if argv[1] == "view":
+                print(json.dumps({"body": pr["body"], "baseRefName": pr["base"], "headRefOid": pr.get("sha", ""),
+                                  "headRefName": pr["head"]}))
+                return 0
+            with open(opt(argv, "--body-file")) as f:
+                pr["body"] = f.read()
             print("https://example.invalid/pull/%d" % n)
             return 0
         if argv[:2] == ["pr", "merge"]:

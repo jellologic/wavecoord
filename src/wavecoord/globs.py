@@ -7,7 +7,54 @@ is a literal path; a literal path also covers everything below it, because it
 can name a directory.
 """
 
+import re
+
 WILD = "*?["
+_COVERS_RX = {}
+
+
+def covers_rx(glob):
+    """The compiled regex of `covers` for one glob (cached).
+
+    `*` is any run of characters other than `/`; `?` is one character other
+    than `/`; `**/` is zero or more whole directories; `**` elsewhere is any
+    run of characters; every other character, `[` included, is literal. A
+    match also covers every path below it, so a glob can name a directory.
+    """
+    rx = _COVERS_RX.get(glob)
+    if rx is None:
+        g = glob.rstrip("/") or glob
+        out, i = [], 0
+        while i < len(g):
+            c = g[i]
+            if g.startswith("**/", i):
+                out.append("(?:.*/)?")
+                i += 3
+                continue
+            if g.startswith("**", i):
+                out.append(".*")
+                i += 2
+                continue
+            out.append("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c))
+            i += 1
+        rx = re.compile("^" + "".join(out) + "(?:/.*)?$", re.S)
+        if len(_COVERS_RX) > 4096:
+            _COVERS_RX.clear()
+        _COVERS_RX[glob] = rx
+    return rx
+
+
+def covers(glob, path, fold_case=False):
+    """Does glob `glob` match the literal repo-relative path `path` (or a directory above it)?
+
+    With fold_case, both sides are compared case-folded (for the foreign
+    check on a case-insensitive file system: it denies more).
+    """
+    if not isinstance(glob, str) or not isinstance(path, str):
+        return False
+    if fold_case:
+        glob, path = glob.casefold(), path.casefold()
+    return bool(covers_rx(glob).match(path))
 
 
 def literal_prefix(g):

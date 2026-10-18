@@ -112,6 +112,33 @@ class LocalEndToEnd(LauncherTestCase):
         # the next attempt number is 2 (the branch exists on origin)
         self.assertEqual(L.existing_attempts("t1"), {1})
 
+    def test_worker_gets_only_the_host_agent_token(self):
+        """P6: lead and server credentials never reach a worker, also on the local host."""
+        home = os.environ["WAVECOORD_HOME"]
+        os.makedirs(os.path.join(home, "hosts"), exist_ok=True)
+        with open(os.path.join(home, "token"), "w") as f:
+            f.write("lead-secret\n")
+        for name, run in (("no agent token", False), ("agent token", True)):
+            if run:
+                with open(os.path.join(home, "hosts", "local.token"), "w") as f:
+                    f.write("agent-secret\n")
+            dump = os.path.join(self.tmp, "dump-%s.json" % run)
+            os.environ.update(FAKE_CLAUDE_DUMP=dump, CLAUDE_PLUGIN_OPTION_TOKEN="lead-secret",
+                              WAVECOORD_TOKEN_FILE=os.path.join(home, "token"))
+            try:
+                L = self.launcher()
+                rec = L.launch(self.opts(task="cred%d" % int(run)))
+                self.wait_state(L, rec["id"], ("reported", "failed", "timed_out"))
+            finally:
+                os.environ.pop("CLAUDE_PLUGIN_OPTION_TOKEN")
+                os.environ.pop("WAVECOORD_TOKEN_FILE")
+            env = load(dump)["env"]
+            self.assertNotIn("CLAUDE_PLUGIN_OPTION_TOKEN", env, name)
+            if run:
+                self.assertEqual(env["WAVECOORD_TOKEN_FILE"], os.path.join(home, "hosts", "local.token"))
+            else:
+                self.assertNotIn("WAVECOORD_TOKEN_FILE", env, name)
+
     def test_rebase_when_main_moved(self):
         os.environ["FAKE_CLAUDE_COMMIT"] = "1"
         os.environ["FAKE_CLAUDE_SLEEP"] = "1.5"

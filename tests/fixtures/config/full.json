@@ -94,5 +94,12 @@
     "scripts/protected-paths"
   ],
   "wip_cap": 6,
-  "branch_prefix": "wave"
+  "branch_prefix": "wave",
+  "fence": {
+    "edit": "advisory",
+    "commit": "advisory",
+    "push": "enforce",
+    "merge": "enforce",
+    "lead": "ask"
+  }
 }

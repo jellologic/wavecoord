@@ -1,6 +1,6 @@
 # Design: the fail-closed edit fence (P6)
 
-Status: design for review. No code yet. The test plan is in `tests/fence/README.md`.
+Status: implemented in P6. The lead decisions D1 to D7 (PR #5) took the proposed defaults; section 11 lists what the implementation does and where it differs. The test plan is in `tests/fence/README.md`.
 
 The fence turns the advisory checks of P2 (`docs/hooks.md`) into checks that refuse a write. It is the only part of wavecoord that may stop a session on purpose, so a bug in it stops every worker. This note gives the invariant as a checkable predicate, the enforcement points, the failure modes, the races, the budget, the tests and the rollout. "Must" marks a rule that the implementation PR has to meet and the tests have to check.
 
@@ -317,3 +317,40 @@ Client-side counts that the server cannot see (`unavailable`, `auth` and `malfor
 ## Prior art
 
 MCP Agent Mail (`Dicklesworthstone/mcp_agent_mail`) has advisory file reservations (exclusive or shared, with a TTL; conflicts are reported, and the reservation is still granted) and an optional pre-commit and pre-push guard. The guard matches with git wildmatch pathspecs against repo-relative paths, and honors `core.ignorecase`. It has a bypass (`AGENT_MAIL_BYPASS=1`, or `--no-verify`) and a warn mode. wavecoord takes from it the case handling, the pre-push range check and the advisory stage. It adds fencing epochs, a fail-closed edit hook and a merge-time check that no bypass skips. A bypass in an env var that an agent can set is the main thing it does not take.
+
+## 11. Implementation notes (P6)
+
+**Decisions.** D1 `fence.lead` is `ask`. D2 a git-ignored path in the own worktree passes with no call. D3 the `gate` role may send `POST /api/check` with `source: "gate"`. D4 an `agent` token may add only `shared` `hot` marks (403 otherwise). D5 no sandboxing in P6 (P7). D6 the window between an external gate's check and its merge is accepted (section 5.5). D7 the override lasts at most 4 h, and `fence offline` refuses while the coordinator answers.
+
+**Lead decisions after P4.** (1) Resolver lineage: a resolver is a `--continue` run of the same attempt and branch, and it takes over the attempt's lease with a new epoch. E5 accepts a PR whose `Lease:` epoch is an older lease of the same attempt when the attempt's current lease is newer (`fencecore.lineage_ok`; the answer carries `lease.from_epoch`). The predicate is then evaluated with the current epoch and the resolver as the writer. When a resolver run ends clean, `collect` sets the PR's `Lease:` line to the new epoch (`gh pr view` and `gh pr edit`). (2) The launcher removes lead and server credentials from the worker env on every host, the local host included (`CLAUDE_PLUGIN_OPTION_TOKEN`, `WAVECOORD_TOKEN_FILE`, `WAVECOORD_TOKEN`, `WAVECOORD_TOKENS_FILE`). A worker gets only its host's agent token; a token that is the lead's own token, or that the tokens file on that machine lists with another role, is refused.
+
+**Gaps found by the end-to-end test (PR #8).** (1) In a worker session the hooks client uses only `WAVECOORD_TOKEN_FILE` (the host's agent token), never `CLAUDE_PLUGIN_OPTION_TOKEN` or `~/.wavecoord/token` (`client.resolve_token`). (2) The refinery refuses a PR whose `Lease:` line is not the attempt's live lease, or an older lease of the same attempt (resolver lineage), in every fence mode (reason `stale_lease`; `gatecheck.lease_ok`). The other fence results block only in `merge` enforce mode.
+
+**The gaps of the P2 code, and where each is closed.**
+
+| Gap | Fix |
+|---|---|
+| A released (not stolen) lease passed the epoch check | `no_lease` (`fencecore.evaluate`, `writer_lease`, `epoch_now` from the non-released lease) |
+| `outside_lease` only for an `active` lease | `lease_checked`: every non-released lease |
+| Hot-file marks widened the lease | reservation `origin`; `grant_set` holds `claim` and `lead` only |
+| An agent token could reserve anything | `agent_reservation_ok` (403), `force` is lead only |
+| Diffs without `--no-renames` | `fence.DIFF_RENAME_FLAGS` in every diff (guard, E3, E5, the Stop hook) |
+| The launcher's push ran with no agent id | E3 runs the check itself with the attempt's identity; `git push` runs with the worker env; the guard reads `identity.json` |
+| Sibling worktrees, macOS case, `..` and symlinks | `fence.classify` (`realpath`, innermost `.git`, `common_dir` read from `.git` with no git call), `canon_case`, `fold_case` |
+| `disableAllHooks` from a worktree settings file | worker `--settings` pin `disableAllHooks: false` and the fence env |
+| A user mod that handles `tool.check` | `fencehost.tool_check_mods`, a best-effort scan (see below) |
+
+**Differences from the design.**
+
+- The foreign check uses `covers` (case-folded on a case-insensitive file system), not `overlap`. The design allows the over-match; exact `covers` keeps the liveness assertion exact.
+- The server also refuses an empty path segment (`a//b`) with 400.
+- `check_request.source` has `push` (E3) besides `hook`, `guard` and `gate`.
+- E1's budget is 2.5 s (`BUDGET_S["PreToolUse"]`) and its request timeout at most 2 s. Tests set `WAVECOORD_FENCE_BUDGET_S`.
+- A handler that runs past its budget writes no more journal entries (in a real hook the process is gone; the in-process tests need the rule).
+- The override journal leaves the client only when the answer is a real `fence_override` notice. A 200 with any other body (a proxy, a fault) keeps it. The randomized test found this.
+- The refinery runs E4 and E5 before `merge_cmd`: in `merge` enforce mode a `fail` verdict or a non-zero gate blocks the PR (`reason: fence`); in advisory mode the result carries a `fence` note. It calls the coordinator in process (`gatecheck.coord_checker`).
+- Metrics: the server counts checks by source and kind and returns them in `GET /api/live` as `fence` (with the modes). The client-side counts in the heartbeat (unavailable, auth and malformed denies, E1 latency) and the `would_deny` count are not in P6.
+- The mod check scans `~/.claude/plugins`, `~/.claude/dev-mods`, `~/.claude/skills` and `CLAUDE_CODE_PLUGIN_DIRS` for a hooks module that names `tool.check`. It cannot see a mod that a managed policy or another path loads, and it can also flag a mod that is installed but not enabled. It runs only in `edit` enforce mode.
+- An agent token may still claim a lease for its own holder (`POST /api/leases`). A worker that lost its lease and claims its task again gets a new epoch: its session's claimed epoch is then stale at E1 to E3, and E5 compares the PR's `Lease:` line, so the claim does not open a way around the fence.
+- Real Claude Code checks (section 7, README section 4): `tests/fake-claude/claude` runs the plugin's real `hooks.json` and zipapp for one emulated `Edit` (`FAKE_CLAUDE_EDIT`) with `onFailure`, the timeout, exit 2 and the deny precedence, and `claude plugin validate --strict` runs when `claude` is installed. The tool-call cases with a real model stay a manual release check.
+

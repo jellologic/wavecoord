@@ -139,7 +139,12 @@ class RefineryMixin(object):
             ok, tail = self._check(check, it, sha, default)
             if not ok:
                 return self._block(it, "check_failed", sha=sha, detail=tail)
-        # 4. merge_cmd, pinned to the head sha that was checked
+        # 4. the fence merge check (E5, docs/design/edit-fence.md): enforce blocks, advisory only notes
+        fence_note = self._fence_check(it, sha, default)
+        if fence_note and fence_note.get("block"):
+            return self._block(it, "stale_lease" if fence_note.get("stale") else "fence", sha=sha,
+                               detail=fence_note["detail"])
+        # 5. merge_cmd, pinned to the head sha that was checked
         ok, detail = self._merge_cmd(it, sha, default)
         if not ok:
             return self._block(it, "merge_failed", sha=sha, detail=detail)
@@ -150,7 +155,47 @@ class RefineryMixin(object):
         if lease and lease["attempt"] == n:
             self.coord.release(self.ctx, lease["id"], {"reason": "merged"})
         self.fetch(force=True)
-        return dict(it, state="merged", sha=sha)
+        out = dict(it, state="merged", sha=sha)
+        if fence_note:
+            out["fence"] = fence_note["detail"]
+        return out
+
+    def _fence_check(self, it, sha, default):
+        """E4 record and E5 gate-check for one PR. -> None (pass or off), or {block, detail}."""
+        import io
+        import json as _json
+        from wavecoord import fencecore, gatecheck
+        mode = fencecore.parse_modes(self.cfg().raw.get("fence"))["merge"]
+        problems = []
+        with self.coord.wlock:
+            att = self.coord.state.get("attempts", "%s/%d" % (it["task"], it["attempt"])) or {}
+        if (att.get("fence") or {}).get("verdict") == "fail":
+            problems.append("E4: the report's fence verdict is fail (%d violation(s))" % att["fence"].get("count", 0))
+        rc, out, err = run_cmd(["gh", "pr", "view", str(it["pr"]), "--json", "body"], self.root(), timeout=120)
+        try:
+            body = _json.loads(out).get("body") if rc == 0 else None
+        except ValueError:
+            body = None
+        res = io.StringIO()
+        code = gatecheck.run(None, it["task"], it["attempt"], "%s/%s..%s" % ("origin", default, sha), repo=self.repo,
+                             body_text=body if body is not None else "", out=res, err=io.StringIO(), as_json=True,
+                             check_fn=gatecheck.coord_checker(self.coord, self.ctx))
+        try:
+            d = _json.loads(res.getvalue())
+        except ValueError:
+            d = {}
+        if d.get("lease_ok") is False:
+            # a stale Lease: line is never merged, in every fence mode (the epoch is the fencing token)
+            return {"block": True, "stale": True,
+                    "detail": "stale lease: the PR's Lease: line is not the attempt's current lease (%s)"
+                              % d.get("detail")}
+        if mode == "off":
+            return None
+        if code != 0:
+            problems.append("E5: gate-check exit %s: %s" % (code, d.get("detail")))
+        if not problems:
+            return None
+        return {"block": mode == "enforce", "detail": "; ".join(problems)}
 
     def _env(self, it, sha, default):
         return dict(os.environ, WAVECOORD_PR=str(it["pr"]), WAVECOORD_PR_URL=it["pr_url"] or "",

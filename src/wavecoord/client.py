@@ -10,6 +10,7 @@ next call that reaches the server replays the spool.
 """
 
 import hashlib
+import http.client
 import json
 import os
 import socket
@@ -80,8 +81,20 @@ def resolve_coord_url(env=None, cwd=None):
 
 
 def resolve_token(env=None):
-    """The bearer token: plugin option, then WAVECOORD_TOKEN_FILE, then ~/.wavecoord/token."""
+    """The bearer token: plugin option, then WAVECOORD_TOKEN_FILE, then ~/.wavecoord/token.
+
+    In a worker session (WAVECOORD_TASK or WAVECOORD_AGENT_ID set) only WAVECOORD_TOKEN_FILE
+    counts: the launcher points it at the host's agent token. The plugin option and
+    ~/.wavecoord/token can hold the lead's token, and a worker never uses it.
+    """
     env = os.environ if env is None else env
+    if env.get("WAVECOORD_TASK", "").strip() or env.get("WAVECOORD_AGENT_ID", "").strip():
+        path = env.get("WAVECOORD_TOKEN_FILE", "").strip()
+        try:
+            with open(os.path.expanduser(path), encoding="utf-8") as f:
+                return f.read().strip() or None
+        except (OSError, ValueError):
+            return None
     v = env.get("CLAUDE_PLUGIN_OPTION_TOKEN", "").strip()
     if v:
         return v
@@ -163,8 +176,11 @@ class Client(object):
             with urllib.request.urlopen(req, timeout=t) as r:
                 status, raw = r.status, r.read()
         except urllib.error.HTTPError as e:
-            status, raw = e.code, e.read()
-        except (urllib.error.URLError, socket.timeout, OSError, ValueError) as e:
+            try:
+                status, raw = e.code, e.read()
+            except (http.client.HTTPException, OSError, ValueError) as e2:
+                raise Unreachable("truncated error answer: %s" % e2)
+        except (urllib.error.URLError, socket.timeout, OSError, ValueError, http.client.HTTPException) as e:
             raise Unreachable(str(getattr(e, "reason", e)))
         self.reached = True
         try:
