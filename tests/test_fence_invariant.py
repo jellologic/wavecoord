@@ -18,6 +18,9 @@ import fenceworld
 from test_fence_defects import CI_FS, pool
 
 FIXED_SEEDS = list(range(1, 51))
+# Soak seeds that failed, with the operation count of the soak run (WAVECOORD_FENCE_OPS=300), 0.1.3:
+# 72857574 lost an override journal entry (D23); 289598702 merged the agent's config trick.
+REGRESSION_SEEDS = [(72857574, 300), (289598702, 229)]
 CI_SEEDS = 5  # on a case-sensitive file system, this many fixed seeds also run with a case-insensitive probe
 
 
@@ -35,6 +38,8 @@ class InvariantTest(unittest.TestCase):
         all_seeds, fresh = seeds()
         sys.stderr.write("\nfence invariant: %d seeds (new random: %s)\n" % (len(all_seeds), fresh))
         jobs = [(s, None, None, False) for s in all_seeds]
+        if not os.environ.get("WAVECOORD_FENCE_SEED"):
+            jobs += [(s, None, n, False) for s, n in REGRESSION_SEEDS]
         if not CI_FS and not os.environ.get("WAVECOORD_FENCE_SEED"):
             jobs += [(s, None, None, True) for s in FIXED_SEEDS[:CI_SEEDS]]
         with pool() as ex:

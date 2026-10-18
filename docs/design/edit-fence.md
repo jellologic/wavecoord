@@ -261,7 +261,7 @@ Most of the E1 time is Python start-up and one or two `git` calls. The hook must
 The full plan is in `tests/fence/README.md`. In short:
 
 - **Randomized invariant test.** N simulated agents with random globs, edits, commits, pushes and merges against a real in-process server. Random coordinator kills, delays, 5xx answers, malformed bodies, clock steps, steals, releases and rollbacks. An independent oracle evaluates `ok(W)` against the server state at each decision. The test asserts zero accepted writes with `not ok(W)` (outside a logged override), and full liveness while the coordinator is healthy.
-- **Seeded defects.** Each defect is a patch that the test applies to the code under test. The randomized test, or a named table test, must fail for every defect. The list has the seven defects of the milestone brief and fifteen more that this design found (22 in all).
+- **Seeded defects.** Each defect is a patch that the test applies to the code under test. The randomized test, or a named table test, must fail for every defect. The list has the seven defects of the milestone brief and fifteen more that this design found (22 in all). D23 came from a soak run in 0.1.3 (section 11).
 - **Real Claude Code checks.** The `onFailure`, deny precedence and settings precedence facts are checked with a real `claude` and no model call, or listed as a manual release check where that is not possible.
 
 ## 8. Rollout
@@ -348,6 +348,7 @@ MCP Agent Mail (`Dicklesworthstone/mcp_agent_mail`) has advisory file reservatio
 - E1's budget is 2.5 s (`BUDGET_S["PreToolUse"]`) and its request timeout at most 2 s. Tests set `WAVECOORD_FENCE_BUDGET_S`.
 - A handler that runs past its budget writes no more journal entries (in a real hook the process is gone; the in-process tests need the rule).
 - The override journal leaves the client only when the answer is a real `fence_override` notice. A 200 with any other body (a proxy, a fault) keeps it. The randomized test found this.
+- An entry leaves the journal only when the acknowledged notice holds it (`fence.acked_entries`). A retry has the same idempotency key as the first send. When the first send was logged and its answer was lost, the server returns the first notice, which does not hold the entries that were added later. The flush then sends again with a new key, so one reachable call sends the whole journal. A soak run found this in 0.1.3 (defect D23).
 - The refinery runs E4 and E5 before `merge_cmd`: in `merge` enforce mode a `fail` verdict or a non-zero gate blocks the PR (`reason: fence`); in advisory mode the result carries a `fence` note. It calls the coordinator in process (`gatecheck.coord_checker`).
 - Metrics: the server counts checks by source and kind and returns them in `GET /api/live` as `fence` (with the modes). The client-side counts in the heartbeat (unavailable, auth and malformed denies, E1 latency) and the `would_deny` count are not in P6.
 - The mod check scans `~/.claude/plugins`, `~/.claude/dev-mods`, `~/.claude/skills` and `CLAUDE_CODE_PLUGIN_DIRS` for a hooks module that names `tool.check`. It cannot see a mod that a managed policy or another path loads, and it can also flag a mod that is installed but not enabled. It runs only in `edit` enforce mode.

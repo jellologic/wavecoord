@@ -33,7 +33,7 @@ Design: `docs/design/edit-fence.md`. These tests come first: the implementation 
 5. **Override log.** Every journal entry reaches the server as a `fence_override` notice after the next reachable call, and E3 refuses while the journal is not empty.
 6. **Lead and other.** Their foreign-exclusive edits get `ask` (or the configured action), and never `deny` from a server fault.
 
-**Runs.** CI runs a fixed list of 50 seeds and 1 new random seed, with up to 300 operations each. The seed is printed on failure. `WAVECOORD_FENCE_SEED=<n>` reruns one seed, and `WAVECOORD_FENCE_RUNS=<n>` runs more (for local soak runs). A failing seed is added to the fixed list with the fix.
+**Runs.** CI runs a fixed list of 50 seeds and 1 new random seed, with up to 300 operations each. The seed is printed on failure. `WAVECOORD_FENCE_SEED=<n>` reruns one seed, and `WAVECOORD_FENCE_RUNS=<n>` runs more (for local soak runs). A failing seed is added to the fixed list with the fix. A soak seed that fails goes into `REGRESSION_SEEDS` with its operation count.
 
 ## 2. Seeded defects (`test_fence_defects.py`)
 
@@ -63,6 +63,7 @@ Each defect is a small patch (a monkeypatch of one function or constant) on the 
 | D20 | A 200 with a body that is not valid JSON read as "no violations" | fail-closed |
 | D21 | An agent token can add a `claim` exclusive reservation `**` | safety |
 | D22 | Exclusive overlap granted in enforce mode | liveness (deadlock of two holders) and a table test |
+| D23 | The override journal flush removes the whole batch on a deduplicated ack (the first send was logged, its answer lost, and the retry with the same key carries more entries) | override log, and the table test `journal_retry_check` (0.1.3) |
 
 ## 3. Table tests (`test_fence_points.py`)
 
@@ -102,7 +103,7 @@ These facts come from the Claude Code hooks reference. The fence depends on them
 | `tests/fenceworld.py` | the world: a real coordinator with a fake clock behind a fault proxy, the repo and worktrees, and the oracle (its own glob matcher `omatch`, its own log fold `OState`, and the inode-based `truth` of a target) |
 | `tests/fencesim.py` | the random operations and the six assertions |
 | `tests/test_fence_invariant.py` | 50 fixed seeds and one new random seed in parallel processes; on a case-sensitive file system 5 more seeds with a case-insensitive probe. `OracleCacheTest`: a cached oracle fold equals a fresh fold, also when a later event list gets the id of a freed one (seeded defect O1 of the oracle, seed 44 after seed 5 in one process) |
-| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 22 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
+| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 23 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
 | `tests/test_fence_points.py` | the failure table, the path table, the output shapes, the override, the modes, the server rules, gate-check, the launcher helpers and the fake-claude hook runs |
 
 `WAVECOORD_FENCE_SEED=<n>` reruns one seed, `WAVECOORD_FENCE_RUNS=<n>` adds n random seeds, and `WAVECOORD_FENCE_OPS=<n>` sets the maximum number of operations per seed (default 80; use 300 for a soak run).

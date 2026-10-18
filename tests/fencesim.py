@@ -185,6 +185,11 @@ class Sim(object):
             if src not in (".gitignore", ".claude/wavecoord.json"):
                 git(wk.wt, "rm", "-q", src, check=False)
         git(wk.wt, "add", "-A")
+        if wk.cfg_trick:
+            # The trick lowers the worktree copy of the config (D13), which the fence ignores. A commit of it is a
+            # config change of the default branch after the merge, a lead decision (edit-fence.md, section 8)
+            # that this world does not model: its modes stay fixed, so the lead's `ask` expectation holds.
+            git(wk.wt, "reset", "-q", "--", ".claude/wavecoord.json", check=False)
         from fenceworld import index_of
         staged = changed(tree_of(wk.wt, "HEAD"), index_of(wk.wt))
         if not staged:

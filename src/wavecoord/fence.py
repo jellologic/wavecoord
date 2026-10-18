@@ -422,11 +422,42 @@ def journal_entries(env):
     return out
 
 
+def acked_entries(notice, batch):
+    """The `n` of each entry of `batch` that the logged notice holds: only these leave the journal.
+
+    A retry has the same idempotency key (nonce and first n) but can carry more entries than the first send.
+    When the first send was logged and its answer was lost, the server returns the first notice, and the new
+    entries are not in it (0.1.3).
+    """
+    detail = notice.get("detail")
+    acked = detail.get("entries") if isinstance(detail, dict) else None
+    if not isinstance(acked, list):
+        return set()
+    return set(r.get("n") for r in batch) & set(r.get("n") for r in acked if isinstance(r, dict))
+
+
+JOURNAL_FLUSH_ROUNDS = 4
+
+
 def journal_flush(client, env, agent):
     """Send the journal to the server as fence_override notices. -> entries left (0 when empty).
 
-    An entry leaves the journal only when the server acknowledged it.
+    An entry leaves the journal only when the server acknowledged it. A send that removes some entries but not
+    all (a deduplicated retry, or more than JOURNAL_SEND_MAX entries) is followed by the next one, with a new
+    idempotency key, so one reachable call sends the whole journal.
     """
+    left = len(journal_entries(env))
+    for _ in range(JOURNAL_FLUSH_ROUNDS):
+        if not left:
+            return 0
+        now = _journal_flush_once(client, env, agent)
+        if now >= left:
+            return now  # no progress: unreachable, or not acknowledged
+        left = now
+    return left
+
+
+def _journal_flush_once(client, env, agent):
     p = journal_path(env)
     entries = journal_entries(env)
     if not entries:
@@ -448,7 +479,9 @@ def journal_flush(client, env, agent):
     notice = resp.get("notice") if isinstance(resp, dict) else None
     if status != 200 or not isinstance(notice, dict) or notice.get("kind") != "fence_override":
         return len(entries)  # only a real acknowledgement removes an entry
-    sent = set(r.get("n") for r in batch)
+    sent = acked_entries(notice, batch)
+    if not sent:
+        return len(entries)
     work = p + ".%d.flush" % os.getpid()
     try:
         os.rename(p, work)

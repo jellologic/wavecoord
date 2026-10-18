@@ -1,6 +1,6 @@
 """Seeded defects (tests/fence/README.md, section 2).
 
-For each of the 22 defects, the test applies its patch (tests/fencedefects.py)
+For each of the 23 defects, the test applies its patch (tests/fencedefects.py)
 and runs (1) the defect's named table check and (2) the randomized
 simulation on the first fixed seeds. At least one must fail, else the
 defect is not caught and the suite fails. Without a patch, every table
@@ -217,6 +217,43 @@ class Table(object):
         except ApiError as e:
             return self.expect(e.code, "conflict", "an overlapping exclusive grant")
         return "an overlapping exclusive grant was made in enforce mode"
+
+    def D23(self):
+        return journal_retry_check(self.w)
+
+
+def journal_retry_check(w):
+    """The override journal: the first send is logged but its answer is lost, then a write is added before the
+    retry (the same idempotency key). Every journaled write must reach the server. -> None or the failure."""
+    from wavecoord.client import Client, Deadline
+    env = w.base_env("agent")
+    fence.write_override(env, 3600, "retry drill")
+    try:
+        ovr = fence.read_override(env)
+        wk = w.workers[0]
+        n1 = fence.journal_append(env, ovr, wk.agent, wk.task, wk.epoch, "a/x.py", "edit")["n"]
+        w.proxy.fault = "truncated"  # the server logs the notice; the client gets half an answer
+        try:
+            left = fence.journal_flush(Client.from_env(agent=wk.agent, deadline=Deadline(5), env=env), env, wk.agent)
+        finally:
+            w.proxy.fault = None
+        if left != 1:
+            return "a flush with a lost answer removed entries (left %s, want 1)" % left
+        n2 = fence.journal_append(env, ovr, wk.agent, wk.task, wk.epoch, "a/y.py", "edit")["n"]
+        left = fence.journal_flush(Client.from_env(agent=wk.agent, deadline=Deadline(5), env=env), env, wk.agent)
+        sent = set()
+        for ev in w.coord.log.events:
+            n = ev["payload"].get("notice") if ev["kind"] == "notify.post" else None
+            if n and n.get("kind") == "fence_override":
+                sent.update(e.get("n") for e in (n.get("detail") or {}).get("entries") or [])
+        missing = sorted({n1, n2} - sent)
+        if left or fence.journal_entries(env):
+            return "the journal is not empty after one reachable flush (left %s)" % left
+        if missing:
+            return "%d journaled write(s) never reached the server (removed on a deduplicated ack)" % len(missing)
+        return None
+    finally:
+        fence.remove_override(env)
 
 
 def table_check(name):
