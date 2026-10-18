@@ -300,6 +300,127 @@ class LocalEndToEnd(LauncherTestCase):
         self.assertEqual(len(self.prs()), 1)  # the PR from the first run is kept
         self.assertEqual(r["pr_url"], "https://example.invalid/pull/1")
 
+    # -- the session of a --continue run (0.1.5)
+    def transcripts(self):
+        root = os.path.join(self.home, ".claude", "projects")
+        out = []
+        for d, _, files in os.walk(root):
+            out += [f[:-6] for f in files if f.endswith(".jsonl")]
+        return sorted(out)
+
+    def runs(self):
+        with open(os.environ["FAKE_CLAUDE_RUNS"]) as f:
+            return [json.loads(l) for l in f if l.strip()]
+
+    def attempt_dir(self, aid="t1-1"):
+        return os.path.join(os.environ["WAVECOORD_HOME"], "attempts", "demo", aid)
+
+    def continue_run(self, L, prompt, **kw):
+        rec = L.launch(self.opts(prompt=prompt, **dict(kw, **{"continue": True})))
+        r = self.wait_state(L, rec["id"], ("reported", "failed", "timed_out"))
+        self.assertEqual(r["state"], "reported", r)
+        return r
+
+    def test_continue_twice_resumes_the_first_session(self):
+        """The production bug: the second --continue resumed the unused fresh id of the first one.
+        Claude Code also reports a new id on resume here, while the transcript stays the first one."""
+        os.environ.update(FAKE_CLAUDE_COMMIT="1", FAKE_CLAUDE_RUNS=os.path.join(self.tmp, "runs.jsonl"),
+                          FAKE_CLAUDE_RESUME_REPORTS_NEW_ID="1")
+        L = self.launcher()
+        first = L.launch(self.opts())["session_id"]
+        self.wait_state(L, "t1-1", ("reported",))
+        self.continue_run(L, "Fix the review comments.")
+        dump = os.path.join(self.tmp, "dump3.json")
+        os.environ["FAKE_CLAUDE_DUMP"] = dump
+        r = self.continue_run(L, "Add a file.\nMore detail.")  # --continue --spec: the full spec prompt again
+        self.assertEqual([(x["session"], x["resume"]) for x in self.runs()],
+                         [(first, None), (first, first), (first, first)])
+        argv = load(dump)["argv"]
+        self.assertEqual(argv[argv.index("--resume") + 1], first)
+        self.assertNotIn("--session-id", argv)
+        self.assertEqual(self.transcripts(), [first])
+        self.assertEqual(r["session_id"], first)
+        self.assertIsNone(r["session_fallback"])
+        self.assertEqual(len(r["commits"]), 3)
+        task = load(os.path.join(self.attempt_dir(), "task.json"))
+        self.assertEqual((task["transcript_session"], task["session_root"]), (first, first))
+        self.assertEqual(task["resume_candidates"][0], first)
+
+    def test_continue_recovers_a_0_1_4_attempt(self):
+        """An attempt dir as 0.1.4 left it on the host: task.json has a fresh id that has no transcript
+        and resume names another such id; only the first run's transcript exists (in prev-*/)."""
+        import uuid
+        os.environ.update(FAKE_CLAUDE_COMMIT="1", FAKE_CLAUDE_RUNS=os.path.join(self.tmp, "runs.jsonl"))
+        L = self.launcher()
+        first = L.launch(self.opts())["session_id"]
+        self.wait_state(L, "t1-1", ("reported",))
+        self.continue_run(L, "Fix the review comments.")
+        tj = os.path.join(self.attempt_dir(), "task.json")
+        t = load(tj)
+        for k in ("transcript_session", "session_root", "session_lineage", "resume_candidates", "spec_prompt"):
+            t.pop(k, None)
+        t.update(session_id=str(uuid.uuid4()), resume=str(uuid.uuid4()))
+        with open(tj, "w") as f:
+            json.dump(t, f)
+        for a in os.listdir(self.attempt_dir()):
+            if a.startswith("prev-"):
+                pt = os.path.join(self.attempt_dir(), a, "task.json")
+                old = load(pt)
+                for k in ("transcript_session", "session_root", "session_lineage", "resume_candidates"):
+                    old.pop(k, None)
+                with open(pt, "w") as f:
+                    json.dump(old, f)
+        r = self.continue_run(L, "Finish it.")
+        self.assertEqual(self.runs()[-1]["resume"], first)
+        self.assertIsNone(r["session_fallback"])
+        self.assertEqual(self.transcripts(), [first])
+
+    def test_continue_without_transcript_starts_fresh(self):
+        os.environ.update(FAKE_CLAUDE_COMMIT="1", FAKE_CLAUDE_RUNS=os.path.join(self.tmp, "runs.jsonl"))
+        L = self.launcher()
+        first = L.launch(self.opts(prompt="Add a file.\nThe full task spec."))["session_id"]
+        self.wait_state(L, "t1-1", ("reported",))
+        root = os.path.join(self.home, ".claude", "projects")
+        for d, _, files in os.walk(root):
+            for f in files:
+                os.remove(os.path.join(d, f))
+        dump = os.path.join(self.tmp, "dump2.json")
+        os.environ["FAKE_CLAUDE_DUMP"] = dump
+        r = self.continue_run(L, "Fix the review comments.")
+        argv = load(dump)["argv"]
+        self.assertNotIn("--resume", argv)
+        fresh = argv[argv.index("--session-id") + 1]
+        self.assertNotEqual(fresh, first)
+        stdin = load(dump)["stdin"]
+        self.assertIn("could not be resumed (no transcript of session %s" % first, stdin)
+        self.assertIn("The full task spec.", stdin)
+        self.assertIn("Fix the review comments.", stdin)
+        self.assertIn("fake claude: fake-claude-%s.txt" % first[:8], stdin)  # the commits since the base
+        self.assertEqual(r["session_fallback"]["reason"], "no_transcript")
+        self.assertEqual(r["session_id"], fresh)
+        self.assertEqual(self.transcripts(), [fresh])
+        # the next --continue resumes the fresh session
+        self.continue_run(L, "One more thing.")
+        self.assertEqual(self.runs()[-1]["resume"], fresh)
+
+    def test_continue_no_conversation_falls_back(self):
+        """claude says "No conversation found" although a transcript is there: one fresh run, recorded."""
+        os.environ.update(FAKE_CLAUDE_COMMIT="1", FAKE_CLAUDE_RUNS=os.path.join(self.tmp, "runs.jsonl"))
+        L = self.launcher()
+        first = L.launch(self.opts())["session_id"]
+        self.wait_state(L, "t1-1", ("reported",))
+        os.environ["FAKE_CLAUDE_FORGET"] = "1"
+        r = self.continue_run(L, "Fix the review comments.")
+        runs = self.runs()
+        self.assertEqual([x["resume"] for x in runs], [None, first, None])
+        self.assertEqual(r["session_fallback"]["reason"], "no_conversation")
+        self.assertEqual(r["session_id"], runs[-1]["session"])
+        d = self.attempt_dir()
+        with open(os.path.join(d, "resume-failed-stderr.log")) as f:
+            self.assertIn("No conversation found with session ID: %s" % first, f.read())
+        self.assertEqual(load(os.path.join(d, "status.json"))["session_fallback"]["reason"], "no_conversation")
+        self.assertEqual(len(r["commits"]), 2)
+
     def test_prepare_cmd_failure(self):
         dump = os.path.join(self.tmp, "dump.json")
         os.environ["FAKE_CLAUDE_DUMP"] = dump

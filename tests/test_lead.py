@@ -274,6 +274,12 @@ class DispatchTest(LeadTestCase):
         plan = self.lead.dispatch_wave(dry_run=True)
         self.assertEqual([d["task"] for d in plan["dispatched"]], ["alpha", "beta", "gamma"])
         self.assertIn("wip_cap", [s["why"] for s in plan["skipped"]])  # gpu: wip_cap 3 reached first
+        # each task placed in the wave counts for the next one (0.1.4 printed "wip 1/3" for all)
+        self.assertEqual([d["reason"].split(";")[1].strip() for d in plan["dispatched"]],
+                         ["wip 1/3", "wip 2/3", "wip 3/3"])
+        with self.assertRaises(Exception) as e:
+            self.lead.decide(self.lead.plan().get("alpha"), flying=3)
+        self.assertEqual(getattr(e.exception, "reason", None), "wip_cap")
         self.assertEqual(self.events("dispatch.decide"), [])  # a dry run logs nothing
         out = self.lead.dispatch_wave(["alpha", "beta"])
         self.assertEqual(sorted(d["task"] for d in out["dispatched"]), ["alpha", "beta"])

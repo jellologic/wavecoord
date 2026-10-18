@@ -278,8 +278,11 @@ class LeadBase(object):
         reason = "rate_limited" if any("backed off" in w for w in why) else "no_provider"
         raise Refused(reason, "no provider can run %s now: %s" % (spec["id"], "; ".join(why)))
 
-    def decide(self, spec, host=None, overrides=None, snap=None, check_ready=True, resolver=False):
-        """The dispatch decision for one task, or Refused."""
+    def decide(self, spec, host=None, overrides=None, snap=None, check_ready=True, resolver=False, flying=None):
+        """The dispatch decision for one task, or Refused.
+
+        flying: the attempts in flight to check wip_cap against, when the caller knows more than
+        the snapshot (dispatch_wave counts the tasks it placed before this one, also in a dry run)."""
         overrides = overrides or {}
         snap = snap or self.snapshot()
         task = spec["id"]
@@ -289,7 +292,7 @@ class LeadBase(object):
                 raise Refused("not_ready", "%s is not ready: %s" % (task, r["why_not"].get(task) or "state %s" % (
                     g.effective(spec["state"], self.states(snap).get(task)))))
         cap = self.cfg().wip_cap
-        flying = len(self.in_flight(snap))
+        flying = max(len(self.in_flight(snap)), flying or 0)
         if flying >= cap:
             raise Refused("wip_cap", "wip_cap reached: %d attempts in flight, cap %d" % (flying, cap))
         hosts = self.host_candidates(spec, host)
@@ -407,7 +410,8 @@ class LeadBase(object):
                 cands = [t for t in cands if t["id"] in want]
             requested = [r["task"] for r in snap["requests"] if r["state"] == "open"]
             cands.sort(key=lambda s: 0 if s["id"] in requested else 1)  # stable: plan order otherwise
-            cap = self.cfg().wip_cap - len(self.in_flight(snap))
+            base = len(self.in_flight(snap))
+            cap = self.cfg().wip_cap - base
             picked = []
             for s in cands:
                 if len(picked) >= cap:
@@ -424,7 +428,9 @@ class LeadBase(object):
                     skipped.append({"task": s["id"], "why": stop})
                     continue
                 try:
-                    d = self.decide(s, None, {}, self.snapshot(), check_ready=False)
+                    # each task placed in this wave counts against wip_cap for the next one: a dry run
+                    # records nothing, and a launch can be in flight before the snapshot shows it
+                    d = self.decide(s, None, {}, self.snapshot(), check_ready=False, flying=base + len(done))
                     if dry_run:
                         done.append(dict(d, dry_run=True))
                         continue

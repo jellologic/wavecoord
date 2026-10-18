@@ -28,7 +28,7 @@ import time
 from wavecoord import zipapp
 
 from . import coord as coordmod
-from . import providers
+from . import providers, sessions
 from .common import (ACTIVE, ATTEMPT_ID_RE, DEVNULL, FINAL, PIPE, Flock, LauncherError, ensure_dir, iso,
                      lock_held, now, pid_alive, read_json, tail_text, update_status, wc_home, write_json)
 from .worktrees import (dirty_count, prepare_worktree, remove_worktree, unpushed_commits)
@@ -327,13 +327,21 @@ def r_launch(payload, args):
         repo = expand_repo(cfg["repo_path"])
         wt, base_sha, default = prepare_worktree(repo, spec["branch"], aid, cont=bool(spec.get("continue")),
                                                  log_branch=payload.get("log_branch"))
-        resume = None
-        if spec.get("continue") and prev_task.get("session_id") and prev_task.get("worktree") == wt:
-            resume = prev_task["session_id"]
+        # --continue: the sessions of the earlier runs, the first run's (the lineage root) first. The
+        # wrapper resumes the first one whose transcript exists, else it starts a fresh session.
+        candidates, spec_prompt = [], spec.get("prompt") or ""
+        if spec.get("continue") and prev:
+            if prev_task.get("worktree") == wt:
+                candidates = sessions.lineage(d, prev_task, prev_result)
+            spec_prompt = sessions.first_prompt(d, prev_task) or spec_prompt
+        resume = candidates[0] if candidates else None
         task = {
             "id": aid, "project": project, "host": cfg["name"], "task": spec["task"],
             "attempt": spec["attempt"], "branch": spec["branch"], "agent": spec["agent"],
-            "session_id": spec["session_id"], "resume": resume, "worktree": wt, "repo": repo,
+            "session_id": spec["session_id"], "resume": resume, "resume_candidates": candidates,
+            "session_root": prev_task.get("session_root") if candidates else None,
+            "session_lineage": list(prev_task.get("session_lineage") or []) if prev else [],
+            "spec_prompt": spec_prompt, "worktree": wt, "repo": repo,
             "base_sha": base_sha, "default_branch": default, "spec": spec, "hostcfg": cfg,
             "coord_url": payload.get("coord_url"), "pr_cmd": payload.get("pr_cmd"),
             "plugin_dir": plugin_dir, "continue": bool(spec.get("continue")),

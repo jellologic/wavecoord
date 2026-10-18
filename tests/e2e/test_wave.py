@@ -139,6 +139,7 @@ class WaveE2E(unittest.TestCase):
             "WAVECOORD_STOP_GRACE_S": "2", "WAVECOORD_PUSH_RETRY_S": "1", "WAVECOORD_NOTIFY_MIN_INTERVAL_S": "0",
             "WAVECOORD_WATCHDOG_S": "0", "WAVECOORD_SSE_PING_S": "1",
             "FAKE_CLAUDE_MODES": self.modes, "FAKE_CLAUDE_RUNS": self.runs, "FAKE_GH_STATE": self.gh_state,
+            "FAKE_CLAUDE_TRANSCRIPTS": "1",
         })
         self.env = env
         self.write_modes({})

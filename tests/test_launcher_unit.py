@@ -216,3 +216,49 @@ class SpoolTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SessionsTest(unittest.TestCase):
+    def test_transcript_path(self):
+        from wavecoord.launcher import sessions
+        self.assertEqual(sessions.encode_cwd("/home/u/wt/t-1.x"), "-home-u-wt-t-1-x")
+        with tempfile.TemporaryDirectory() as t:
+            t = os.path.realpath(t)
+            cfg, wt = os.path.join(t, "cfg"), os.path.join(t, "wt", "a-1")
+            os.makedirs(wt)
+            env = {"CLAUDE_CONFIG_DIR": cfg, "HOME": os.path.join(t, "nohome")}
+            sid = "952a5168-0000-4000-8000-000000000001"
+            self.assertIsNone(sessions.transcript_path(sid, wt, env))
+            d = os.path.join(cfg, "projects", sessions.encode_cwd(wt))
+            os.makedirs(d)
+            open(os.path.join(d, sid + ".jsonl"), "w").close()
+            self.assertEqual(sessions.transcript_path(sid, wt, env), os.path.join(d, sid + ".jsonl"))
+            # another project (a shortened long path, a moved worktree): --resume finds it too
+            self.assertEqual(sessions.transcript_path(sid, os.path.join(t, "elsewhere"), env),
+                             os.path.join(d, sid + ".jsonl"))
+            self.assertIsNone(sessions.transcript_path("../x", wt, env))
+            self.assertIsNone(sessions.transcript_path(sid, wt, {"HOME": os.path.join(t, "nohome")}))
+
+    def test_lineage_order(self):
+        from wavecoord.launcher import sessions
+        with tempfile.TemporaryDirectory() as d:
+            for ms, task in ((200, {"session_id": "b", "resume": "a"}), (100, {"session_id": "a"})):
+                os.makedirs(os.path.join(d, "prev-%d" % ms))
+                with open(os.path.join(d, "prev-%d" % ms, "task.json"), "w") as f:
+                    json.dump(task, f)
+            # 0.1.4 lineage: the oldest run's id comes first, before the newest run's unused fresh id
+            self.assertEqual(sessions.lineage(d, {"session_id": "c", "resume": "b"}, {"session_id": "r"}),
+                             ["a", "b", "c", "r"])
+            self.assertEqual(sessions.lineage(d, {"transcript_session": "f", "session_root": "a", "session_id": "c"},
+                                              {}), ["f", "a", "b", "c"])
+
+    def test_fresh_prompt(self):
+        from wavecoord.launcher import sessions
+        p = sessions.fresh_prompt("Do the task.", "Do the task.", ["abc1234 first"], "lost")
+        self.assertEqual(p.count("Do the task."), 1)  # --continue --spec: the spec prompt only once
+        self.assertIn("- abc1234 first", p)
+        p = sessions.fresh_prompt("Do the task.", "Fix it.", [], "lost")
+        self.assertLess(p.index("Do the task."), p.index("Fix it."))
+        self.assertTrue(sessions.no_conversation("No conversation found with session ID: x", None))
+        self.assertTrue(sessions.no_conversation("", {"errors": ["No conversation found with session ID: x"]}))
+        self.assertFalse(sessions.no_conversation("other", {"result": "ok"}))
