@@ -134,6 +134,10 @@ def cmd_serve(args):
         sys.stderr.write("wavecoord serve: %s\n" % e)
         return 1
     coord.open()
+    from wavecoord.watchdog import Watchdog
+    wd = Watchdog.from_config(coord, cfg.get("watchdog"))
+    if wd is not None:
+        wd.start()
     sys.stdout.write("wavecoord serve: %s project=%s log=%s\n" % (srv.url, coord.project, coord.log.log_dir))
     sys.stdout.flush()
 
@@ -147,6 +151,8 @@ def cmd_serve(args):
         pass
     finally:
         srv.stopping.set()
+        if wd is not None:
+            wd.stop()
         srv.httpd.server_close()
         coord.close()
         lock.close()
@@ -285,9 +291,48 @@ def follow_events(url, since=None, follow=True, out=None, token=None, max_events
         time.sleep(1.0)
 
 
-def cmd_events(args):
+def follow_lead(url, since=None, follow=True, out=None, token=None, state=None, cursor=True,
+                as_json=False, max_lines=None, env=None):
+    """`events --for lead`: one concise line per lead-relevant event (docs/feedback.md).
+
+    Starts after `since`, else after the shared lead cursor in `state`, else at
+    the next event. Each printed line moves the cursor, so the hooks do not
+    inject the same event again.
+    """
+    from wavecoord import feedback
+    from wavecoord.client import state_dir
+    out = out or sys.stdout
+    state = state if state is not None else state_dir(env)
+    if since is None and cursor:
+        since = feedback.read_cursor(state)
+    count = 0
     try:
-        return follow_events(_url(), since=args.since, follow=args.follow)
+        for ev in feedback.sse_events(url, token or client_token(env), since=since, follow=follow, agent="lead"):
+            line = feedback.lead_line(ev)
+            if line is not None:
+                out.write((json.dumps(ev, sort_keys=True) if as_json else line) + "\n")
+                out.flush()
+                count += 1
+            if cursor and isinstance(ev.get("seq"), int):
+                feedback.write_cursor(state, ev["seq"])
+            if max_lines and count >= max_lines:
+                return 0
+    except feedback.SseError as e:
+        sys.stderr.write("wavecoord events: %s\n" % e)
+        return 1
+    except OSError as e:
+        sys.stderr.write("wavecoord events: %s\n" % e)
+        return 1
+    return 0
+
+
+def cmd_events(args):
+    url = (args.url or "").strip().rstrip("/") or _url()
+    try:
+        if args.for_ == "lead":
+            return follow_lead(url, since=args.since, follow=args.follow, cursor=not args.no_cursor,
+                               as_json=args.json, state=(args.state_dir or "").strip() or None)
+        return follow_events(url, since=args.since, follow=args.follow)
     except KeyboardInterrupt:
         return 0
 
@@ -372,6 +417,13 @@ def register(sub):
     sp = sub.add_parser("events", help="print coordination events, one JSON per line")
     sp.add_argument("--follow", "-f", action="store_true", help="keep streaming (for a Monitor)")
     sp.add_argument("--since", type=int, help="start after this seq")
+    sp.add_argument("--for", dest="for_", choices=("lead",),
+                    help="only the events the lead acts on, one concise line each (docs/feedback.md)")
+    sp.add_argument("--json", action="store_true", help="with --for: print the filtered events as JSON")
+    sp.add_argument("--url", help="coordinator URL; empty means the usual lookup (WAVECOORD_URL, config)")
+    sp.add_argument("--state-dir", help="with --for: the hook state dir that holds the lead cursor")
+    sp.add_argument("--no-cursor", action="store_true",
+                    help="with --for: do not read or move the shared lead cursor")
     sp.set_defaults(func=cmd_events)
 
     sp = sub.add_parser("tokens", help="manage bearer tokens")

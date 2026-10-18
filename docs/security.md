@@ -5,7 +5,7 @@ wavecoord runs agents that edit code and push branches. The coordinator is a con
 ## Network
 
 - **Bind `127.0.0.1` by default** (port 18741). Workers on other hosts reach a loopback server through an SSH tunnel (`ssh -R 18741:127.0.0.1:18741`), which the launcher sets up.
-- The server config is `<home>/server.json` (or `wavecoord serve --config <file>`) with the keys `bind`, `port`, `allow_cidrs`, `allow_hosts`, `allow_origins` and `tokens_file`.
+- The server config is `<home>/server.json` (or `wavecoord serve --config <file>`) with the keys `bind`, `port`, `allow_cidrs`, `allow_hosts`, `allow_origins`, `tokens_file` and `watchdog` (`feedback.md`).
 - Binding any other address needs both lists in the server config, or the server refuses to start:
   - `allow_cidrs`: peer networks, for example `["192.0.2.0/24"]`. Loopback is always allowed. A peer outside gets 403.
   - `allow_hosts`: accepted `Host` header values, for example `["coord.example.internal:18741"]`. Others get 421. This blocks DNS rebinding.

@@ -43,6 +43,7 @@ DEFAULT_BUDGET_S = 4.0
 GIT_TIMEOUT_S = 2.0
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 WAITING_TYPES = ("permission_prompt", "idle_prompt", "elicitation_dialog", "agent_needs_input")
+LEAD_EVENTS_MAX = 40  # event lines per injection; the rest wait for the next turn
 CONTEXT_MAX = 9000  # Claude Code caps additionalContext at 10,000 characters
 
 
@@ -52,8 +53,8 @@ class Identity(object):
     def __init__(self, env, hook_input):
         sid = hook_input.get("session_id") if isinstance(hook_input.get("session_id"), str) else None
         self.session_id = sid
-        role = env.get("WAVECOORD_ROLE", "").strip().lower()
-        self.lead = role == "lead"
+        from wavecoord.feedback import is_lead
+        self.lead = is_lead(env)
         explicit = env.get("WAVECOORD_AGENT_ID", "").strip()
         if self.lead:
             self.agent = "lead"
@@ -380,6 +381,11 @@ class Hook(object):
                  (self.c.url, self.id.agent, self.id.kind, self.id.host)]
         if self.id.lead:
             lines += self.lead_summary(live)
+            seq = ((live or {}).get("server") or {}).get("last_seq")
+            if isinstance(seq, int) and self.inp.get("source") in (None, "startup", "clear"):
+                # a new lead session starts at the head; resume and compact keep the backlog
+                from wavecoord import feedback
+                feedback.write_cursor(state_dir(self.env), seq)
         else:
             lines += self.worker_summary(live)
         text = self.deliver_text(msgs, lost)
@@ -445,11 +451,52 @@ class Hook(object):
                 lines.append("%s: %d (use the wavecoord tools for details)" % (key.capitalize(), len(items)))
         return lines
 
+    def lead_events(self):
+        """Lead-relevant event lines after the shared cursor (docs/feedback.md).
+
+        A Monitor on `wavecoord events --follow --for lead` moves the same
+        cursor, so an event reaches the lead once through either path. The
+        first run only sets the cursor to the head: SessionStart shows the
+        wave state instead of the backlog.
+        """
+        from wavecoord import feedback
+        sd = state_dir(self.env)
+        cur = feedback.read_cursor(sd)
+        if cur is None:
+            live = self.live()
+            seq = ((live or {}).get("server") or {}).get("last_seq")
+            if isinstance(seq, int):
+                feedback.write_cursor(sd, seq)
+            return []
+        lines, top = [], cur
+        timeout = max(0.2, min(self.c.timeout, self.c.deadline.remaining() - 0.5))
+        try:
+            for ev in feedback.sse_events(self.c.url, self.c.token, since=cur, follow=False, timeout=timeout,
+                                          agent=self.id.agent):
+                if isinstance(ev.get("seq"), int):
+                    top = max(top, ev["seq"])
+                to = ((ev.get("payload") or {}).get("message") or {}).get("to") or {}
+                if ev.get("kind") == "message.new" and to.get("kind") in ("lead", "all"):
+                    continue  # the inbox delivers it in the message frame
+                line = feedback.lead_line(ev)
+                if line:
+                    lines.append(line)
+                if len(lines) >= LEAD_EVENTS_MAX or self.c.deadline.remaining() < 0.5:
+                    break
+        except (OSError, feedback.SseError):
+            pass
+        feedback.write_cursor(sd, top)
+        return lines
+
     def _deliver(self, event):
         hb = self.heartbeat()
         msgs, lost = self.inbox(hb)
         text = self.deliver_text(msgs, lost)
         self.mark_shown(msgs)
+        if self.id.lead:
+            evs = self.lead_events()
+            if evs:
+                text = (text + "\n" if text else "") + "Coordination events since your last turn:\n" + "\n".join(evs)
         return context_output(event, text) if text else None
 
     def UserPromptSubmit(self):

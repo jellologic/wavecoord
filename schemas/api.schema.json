@@ -148,6 +148,7 @@
         "holder": {"$ref": "#/definitions/agent_id"},
         "host": {"$ref": "#/definitions/host"},
         "steal": {"type": "boolean"},
+        "user_set": {"type": "boolean", "description": "Lead only: the user set this lease; the watchdog never nudges it or makes it stale"},
         "reservations": {
           "type": "array",
           "items": {"type": "object", "additionalProperties": false, "required": ["glob", "mode"],

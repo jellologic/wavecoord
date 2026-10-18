@@ -2,7 +2,7 @@
 
 This page is the contract between the wavecoord server and its clients: the worker launcher, the Claude Code hooks, the lead's MCP tools, the channel bridge and any UI. The schemas in `schemas/` and the examples in `tests/fixtures/` are part of the contract. Change them together, in one PR.
 
-Status: P1. The server (`wavecoord serve`), the log, the cache, REST, SSE and the MCP tools of section 8 exist. Plan, dispatch, resolve and refinery tools answer `isError` until P4.
+Status: P1. The server (`wavecoord serve`), the log, the cache, REST, SSE and the MCP tools of section 8 exist. Plan, dispatch, resolve and refinery tools answer `isError` until P4. P5 adds the lead feedback paths (`events --for lead`, the inbox injection for the lead, `wavecoord channel`) and the watchdog; see `feedback.md`.
 
 ## 1. Model in one paragraph
 
@@ -44,7 +44,7 @@ Terms:
 |---|---|---|
 | `active` | The holder works on the task. Activity renews `expires_at = now + LEASE_TTL_S` | `parked` at finish with pushed commits; `released` at finish with no commits; `stale` at expiry |
 | `parked` | The attempt is finished and pushed; the work waits for review and merge. **Never expires**; after `PARKED_DRIFT_S` it is reported as drift | `released` by the lead or the refinery after merge or abandon |
-| `stale` | No activity for the TTL. **Not free**: nobody else gets the task until the lead acts | `active` (same epoch) on new activity from the holder; `released`; replaced by a steal |
+| `stale` | No activity for the TTL, or marked by the watchdog (`by: "watchdog"`, `feedback.md`). **Not free**: nobody else gets the task until the lead acts | `active` (same epoch) on new activity from the holder; `released`; replaced by a steal |
 | `released` | Ended | none |
 
 Rules:
@@ -53,6 +53,7 @@ Rules:
 - **Epoch (fencing token).** A grant sets `epoch = max(last_epoch(task) + 1, now_ms)`. A steal makes a new epoch; renew, revive and park keep it. A merge or gate check compares the epoch in the PR body (`Lease: <task>@<epoch>`) with the current one.
 - **Clock.** If the clock goes back more than `CLOCK_BACK_MS` below the last tick, grants fail with 503 `clock` until it catches up. A forward jump larger than `GAP_S` (laptop sleep) shifts every non-null `expires_at` by the gap, so a sleep never makes a lease stale. Both transitions are logged as `server.clock` (`state`: `back` or `ok`) and `server.gap` (`gap_ms`).
 - **Liveness is in memory.** Heartbeat renewals of `renewed` and `expires_at` are not logged; a lease event holds the values at that transition. After a server restart every `active` lease gets a fresh `LEASE_TTL_S`, because no holder could renew it while the server was down.
+- **Watchdog.** A lease the watchdog made stale revives only on real activity (a hook or MCP heartbeat, or a launcher heartbeat with a new `last_tool`), not on a launcher heartbeat alone. A claim with `user_set: true` (lead only) is never nudged or made stale by the watchdog.
 - A steal or release is atomic. Activity after it does not revive the lease; the holder sees the lease in `lost` on every heartbeat, from every source, until it holds a new lease, and must stop.
 
 ### 3.2 Reservations
@@ -103,6 +104,9 @@ Full rules in `security.md`. In short:
 | `INBOX_MAX` | 20 | Maximum messages in one inbox reply |
 | `SSE_PING_S` | 15 | SSE keep-alive comment interval |
 | `CLIENT_TIMEOUT_S` | 3 | Maximum time a hook or CLI call waits for the server |
+| `WATCHDOG_S` | 60 | Watchdog check interval; 0 turns it off |
+| `WATCHDOG_NUDGE_S` | 1200 | An active lease with no activity for this time gets one nudge message |
+| `WATCHDOG_STALE_S` | 600 | With no activity this long after the nudge, the watchdog logs `lease.stale` |
 
 Tests may override a constant with an environment variable of the same name prefixed `WAVECOORD_` (for example `WAVECOORD_LEASE_TTL_S=5`).
 
@@ -116,7 +120,7 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `GET /api/live` | read | Snapshot: agents, leases, reservations, attempts in flight, drift, `server.last_seq` |
 | `POST /api/hb` | agent (own), lead | Heartbeat; returns `{agent, lease, lost, inbox, more}`. Dedup by `(agent, source, seq)` |
 | `POST /api/agents/<id>/finish` | agent (own), lead | Ends the agent; parks or releases its lease |
-| `POST /api/leases` | agent (own), lead | Claim (`steal` is lead only); returns lease, reservations, conflicts |
+| `POST /api/leases` | agent (own), lead | Claim (`steal` and `user_set` are lead only); returns lease, reservations, conflicts |
 | `GET /api/leases`, `GET /api/tasks/<task>/lease` | read, gate | Current leases; `last_epoch` per task |
 | `POST /api/leases/<id>/release` | agent (own), ui (stale only), lead | Release |
 | `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease), lead | Add (`reservation_request`, or `{lease_id, reservations: [{glob, mode}]}` for several) or remove reservations |
@@ -139,7 +143,7 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 
 ## 7. Server-sent events
 
-`GET /api/events` returns `text/event-stream`; each SSE message has `id: <seq>`, `event: <kind>` and `data: <event JSON>`. The stream resumes after `Last-Event-ID`, else after `?since=`, else at the next event. To avoid a gap, read `GET /api/live`, then stream from its `server.last_seq`. The server sends `: ping` every `SSE_PING_S`. `wavecoord events --follow` prints the stream one event per line (for a `Monitor`).
+`GET /api/events` returns `text/event-stream`; each SSE message has `id: <seq>`, `event: <kind>` and `data: <event JSON>`. The stream resumes after `Last-Event-ID`, else after `?since=`, else at the next event. To avoid a gap, read `GET /api/live`, then stream from its `server.last_seq`. The server sends `: ping` every `SSE_PING_S`. `wavecoord events --follow` prints the stream one event per line as JSON. `wavecoord events --follow --for lead` prints only the events the lead acts on, one concise framed line each, and moves the shared lead cursor (`feedback.md`); this is the command for a `Monitor`.
 
 ## 8. MCP and the channel
 
@@ -165,7 +169,7 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `propose` | Record a plan proposal (from a report or the lead) |
 | `config` | The effective consumer config (no secrets) |
 
-**Channel.** A Claude Code channel is an MCP server that Claude Code spawns over **stdio** and that declares `capabilities.experimental["claude/channel"] = {}`. It pushes `notifications/claude/channel` with `{content, meta}`; meta keys must be identifiers. wavecoord ships this as a stdio bridge, `wavecoord channel` (P5): it follows `GET /api/events` and pushes reports, conflicts and notices to the lead. Channels are a research preview: they need a claude.ai login, and a channel outside Anthropic's allowlist needs `--dangerously-load-development-channels plugin:wavecoord@wavecoord` in an interactive session. So the lead also has two fallbacks: a `Monitor` on `wavecoord events --follow`, and the inbox injected by the `UserPromptSubmit` and `PostToolBatch` hooks. The channel never declares `claude/channel/permission`: coordination traffic can never answer a permission prompt.
+**Channel.** A Claude Code channel is an MCP server that Claude Code spawns over **stdio** and that declares `capabilities.experimental["claude/channel"] = {}`. It pushes `notifications/claude/channel` with `{content, meta}`; meta keys must be identifiers. wavecoord ships this as a stdio bridge, `wavecoord channel`, declared as the plugin MCP server `lead-feed` and bound in `plugin.json` `channels`: it follows `GET /api/events` and pushes the lead lines of `feedback.md` (reports, conflicts, notices, proposals, attempt states) with meta `seq`, `kind`, `task`, `attempt`. It follows events only in a lead session. Channels are a research preview: they need a claude.ai login, and a channel outside Anthropic's allowlist needs `--dangerously-load-development-channels plugin:wavecoord@wavecoord` in an interactive session. So the lead also has two fallbacks: a `Monitor` on `wavecoord events --follow`, and the inbox injected by the `UserPromptSubmit` and `PostToolBatch` hooks. The channel never declares `claude/channel/permission`: coordination traffic can never answer a permission prompt.
 
 ## 9. Rollback
 
