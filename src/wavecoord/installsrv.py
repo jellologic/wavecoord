@@ -23,6 +23,12 @@ from wavecoord import const
 
 LABEL_PREFIX = "io.github.wavecoord."
 NAME_RE = re.compile(r"[^A-Za-z0-9_.-]+")
+ENV_KEY_RE = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*$")
+# WAVECOORD_* variables of a worker or a session, never a server's: not carried into the unit
+NOT_CARRIED = ("WAVECOORD_TASK", "WAVECOORD_ATTEMPT", "WAVECOORD_AGENT_ID", "WAVECOORD_WORKTREE",
+               "WAVECOORD_BRANCH", "WAVECOORD_HOST", "WAVECOORD_ROLE", "WAVECOORD_LEASE_ID",
+               "WAVECOORD_LEASE_EPOCH", "WAVECOORD_SESSION_ID")
+SECRET_RE = re.compile(r"TOKEN|SECRET|PASSWORD|PASSWD|KEY", re.I)
 
 
 def _home():
@@ -37,9 +43,39 @@ def safe_name(project):
     return NAME_RE.sub("-", project).strip("-.") or "default"
 
 
+def carry_env(environ):
+    """The WAVECOORD_* variables of `environ` that the unit keeps (WAVECOORD_SSH, WAVECOORD_HOME, ...).
+
+    Worker/session variables and any name that looks like a secret (TOKEN, KEY, ...;
+    a `*_FILE` path is fine) are left out: the unit file is not a secret store."""
+    out = {}
+    for k, v in environ.items():
+        if not k.startswith("WAVECOORD_") or k in NOT_CARRIED:
+            continue
+        if SECRET_RE.search(k[len("WAVECOORD_"):]) and not k.endswith("_FILE"):
+            continue
+        out[k] = v
+    return out
+
+
+def parse_env_args(items):
+    """`--env KEY=VALUE` words -> dict. Raises ValueError."""
+    out = {}
+    for it in items or ():
+        k, sep, v = it.partition("=")
+        if not sep or not ENV_KEY_RE.match(k):
+            raise ValueError("--env needs KEY=VALUE, not %r" % it)
+        if k in ("HOME",):
+            raise ValueError("--env cannot set HOME")
+        out[k] = v
+    return out
+
+
 def plan(repo, platform=None, port=None, bind=None, tokens=None, home=None, no_push=False, python=None,
-         path_env=None, zipapp_bytes=None):
-    """-> the install plan: {zipapp, zipapp_hash, unit_path, unit, argv, start, stop, log}. Pure."""
+         path_env=None, zipapp_bytes=None, extra_env=None):
+    """-> the install plan: {zipapp, zipapp_hash, unit_path, unit, argv, env, start, stop, log}. Pure.
+
+    `extra_env` ({KEY: VALUE}) is added to the unit's environment (PATH too; never HOME)."""
     from wavecoord import zipapp
     from wavecoord.core import load_consumer_config
     platform = platform or ("darwin" if sys.platform == "darwin" else "linux")
@@ -65,6 +101,9 @@ def plan(repo, platform=None, port=None, bind=None, tokens=None, home=None, no_p
     log = os.path.join(log_dir, "serve.log")
     env = {"PATH": path_env if path_env is not None else os.environ.get("PATH", "/usr/bin:/bin"),
            "HOME": _home()}
+    for k, v in (extra_env or {}).items():
+        if k != "HOME":
+            env[k] = v
     name = safe_name(project)
     if platform == "darwin":
         label = LABEL_PREFIX + name
@@ -82,7 +121,7 @@ def plan(repo, platform=None, port=None, bind=None, tokens=None, home=None, no_p
                  ["systemctl", "--user", "restart", label]]
         stop = [["systemctl", "--user", "disable", "--now", label]]
     return {"platform": platform, "project": project, "repo": repo, "zipapp": target, "zipapp_hash": h,
-            "label": label, "unit_path": unit_path, "unit": unit, "argv": argv, "log": log, "start": start,
+            "label": label, "unit_path": unit_path, "unit": unit, "argv": argv, "env": env, "log": log, "start": start,
             "stop": stop}
 
 
@@ -163,8 +202,10 @@ def cmd_install_server(args):
     repo = os.path.abspath(args.repo) if args.repo else repo_root()
     tokens = args.tokens or default_tokens_file()
     try:
+        extra = {} if args.no_carry_env else carry_env(os.environ)
+        extra.update(parse_env_args(args.env))
         p = plan(repo, platform=args.platform, port=args.port, bind=args.bind, tokens=args.tokens,
-                 home=args.home, no_push=args.no_push)
+                 home=args.home, no_push=args.no_push, extra_env=extra)
     except ValueError as e:
         sys.stderr.write("wavecoord install-server: %s\n" % e)
         return 1
@@ -214,6 +255,10 @@ def register(sub):
     sp.add_argument("--tokens", help="tokens file (default: ~/.wavecoord/tokens.json)")
     sp.add_argument("--home", help="server state dir (default: ~/.wavecoord/<project>)")
     sp.add_argument("--no-push", action="store_true", help="do not push coord/log to origin")
+    sp.add_argument("--env", action="append", metavar="KEY=VALUE",
+                    help="add a variable to the unit's environment (repeatable; overrides a carried one)")
+    sp.add_argument("--no-carry-env", action="store_true",
+                    help="do not carry this shell's WAVECOORD_* variables (WAVECOORD_SSH, ...) into the unit")
     sp.add_argument("--platform", choices=("darwin", "linux"), help="unit type (default: this OS)")
     sp.add_argument("--no-start", action="store_true", help="write the files, do not start the service")
     sp.add_argument("--uninstall", action="store_true", help="stop the service and remove its unit")

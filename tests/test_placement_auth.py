@@ -5,7 +5,8 @@ showed AUTH `no` in `wavecoord hosts`, and an attempt whose provider chain had a
 provider those hosts can run went to the `local` host (2 slots) instead of the
 build hosts (4 free slots each). A host whose env file for one provider of the
 attempt (its provider, then its fallbacks) is present counts as authenticated for
-that attempt; then placement takes the most free slots, then the most memory.
+that attempt. The primary provider wins whenever an eligible host can run it; then
+placement takes the most free slots, then the most memory.
 A host with `dispatch: false` is never picked automatically, only by --host."""
 
 import contextlib
@@ -102,12 +103,22 @@ class PlacementTest(unittest.TestCase):
         self.assertEqual(sel["skipped"], {})
 
     def test_fallback_provider_counts_as_auth(self):
-        # the reproducer: anthropic first, zai as fallback; the build hosts have no login
-        L = StubLauncher(raw_config(), production_probes())
+        # the reproducer: anthropic first, zai as fallback; the build hosts have no login, local is full
+        probes = production_probes()
+        probes["local"] = dict(probes["local"], free=0, active=2)
+        L = StubLauncher(raw_config(), probes)
         sel = L.select_host({"task": "t1", "provider": "anthropic", "provider_fallback": ["zai"]})
         self.assertEqual((sel["host"], sel["provider"]), ("build1", "zai"))
+        self.assertEqual(sel["fallback"], [])
+        self.assertTrue(sel["skipped"]["local"].startswith("full"))
+
+    def test_primary_provider_wins_over_free_slots(self):
+        L = StubLauncher(raw_config(), production_probes())
+        sel = L.select_host({"task": "t1", "provider": "anthropic", "provider_fallback": ["zai"]})
+        self.assertEqual((sel["host"], sel["provider"]), ("local", "anthropic"))
+        self.assertEqual(sel["fallback"], ["zai"])
         order, why = client.placement(L.probes, ["anthropic", "zai"], L.allowed(sorted(L.hosts)))
-        self.assertEqual(order, [("build1", "zai"), ("build3", "zai"), ("build2", "zai"), ("local", "anthropic")])
+        self.assertEqual(order, [("local", "anthropic"), ("build1", "zai"), ("build3", "zai"), ("build2", "zai")])
         self.assertEqual(why, {})
 
     def test_host_uses_the_fallback_when_its_first_file_is_missing(self):
@@ -115,7 +126,11 @@ class PlacementTest(unittest.TestCase):
                                     for n in ("build1", "build2", "build3")})
         L = StubLauncher(raw_config(), probes)
         sel = L.select_host({"task": "t1", "provider": "zai", "provider_fallback": ["openrouter"]})
+        self.assertEqual((sel["host"], sel["provider"]), ("local", "zai"))  # the primary wins
+        probes["local"] = dict(probes["local"], free=0, active=2)
+        sel = L.select_host({"task": "t1", "provider": "zai", "provider_fallback": ["openrouter"]})
         self.assertEqual((sel["host"], sel["provider"]), ("build1", "openrouter"))
+        probes["local"] = dict(probes["local"], free=2, active=0)
         sel = L.select_host({"task": "t1", "provider": "zai"})
         self.assertEqual((sel["host"], sel["provider"]), ("local", "zai"))
         self.assertIn("missing", sel["skipped"]["build1"])
@@ -130,6 +145,13 @@ class PlacementTest(unittest.TestCase):
         self.assertEqual(L.probed[-1], ["local"])
 
     def test_backed_off_fallback_is_not_placed(self):
+        probes = production_probes()
+        probes["local"] = dict(probes["local"], free=0, active=2)
+        L = StubLauncher(raw_config(), probes)
+        with self.assertRaises(LauncherError) as e:
+            L.select_host({"task": "t1", "provider": "anthropic", "provider_fallback": ["zai"],
+                           "placement_avoid": ["zai"]})
+        self.assertIn("full", str(e.exception))
         L = StubLauncher(raw_config(), production_probes())
         sel = L.select_host({"task": "t1", "provider": "anthropic", "provider_fallback": ["zai"],
                              "placement_avoid": ["zai"]})

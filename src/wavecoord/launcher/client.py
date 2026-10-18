@@ -96,8 +96,9 @@ def placement(probes, chain, allowed=None):
     """Eligible hosts, best first, each with the provider it runs the attempt with.
 
     A host is eligible when it can authenticate one provider of `chain` (the attempt's
-    provider, then its fallbacks) and has a free slot. Order: most free slots, then most
-    free memory, then the earlier provider of `chain`, then the name. `allowed`
+    provider, then its fallbacks) and has a free slot. Order: the earlier provider of
+    `chain` first (the primary provider wins whenever an eligible host can run it), then
+    most free slots, then most free memory, then the name. `allowed`
     ({name: provider names}, the host's `providers` in the config) limits `chain` per host.
     -> ([(name, provider)], {name: why not})"""
     chain = [c for i, c in enumerate(chain) if c not in chain[:i]]
@@ -111,9 +112,16 @@ def placement(probes, chain, allowed=None):
             why[name] = r
         else:
             ok.append((name, prov))
-    ok.sort(key=lambda np: (-probes[np[0]].get("free", 0), -(probes[np[0]].get("mem_avail_gib") or 0),
-                            chain.index(np[1]), np[0]))
+    ok.sort(key=lambda np: (chain.index(np[1]), -probes[np[0]].get("free", 0),
+                            -(probes[np[0]].get("mem_avail_gib") or 0), np[0]))
     return ok, why
+
+
+def rest_of(fallback, provider, chain):
+    """The fallbacks of an attempt placed with `provider`: all of them for the primary, else those after it."""
+    if provider == chain[0]:
+        return list(fallback)
+    return list(fallback[fallback.index(provider) + 1:])
 
 
 def place(probes, provider=ANTHROPIC, fallback=()):
@@ -271,7 +279,8 @@ class Launcher(object):
     def select_host(self, opts):
         """Pick the host and the provider of one attempt (docs/launcher.md, "Hosts and placement").
 
-        -> {host, provider, chain, fallback, probes, skipped: {host: why not}}"""
+        -> {host, provider, chain, fallback (the fallbacks after `provider`), all_fallback, probes,
+            skipped: {host: why not}}"""
         provider = opts.get("provider") or self.cfg.default_provider
         fallback = list(opts.get("provider_fallback") or [])
         for p in [provider] + fallback:
@@ -309,8 +318,8 @@ class Launcher(object):
                 announced = summary
             time.sleep(float(os.environ.get("WAVECOORD_POLL_S", POLL_S)))
         name, provider = order[0]
-        return {"host": name, "provider": provider, "chain": chain, "fallback": fallback, "probes": probes,
-                "skipped": dict(why)}
+        return {"host": name, "provider": provider, "chain": chain, "fallback": rest_of(fallback, provider, chain),
+                "all_fallback": fallback, "probes": probes, "skipped": dict(why)}
 
     # -- launch
     def launch(self, opts):
@@ -318,7 +327,7 @@ class Launcher(object):
         if not TASK_RE.match(task or ""):
             raise LauncherError("bad task id %r" % task)
         sel = self.select_host(opts)
-        name, provider, chain, fallback, probes = sel["host"], sel["provider"], sel["chain"], sel["fallback"], sel["probes"]
+        name, provider, chain, fallback, probes = sel["host"], sel["provider"], sel["chain"], sel["all_fallback"], sel["probes"]
         h, probe, skipped = self.hosts[name], probes[name], sel["skipped"]
 
         existing = self.existing_attempts(task)
@@ -340,8 +349,7 @@ class Launcher(object):
                 if prev:
                     name, provider = prev[0]
                     h, probe = self.hosts[name], p_prev
-        if provider != chain[0]:
-            fallback = fallback[fallback.index(provider) + 1:]  # placed with a fallback: the rest stay fallbacks
+        fallback = rest_of(fallback, provider, chain)
         branch = "%s/%s" % (self.cfg.branch_prefix, aid)
         agent = "worker-%s-%s" % (aid, rand4())
         lease_id, epoch = opts.get("lease_id"), opts.get("lease_epoch")

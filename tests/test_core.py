@@ -217,6 +217,45 @@ VALID_REPORT = {"status": "done", "summary": "ok", "commits": [], "files": [], "
                 "acceptance_met": True, "questions": [], "proposals": [], "plan_feedback": "", "risks_hit": []}
 
 
+class ReportProposalTest(CoordCase):
+    """report.proposals[] are filed as proposal.new events (0.1.1 fix)."""
+
+    def report(self, idem=None, proposals=None):
+        claim(self.c, LEAD, "t1", "w1", "h1")
+        props = proposals if proposals is not None else [
+            {"kind": "split", "summary": "split the parser"},
+            {"kind": "new_task", "summary": "add docs", "task": "t9", "detail": "a page"}]
+        return self.c.report(LEAD, "t1", 1, {"report": dict(VALID_REPORT, proposals=props)}, idem=idem)
+
+    def test_report_files_its_proposals(self):
+        self.assertEqual(self.c.proposals(LEAD)["proposals"], [])
+        self.report()
+        ps = sorted(self.c.proposals(LEAD)["proposals"], key=lambda p: p["id"])
+        self.assertEqual([(p["kind"], p["task"], p["attempt"], p["source"], p["state"]) for p in ps],
+                         [("split", "t1", 1, "t1-1", "open"), ("new_task", "t9", None, "t1-1", "open")])
+        self.assertEqual(ps[1]["detail"], "a page")
+        self.assertEqual(ps[1]["id"], ps[0]["id"] + 1)
+        evs = [e for e in self.c.log.events if e["kind"] == "proposal.new"]
+        self.assertEqual([e["idem"] for e in evs], ["report:t1:1#p0", "report:t1:1#p1"])
+        self.assertEqual(self.c.attempt(LEAD, "t1", 1)["attempt"]["state"], "reported")
+
+    def test_idempotent_and_rebuilt(self):
+        self.report()
+        n = self.c.log.last_seq
+        self.report()  # the same report again (a spool flush, a retry)
+        self.assertEqual(self.c.log.last_seq, n)
+        self.assertEqual(len(self.c.proposals(LEAD)["proposals"]), 2)
+        # a manual proposal after them takes the next id
+        p = self.c.propose(LEAD, {"summary": "later"})["proposal"]
+        self.assertEqual(p["id"], 3)
+        self.reopen()
+        self.assertEqual(len(self.c.proposals(LEAD)["proposals"]), 3)
+
+    def test_no_proposals_no_events(self):
+        self.report(proposals=[])
+        self.assertEqual([e for e in self.c.log.events if e["kind"] == "proposal.new"], [])
+
+
 class RandomOps(object):
     """Random operations against a Coord, for the invariant tests."""
 
