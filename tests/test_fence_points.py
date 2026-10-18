@@ -326,6 +326,12 @@ class PathTableTest(FenceWorld):
 
 
 class OverrideTest(FenceWorld):
+    def test_flush_retry_after_lost_answer_keeps_new_entries(self):
+        """The first send is logged but its answer is lost; a write is added before the retry, which has the
+        same idempotency key. The deduplicated ack holds only the first entry, so the new one must stay in the
+        journal and go in the next send (0.1.3; seeded defect D23)."""
+        from test_fence_defects import journal_retry_check
+        self.assertIsNone(journal_retry_check(self.w))
     def test_env_var_alone_has_no_effect(self):
         self.w.proxy.fault = "down"
         rc, out, _ = self.hook(self.a, "a/x.py", {"WAVECOORD_FENCE_OFFLINE": "1"})

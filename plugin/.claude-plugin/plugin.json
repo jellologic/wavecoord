@@ -1,6 +1,6 @@
 {
   "name": "wavecoord",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Plan tasks in git, dispatch parallel Claude Code workers to local or SSH hosts, collect structured reports, and keep all coordination state in git with rollback",
   "author": {
     "name": "jellologic",
