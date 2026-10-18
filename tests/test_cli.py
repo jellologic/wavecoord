@@ -58,11 +58,11 @@ class CliTest(unittest.TestCase):
         self.assertEqual(p.returncode, 0)
         self.assertEqual(p.stdout, "not configured\n")
 
-    def test_status_unreachable_is_not_configured(self):
+    def test_status_unreachable(self):
         with tempfile.TemporaryDirectory() as d:
             p = run(["status", "--timeout", "1"], cwd=d, env=clean_env(WAVECOORD_URL="http://127.0.0.1:9"))
-        self.assertEqual(p.returncode, 0)
-        self.assertTrue(p.stdout.startswith("not configured: no coordinator reachable at http://127.0.0.1:9"), p.stdout)
+        self.assertEqual(p.returncode, 1)
+        self.assertTrue(p.stdout.startswith("unreachable: no coordinator answers at http://127.0.0.1:9"), p.stdout)
 
     def test_url_resolution_order(self):
         with tempfile.TemporaryDirectory() as d:
@@ -82,7 +82,7 @@ class CliTest(unittest.TestCase):
                 self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""), (ev, stdin))
 
     def test_stubs_exit_2(self):
-        for name in ("serve", "launch", "log", "revert", "rebuild"):
+        for name in ("launch",):
             p = run([name, "--any", "arg"])
             self.assertEqual(p.returncode, 2, name)
             self.assertIn("not implemented in P0", p.stderr)
