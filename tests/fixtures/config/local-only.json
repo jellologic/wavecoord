@@ -1,0 +1,14 @@
+{
+  "project": "demo",
+  "plan": {
+    "adapter": "builtin",
+    "dir": "plan/tasks"
+  },
+  "hosts": [
+    {
+      "name": "local",
+      "slots": 2,
+      "repo_path": "."
+    }
+  ]
+}

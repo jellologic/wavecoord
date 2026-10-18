@@ -1,0 +1,42 @@
+{
+  "now": "2026-10-18T12:00:00Z",
+  "lease": {
+    "id": 7,
+    "task": "api-auth",
+    "attempt": 1,
+    "holder": "worker-20261018-120000-ab12",
+    "epoch": 1792324800000,
+    "state": "active",
+    "acquired": "2026-10-18T12:00:00Z",
+    "renewed": "2026-10-18T12:00:00Z",
+    "expires_at": "2026-10-18T12:10:00Z",
+    "released_at": null,
+    "released_by": null,
+    "reason": null
+  },
+  "reservations": [
+    {
+      "id": 3,
+      "lease_id": 7,
+      "task": "api-auth",
+      "glob": "src/auth/**",
+      "mode": "exclusive"
+    },
+    {
+      "id": 4,
+      "lease_id": 7,
+      "task": "api-auth",
+      "glob": "docs/api.md",
+      "mode": "shared"
+    }
+  ],
+  "conflicts": [
+    {
+      "glob": "docs/api.md",
+      "lease_id": 5,
+      "task": "api-docs",
+      "other_glob": "docs/**",
+      "mode": "exclusive"
+    }
+  ]
+}

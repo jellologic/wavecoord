@@ -1,0 +1,7 @@
+{
+  "schema": "config",
+  "doc": {
+    "project": "demo",
+    "token": "do-not-put-secrets-here"
+  }
+}

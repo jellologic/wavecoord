@@ -1,0 +1,44 @@
+{
+  "schema": 1,
+  "seq": 1090,
+  "ts": "2026-10-18T12:00:00Z",
+  "kind": "report.post",
+  "actor": {
+    "agent": "worker-20261018-120000-ab12",
+    "host": "build-1",
+    "session_id": "5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10",
+    "principal": "host:build-1"
+  },
+  "task": "api-auth",
+  "attempt": 1,
+  "payload": {
+    "report": {
+      "status": "done",
+      "summary": "Added token rotation behind the session-store interface; unit tests pass.",
+      "commits": [
+        "3f9a1c2"
+      ],
+      "files": [
+        "src/auth/rotate.py",
+        "tests/test_rotate.py"
+      ],
+      "checks_run": [
+        {
+          "cmd": "python -m unittest discover -s tests",
+          "result": "Ran 41 tests OK",
+          "ok": true
+        }
+      ],
+      "acceptance_met": true,
+      "questions": [],
+      "proposals": [],
+      "plan_feedback": "",
+      "risks_hit": []
+    },
+    "cost_usd": 1.42,
+    "turns": 37,
+    "session_id": "5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10"
+  },
+  "idem": "report:api-auth:1",
+  "prev": "9f2b6c1d4e8a7b3c5d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e"
+}

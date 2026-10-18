@@ -1,0 +1,18 @@
+{
+  "now": "2026-10-18T12:00:30Z",
+  "messages": [
+    {
+      "id": 12,
+      "ts": "2026-10-18T12:00:20Z",
+      "sender": "lead",
+      "to": {
+        "kind": "task",
+        "id": "api-auth"
+      },
+      "body": "Keep the token format behind the session-store interface.",
+      "reply_to": null,
+      "acked": false
+    }
+  ],
+  "more": false
+}

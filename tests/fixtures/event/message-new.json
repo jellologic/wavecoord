@@ -1,0 +1,30 @@
+{
+  "schema": 1,
+  "seq": 1043,
+  "ts": "2026-10-18T12:00:00Z",
+  "kind": "message.new",
+  "actor": {
+    "agent": "lead",
+    "host": "local",
+    "session_id": "0b7e2d4c-1a3f-4e5b-8c9d-2f1e0a3b4c5d",
+    "principal": "lead"
+  },
+  "task": "api-auth",
+  "attempt": null,
+  "payload": {
+    "message": {
+      "id": 12,
+      "ts": "2026-10-18T12:00:20Z",
+      "sender": "lead",
+      "to": {
+        "kind": "task",
+        "id": "api-auth"
+      },
+      "body": "Keep the token format behind the session-store interface.",
+      "reply_to": null,
+      "acked": false
+    }
+  },
+  "idem": null,
+  "prev": "9f2b6c1d4e8a7b3c5d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e"
+}

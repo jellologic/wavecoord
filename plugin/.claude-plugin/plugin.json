@@ -1,0 +1,32 @@
+{
+  "name": "wavecoord",
+  "version": "0.0.1",
+  "description": "Plan tasks in git, dispatch parallel Claude Code workers to local or SSH hosts, collect structured reports, and keep all coordination state in git with rollback",
+  "author": {
+    "name": "jellologic",
+    "url": "https://github.com/jellologic"
+  },
+  "homepage": "https://github.com/jellologic/wavecoord",
+  "repository": "https://github.com/jellologic/wavecoord",
+  "license": "MIT",
+  "keywords": ["coordination", "parallel", "agents", "planning", "orchestration", "git"],
+  "userConfig": {
+    "coord_url": {
+      "type": "string",
+      "title": "Coordinator URL",
+      "description": "Base URL of the wavecoord server. The server binds 127.0.0.1 by default.",
+      "default": "http://127.0.0.1:18741"
+    },
+    "token": {
+      "type": "string",
+      "title": "Coordinator token",
+      "description": "Bearer token for the wavecoord server. Stored in secure storage, never in git.",
+      "sensitive": true
+    },
+    "project": {
+      "type": "string",
+      "title": "Project",
+      "description": "Project name on the coordinator. Empty means the name from .claude/wavecoord.json in the repo."
+    }
+  }
+}

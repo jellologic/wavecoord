@@ -1,0 +1,46 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jellologic/wavecoord/schemas/report.schema.json",
+  "title": "wavecoord worker report",
+  "description": "The structured output of one worker attempt (claude -p --json-schema). Every field is required so the model always fills it; use empty arrays and strings when there is nothing to say.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["status", "summary", "commits", "files", "checks_run", "acceptance_met", "questions", "proposals", "plan_feedback", "risks_hit"],
+  "properties": {
+    "status": {"enum": ["done", "blocked", "failed", "needs_decision"]},
+    "summary": {"type": "string", "minLength": 1, "maxLength": 4000},
+    "commits": {"type": "array", "items": {"type": "string", "pattern": "^[0-9a-f]{7,64}$"}},
+    "files": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "checks_run": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["cmd", "result", "ok"],
+        "properties": {
+          "cmd": {"type": "string", "minLength": 1},
+          "result": {"type": "string", "maxLength": 2000},
+          "ok": {"type": "boolean"}
+        }
+      }
+    },
+    "acceptance_met": {"type": "boolean"},
+    "questions": {"type": "array", "items": {"type": "string", "minLength": 1}},
+    "proposals": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["kind", "summary"],
+        "properties": {
+          "kind": {"enum": ["plan_edit", "new_task", "split", "dependency", "other"]},
+          "summary": {"type": "string", "minLength": 1},
+          "task": {"type": "string"},
+          "detail": {"type": "string"}
+        }
+      }
+    },
+    "plan_feedback": {"type": "string"},
+    "risks_hit": {"type": "array", "items": {"type": "string", "minLength": 1}}
+  }
+}

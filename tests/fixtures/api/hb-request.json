@@ -1,0 +1,13 @@
+{
+  "agent": "worker-20261018-120000-ab12",
+  "kind": "worker",
+  "host": "build-1",
+  "source": "launcher",
+  "seq": 2,
+  "session_id": "5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10",
+  "task": "api-auth",
+  "attempt": 1,
+  "branch": "wave/api-auth-1",
+  "worktree": "/srv/wt/api-auth-1",
+  "last_tool": "Bash: python -m unittest discover -s tests"
+}

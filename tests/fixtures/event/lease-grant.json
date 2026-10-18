@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "seq": 1042,
+  "ts": "2026-10-18T12:00:00Z",
+  "kind": "lease.grant",
+  "actor": {
+    "agent": "lead",
+    "host": "local",
+    "session_id": "0b7e2d4c-1a3f-4e5b-8c9d-2f1e0a3b4c5d",
+    "principal": "lead"
+  },
+  "task": "api-auth",
+  "attempt": 1,
+  "payload": {
+    "lease": {
+      "id": 7,
+      "task": "api-auth",
+      "attempt": 1,
+      "holder": "worker-20261018-120000-ab12",
+      "epoch": 1792324800000,
+      "state": "active",
+      "acquired": "2026-10-18T12:00:00Z",
+      "renewed": "2026-10-18T12:00:00Z",
+      "expires_at": "2026-10-18T12:10:00Z",
+      "released_at": null,
+      "released_by": null,
+      "reason": null
+    },
+    "reservations": [
+      {
+        "id": 3,
+        "lease_id": 7,
+        "task": "api-auth",
+        "glob": "src/auth/**",
+        "mode": "exclusive"
+      }
+    ]
+  },
+  "idem": "dispatch:api-auth:1",
+  "prev": "9f2b6c1d4e8a7b3c5d0e1f2a3b4c5d6e7f8091a2b3c4d5e6f708192a3b4c5d6e"
+}

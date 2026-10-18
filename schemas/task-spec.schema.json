@@ -1,0 +1,75 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jellologic/wavecoord/schemas/task-spec.schema.json",
+  "title": "wavecoord task spec",
+  "description": "A parsed task spec: the frontmatter fields, the exec block and the body sections of <plan_dir>/<id>.md. See docs/task-spec.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["id", "phase", "needs", "paths", "class", "size", "state", "exec", "sections"],
+  "properties": {
+    "id": {"$ref": "#/definitions/task_id"},
+    "title": {"type": "string", "maxLength": 200},
+    "phase": {"type": "string", "minLength": 1, "maxLength": 64},
+    "needs": {"type": "array", "items": {"$ref": "#/definitions/task_id"}, "uniqueItems": true},
+    "paths": {"type": "array", "items": {"$ref": "#/definitions/glob"}, "uniqueItems": true},
+    "shared_paths": {"type": "array", "items": {"$ref": "#/definitions/glob"}, "uniqueItems": true},
+    "class": {
+      "description": "Risk class. A: design first (deletes data, security, concurrency, irreversible). B: normal code. C: docs, config, trivial.",
+      "enum": ["A", "B", "C"]
+    },
+    "size": {"enum": ["XS", "S", "M", "L", "XL"]},
+    "state": {"enum": ["todo", "active", "review", "blocked", "done", "dropped"]},
+    "exec": {"$ref": "#/definitions/exec"},
+    "sections": {"$ref": "#/definitions/sections"}
+  },
+  "definitions": {
+    "task_id": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$"},
+    "glob": {
+      "description": "Repo-relative glob: no space, no leading '/', no '..', no braces.",
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 300,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\s{}]+$"
+    },
+    "exec": {
+      "description": "The execution plan of one worker attempt.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model", "effort", "max_turns", "budget_usd", "timeout_min"],
+      "properties": {
+        "model": {"type": "string", "minLength": 1},
+        "fallback_model": {"type": "string", "minLength": 1},
+        "effort": {"enum": ["low", "medium", "high", "xhigh", "max"]},
+        "max_turns": {"type": "integer", "minimum": 1, "maximum": 10000},
+        "budget_usd": {"type": "number", "exclusiveMinimum": 0},
+        "timeout_min": {"type": "integer", "minimum": 1, "maximum": 10080},
+        "host_needs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "split_if": {"type": "string", "description": "A condition, in words, under which the worker stops and proposes a split instead of continuing."},
+        "autocompact_window": {"type": "integer", "minimum": 1, "description": "Context window size, in tokens, at which the worker session compacts."}
+      }
+    },
+    "risk": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["risk", "mitigation"],
+      "properties": {
+        "risk": {"type": "string", "minLength": 1},
+        "mitigation": {"type": "string", "minLength": 1},
+        "kind": {"enum": ["llm", "technical", "process", "external"]}
+      }
+    },
+    "sections": {
+      "description": "The body sections of the spec, by heading.",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["context", "risks", "acceptance", "prompt"],
+      "properties": {
+        "context": {"type": "string", "minLength": 1},
+        "risks": {"type": "array", "items": {"$ref": "#/definitions/risk"}},
+        "acceptance": {"type": "array", "minItems": 1, "items": {"type": "string", "minLength": 1}},
+        "prompt": {"type": "string", "minLength": 1},
+        "notes": {"type": "string"}
+      }
+    }
+  }
+}

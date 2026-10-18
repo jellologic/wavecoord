@@ -1,0 +1,18 @@
+{
+  "status": "failed",
+  "summary": "The test suite does not start: a dependency is missing on the host.",
+  "commits": [],
+  "files": [],
+  "checks_run": [
+    {
+      "cmd": "python -m unittest discover -s tests",
+      "result": "ModuleNotFoundError: No module named 'cryptography'",
+      "ok": false
+    }
+  ],
+  "acceptance_met": false,
+  "questions": [],
+  "proposals": [],
+  "plan_feedback": "host_needs should list python-cryptography.",
+  "risks_hit": []
+}
