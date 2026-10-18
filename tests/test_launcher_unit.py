@@ -47,6 +47,19 @@ class PlacementTest(unittest.TestCase):
         self.assertEqual(order, ["mac"])
 
 
+class AuthProbeTest(unittest.TestCase):
+    def test_presence_only(self):
+        from wavecoord.launcher.hostside import claude_auth
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(claude_auth({"ANTHROPIC_API_KEY": "x"}), "env")
+            cfg = os.path.join(d, "cfg")
+            os.makedirs(cfg)
+            expect_none = "keychain?" if os.uname().sysname == "Darwin" else "no"
+            self.assertEqual(claude_auth({"CLAUDE_CONFIG_DIR": cfg}), expect_none)
+            open(os.path.join(cfg, ".credentials.json"), "w").close()
+            self.assertEqual(claude_auth({"CLAUDE_CONFIG_DIR": cfg}), "logged-in")
+
+
 class StreamTest(unittest.TestCase):
     def test_parse(self):
         s = stream.StreamStats()

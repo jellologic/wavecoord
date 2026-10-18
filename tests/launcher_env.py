@@ -115,7 +115,8 @@ class LauncherTestCase(unittest.TestCase):
                 "WAVECOORD_HB_INTERVAL_S", "WAVECOORD_POLL_S", "FAKE_PR_OUT", "FAKE_PR_FAIL", "FAKE_SSH_LOG",
                 "FAKE_SSH_HOME", "FAKE_SSH_DOWN", "WAVECOORD_URL", "CLAUDE_PLUGIN_OPTION_COORD_URL",
                 "CLAUDE_PLUGIN_OPTION_TOKEN", "WAVECOORD_TOKEN_FILE", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
-                "WAVECOORD_NOTIFY_MIN_INTERVAL_S", "WAVECOORD_CLIENT_TIMEOUT_S") + tuple(
+                "WAVECOORD_NOTIFY_MIN_INTERVAL_S", "WAVECOORD_CLIENT_TIMEOUT_S", "CLAUDE_CONFIG_DIR",
+                "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN") + tuple(
         "FAKE_CLAUDE_" + k for k in ("COMMIT", "STATUS", "REPORT", "EXIT", "SLEEP", "COST", "DUMP", "EVENTS"))
 
     def setUp(self):
@@ -123,7 +124,10 @@ class LauncherTestCase(unittest.TestCase):
         self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="wc-launch-"))
         t = self.tmp
         self.home = os.path.join(t, "home")
-        os.makedirs(self.home)
+        # the probe checks only that claude has credentials; an empty file is enough
+        os.makedirs(os.path.join(self.home, ".claude"))
+        with open(os.path.join(self.home, ".claude", ".credentials.json"), "w") as f:
+            f.write("{}\n")
         gitcfg = os.path.join(t, "gitconfig")
         with open(gitcfg, "w") as f:
             f.write("[user]\n\tname = test\n\temail = test@example.invalid\n[init]\n\tdefaultBranch = main\n"
@@ -136,7 +140,7 @@ class LauncherTestCase(unittest.TestCase):
         os.chmod(self.pr_script, 0o755)
         env = os.environ
         for k in self.ENV_KEYS:
-            if k.startswith(("FAKE_", "CLAUDE", "WAVECOORD_URL", "WAVECOORD_TOKEN")):
+            if k.startswith(("FAKE_", "CLAUDE", "WAVECOORD_URL", "WAVECOORD_TOKEN", "ANTHROPIC_")):
                 env.pop(k, None)
         env.update({
             "PATH": os.pathsep.join([FAKE_CLAUDE_DIR, FAKE_SSH_DIR, bindir, os.environ.get("PATH", "")]),
