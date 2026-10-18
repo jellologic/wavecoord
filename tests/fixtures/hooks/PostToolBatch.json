@@ -1,0 +1,17 @@
+{
+  "session_id": "5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10",
+  "transcript_path": "/home/user/.claude/projects/demo/5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10.jsonl",
+  "cwd": "/home/user/demo",
+  "permission_mode": "default",
+  "hook_event_name": "PostToolBatch",
+  "tool_calls": [
+    {
+      "tool_name": "Read",
+      "tool_input": {
+        "file_path": "/home/user/demo/README.md"
+      },
+      "tool_use_id": "toolu_01GHI",
+      "tool_response": "1\t# demo\n"
+    }
+  ]
+}

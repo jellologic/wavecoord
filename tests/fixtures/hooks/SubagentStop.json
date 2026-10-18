@@ -1,0 +1,14 @@
+{
+  "session_id": "5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10",
+  "transcript_path": "/home/user/.claude/projects/demo/5f0c1e9a-3b7d-4c2e-9a61-0d8e2f4b7c10.jsonl",
+  "cwd": "/home/user/demo",
+  "permission_mode": "default",
+  "hook_event_name": "SubagentStop",
+  "stop_hook_active": false,
+  "agent_id": "agent-abc123",
+  "agent_type": "Explore",
+  "agent_transcript_path": "/home/user/.claude/projects/demo/subagents/agent-abc123.jsonl",
+  "last_assistant_message": "Found 3 files.",
+  "background_tasks": [],
+  "session_crons": []
+}

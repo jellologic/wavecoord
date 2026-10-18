@@ -1,6 +1,6 @@
 """The wavecoord command line. Stdlib only, Python >= 3.9.
 
-P0 implements `version`, `status` and a no-op `hook`. Other commands are stubs.
+Implemented: `version`, `status`, `hook` and `guard`. Other commands are stubs.
 """
 
 import argparse
@@ -101,17 +101,21 @@ def cmd_status(args):
 
 
 def cmd_hook(args):
-    """Read the hook input, do nothing, exit 0. P2 adds behavior.
-
-    A hook must never break a session: bad or empty input is ignored.
-    """
+    """Run one Claude Code hook event (wavecoord.hooks). Always exits 0."""
     try:
-        raw = sys.stdin.read()
-        if raw.strip():
-            json.loads(raw)
-    except (ValueError, OSError):
-        pass
-    return 0
+        from wavecoord import hooks
+        return hooks.main(args.event)
+    except Exception:
+        return 0
+
+
+def cmd_guard(args):
+    from wavecoord import guard
+    if args.guard_cmd == "install":
+        return guard.install(args.worktree)
+    if args.staged:
+        return guard.check("staged", enforce=args.enforce)
+    return guard.check("push", args.push, enforce=args.enforce)
 
 
 def _stub(name):
@@ -137,6 +141,19 @@ def build_parser():
     sp = sub.add_parser("hook", help="Claude Code hook entry point (reads JSON on stdin)")
     sp.add_argument("event", help="hook event name, for example SessionStart")
     sp.set_defaults(func=cmd_hook)
+
+    sp = sub.add_parser("guard", help="git pre-commit and pre-push guards (advisory)")
+    gsub = sp.add_subparsers(dest="guard_cmd", metavar="<install|check>")
+    gsub.required = True
+    gp = gsub.add_parser("install", help="install the guards in a worktree")
+    gp.add_argument("--worktree", help="worktree directory (default: the current directory)")
+    gp.set_defaults(func=cmd_guard)
+    gp = gsub.add_parser("check", help="check changed paths with the coordinator")
+    mode = gp.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--staged", action="store_true", help="check the staged paths (pre-commit)")
+    mode.add_argument("--push", metavar="RANGE", help="check a revision range, or - for pre-push stdin")
+    gp.add_argument("--enforce", action="store_true", help="fail on a violation (reserved for the P6 fence)")
+    gp.set_defaults(func=cmd_guard)
 
     for name, helptext in STUBS.items():
         sp = sub.add_parser(name, help=helptext + " (not implemented in P0)")

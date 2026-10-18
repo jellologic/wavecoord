@@ -31,7 +31,7 @@ Terms:
   ```
   `hash12` is the first 12 hex digits of the sha256 of the event's canonical JSON (sorted keys, no spaces, UTF-8). `prev` is the full sha256 of event `seq-1`, so the log is a hash chain and a gap or edit is detectable.
 - **Transitions only.** The server logs a change of state, never a repeat of the same state. Heartbeats are not logged; they only renew a lease in the cache. The event kinds are the `kind` enum of `event.schema.json`: server, agent, lease, reservation, attempt, report, message, notify, dispatch, conflict, resolve, refinery, proposal and revert.
-- **Idempotency.** A write may carry `idem` (for example `report:api-auth:1`). A second write with the same `idem` returns the first result and logs nothing.
+- **Idempotency.** A write may carry `idem` (for example `report:api-auth:1`). A second write with the same `idem` returns the first result and logs nothing. Clients send it in the header `Idempotency-Key`, so the request bodies stay as the schemas define them.
 - **Durability.** The server writes the event files and makes a local git commit (group commit: all events of a short window, at most `COMMIT_WINDOW_MS`, in one commit) **before** it acknowledges the request. It pushes `coord/log` to the remote asynchronously, with retry. A crash after the ack loses nothing that was acked; a lost machine loses at most the unpushed tail.
 - **Cache.** On start the server loads the newest snapshot and replays the events after it into sqlite. `wavecoord rebuild` drops the cache and replays from scratch (or `--at <sha>`, see `rollback.md`). A test checks: replay of any prefix equals the fold of that prefix.
 
@@ -117,8 +117,9 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `POST /api/leases` | agent (own), lead | Claim (`steal` is lead only); returns lease, reservations, conflicts |
 | `GET /api/leases`, `GET /api/tasks/<task>/lease` | read, gate | Current leases; `last_epoch` per task |
 | `POST /api/leases/<id>/release` | agent (own), ui (stale only), lead | Release |
-| `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease), lead | Add or remove reservations |
+| `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease), lead | Add (`reservation_request`) or remove reservations |
 | `GET /api/conflicts?globs=&lease_id=` | read | Overlap check without reserving |
+| `POST /api/check` | agent, lead | Path check for the hooks and the git guards (`check_request`, `check_response`). A violation is `foreign_exclusive` (inside an exclusive glob of another non-released lease), `outside_lease` (the caller holds an active lease and the path matches none of its globs) or `stale_epoch` (the given epoch is not the current epoch of the task). Reads only; logs nothing |
 | `POST /api/messages`, `GET /api/inbox?agent=`, `POST /api/messages/<id>/ack` | see section 4 | Messages |
 | `GET /api/plan/ready`, `GET /api/plan/tasks/<id>`, `GET /api/plan/graph` | read | Through the plan adapter (`adapters.md`) |
 | `POST /api/dispatch` | lead | Start attempts for tasks (one or a wave) |
@@ -127,7 +128,7 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `POST /api/resolve` | lead | Start a resolver attempt for a conflict |
 | `GET /api/refinery`, `POST /api/refinery/merge` | read / lead | Merge queue status; merge a parked attempt through `merge_cmd` |
 | `POST /api/proposals`, `PATCH /api/proposals/<id>` | agent, lead / lead | Plan proposals and their decisions |
-| `POST /api/notify` | agent, lead | A notice for the lead (CI result, rate limit, `waiting_on_you`) |
+| `POST /api/notify` | agent, lead | A notice for the lead (`notify_request`: CI result, rate limit, `waiting_on_you`, handoff note) |
 | `POST /api/revert` | lead | Revert one event (section 9) |
 | `GET /api/events?since=<seq>` | read | SSE stream (section 7) |
 

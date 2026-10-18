@@ -1,0 +1,5 @@
+{
+  "lease_id": 7,
+  "glob": "src/auth/session.py",
+  "mode": "shared"
+}
