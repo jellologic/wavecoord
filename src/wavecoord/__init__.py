@@ -1,3 +1,3 @@
 """wavecoord: plan-driven lead/worker coordination for Claude Code."""
 
-__version__ = "0.1.2"
+__version__ = "0.1.3"

@@ -189,21 +189,30 @@ class OState(object):
         return False
 
 
-_FOLD_CACHE = {}
+_FOLD_CACHE = {}  # {"events": the list object, "state": OState, "last": events[state.seq - 1]}
 
 
 def ofold(events, seq):
-    """The oracle state after events[:seq] (cached per event list, extended incrementally)."""
-    key = id(events)
-    st = _FOLD_CACHE.get(key)
-    if st is None or st.seq > seq:
+    """The oracle state after events[:seq] (cached for one event list, extended incrementally).
+
+    The cache keeps a strong reference to the list it folded and is used only for that same
+    object, with the same last folded event. It was keyed by id(events): a pool process runs
+    several seeds, a later seed's list can get the id of a freed one, and the oracle then
+    folded that seed's log on top of another seed's leases (seed 44 on CI, 0.1.3).
+    """
+    c = _FOLD_CACHE
+    st = None
+    if c.get("events") is events and c["state"].seq <= min(seq, len(events)):
+        n = c["state"].seq
+        if n == 0 or events[n - 1] is c["last"]:
+            st = c["state"].copy()
+    if st is None:
         st = OState()
-    else:
-        st = st.copy()
     for ev in events[st.seq:seq]:
         st.apply(ev, events)
-    if seq >= (_FOLD_CACHE.get(key).seq if _FOLD_CACHE.get(key) else 0):
-        _FOLD_CACHE[key] = st.copy()
+    if c.get("events") is not events or st.seq >= c["state"].seq:
+        c.clear()
+        c.update(events=events, state=st.copy(), last=events[st.seq - 1] if st.seq else None)
     return st
 
 

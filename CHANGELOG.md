@@ -2,6 +2,12 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
+## 0.1.3
+
+### Fixed
+
+- **The fence test oracle folded the wrong event log.** CI on `main` (macos-latest, Python 3.9) failed `test_fence_invariant` for seed 44 with six safety and integration failures and no fault. The fence and the server were right; the oracle was wrong. The oracle's fold cache (`tests/fenceworld.py`, `ofold`) was keyed by `id(events)`. A process of the test pool runs several seeds, and the event list of seed 44 got the id of the freed list of an earlier seed. The oracle then extended that seed's fold with the events of seed 44, so it saw leases of another run and said that correct writes were not `ok(W)`. The same alias can also hide a real violation. Now the cache holds the list it folded and is used only for that same object with the same last event. The invariant predicate (`docs/design/edit-fence.md`, section 2.2) did not change. PR #11 did not cause the failure: the code before #11 fails the same way when the id is reused. The new `OracleCacheTest` checks that a cached fold equals a fresh fold, that this check catches the old cache (seeded defect O1), and runs seed 44 after seed 5 in one process with a forced id reuse (the CI failure).
+
 ## 0.1.2
 
 ### Fixed
