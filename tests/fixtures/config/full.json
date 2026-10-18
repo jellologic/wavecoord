@@ -94,6 +94,7 @@
     "scripts/protected-paths"
   ],
   "wip_cap": 6,
+  "auto_steer": "draft",
   "branch_prefix": "wave",
   "fence": {
     "edit": "advisory",

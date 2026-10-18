@@ -262,3 +262,97 @@ class SessionsTest(unittest.TestCase):
         self.assertTrue(sessions.no_conversation("No conversation found with session ID: x", None))
         self.assertTrue(sessions.no_conversation("", {"errors": ["No conversation found with session ID: x"]}))
         self.assertFalse(sessions.no_conversation("other", {"result": "ok"}))
+class SteerLinesTest(unittest.TestCase):
+    def test_user_and_control_lines(self):
+        from wavecoord.launcher import steer
+        u = json.loads(steer.user_line("hi", "next", "u-1"))
+        self.assertEqual(u, {"type": "user", "message": {"role": "user", "content": "hi"}, "parent_tool_use_id": None,
+                             "priority": "next", "uuid": "u-1"})
+        c = json.loads(steer.control_line("set_model", "wc-1", model="opus"))
+        self.assertEqual(c, {"type": "control_request", "request_id": "wc-1",
+                             "request": {"subtype": "set_model", "model": "opus"}})
+        self.assertTrue(steer.user_line("x").endswith(b"\n"))
+
+    def test_parse_action_only_from_the_lead(self):
+        from wavecoord.launcher import steer
+        body = steer.action_body("interrupt", note="read the error")
+        self.assertEqual(body, 'wavecoord:{"action":"interrupt","note":"read the error"}')
+        self.assertEqual(steer.parse_action({"sender": "lead", "body": body}),
+                         {"action": "interrupt", "model": None, "note": "read the error"})
+        self.assertIsNone(steer.parse_action({"sender": "w1", "body": body}))
+        self.assertIsNone(steer.parse_action({"sender": "lead", "body": "plain hint"}))
+        self.assertIsNone(steer.parse_action({"sender": "lead", "body": "wavecoord:{not json"}))
+        self.assertIsNone(steer.parse_action({"sender": "lead", "body": 'wavecoord:{"action":"rm"}'}))
+        self.assertIsNone(steer.parse_action({"sender": "lead", "body": 'wavecoord:{"action":"model"}'}))
+
+    def test_steer_writes_and_records(self):
+        from wavecoord.launcher import steer
+        with tempfile.TemporaryDirectory() as d:
+            buf = io.BytesIO()
+            st = steer.Steer(buf, d, lambda m: None)
+            self.assertTrue(st.prompt("go"))
+            self.assertTrue(st.send("hint", ids=[3]))
+            rid = st.control("interrupt")
+            self.assertEqual(st.requests[rid], "interrupt")
+            sent = [json.loads(l) for l in buf.getvalue().splitlines()]
+            self.assertEqual([x["type"] for x in sent], ["user", "user", "control_request"])
+            with open(os.path.join(d, "steer.jsonl")) as f:
+                rec = [json.loads(l) for l in f]
+            self.assertEqual([(r["kind"], r.get("ids")) for r in rec], [("user", [3]), ("control", None)])
+            st.close()
+            self.assertFalse(st.send("late"))
+
+
+class StreamDigestTest(unittest.TestCase):
+    def feed(self, st, *objs):
+        out = []
+        for o in objs:
+            out += st.feed(json.dumps(o))
+        return out
+
+    def tool(self, i, cmd="npm test", name="Bash"):
+        inp = {"command": cmd} if name == "Bash" else {"file_path": cmd}
+        return {"type": "assistant", "parent_tool_use_id": None, "message": {
+            "id": "m%d" % i, "content": [{"type": "tool_use", "id": "t%d" % i, "name": name, "input": inp}]}}
+
+    def fail(self, i):
+        return {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t%d" % i,
+                                                          "is_error": True}]}}
+
+    def test_loop_once(self):
+        st = stream.StreamStats()
+        ev = self.feed(st, self.tool(1), self.tool(2))
+        self.assertEqual(ev, [])
+        ev = self.feed(st, self.tool(3), self.tool(4))
+        self.assertEqual([e[1]["why"] for e in ev], ["loop"])  # once per tool call, not again on the fourth
+
+    def test_failing_command(self):
+        st = stream.StreamStats()
+        ev = self.feed(st, self.tool(1), self.fail(1), self.tool(2, "ls"), self.tool(3), self.fail(3),
+                       self.tool(4, "ls -la"), self.tool(5), self.fail(5))
+        self.assertEqual([e[1]["why"] for e in ev], ["failing"])
+        self.assertIn("Bash: npm test failed 3 times", ev[0][1]["text"])
+        self.assertEqual(st.digest()["failing"], ["Bash: npm test"])
+
+    def test_waiting_state_and_controls(self):
+        st = stream.StreamStats()
+        ev = self.feed(st, {"type": "system", "subtype": "session_state_changed", "state": "requires_action"},
+                       {"type": "control_response", "response": {"subtype": "success", "request_id": "wc-1",
+                                                                 "response": {"percentage": 61}}})
+        self.assertEqual([e[1]["why"] for e in ev], ["waiting"])
+        self.assertEqual(st.digest()["state"], "requires_action")
+        self.assertEqual(st.digest()["context_pct"], 61)
+        self.assertIn("wc-1", st.controls)
+
+    def test_digest_text_edits_and_results(self):
+        st = stream.StreamStats()
+        self.feed(st, self.tool(1, "src/a.py", "Edit"),
+                  {"type": "assistant", "parent_tool_use_id": None, "message": {"id": "x", "content": [
+                      {"type": "text", "text": "Now   I run\nthe tests."}]}},
+                  {"type": "assistant", "parent_tool_use_id": "sub", "message": {"id": "y", "content": [
+                      {"type": "text", "text": "subagent words"}]}},
+                  {"type": "result", "subtype": "success", "queued_turn_count": 1})
+        d = st.digest()
+        self.assertEqual(d["edited"], ["src/a.py"])
+        self.assertEqual(d["last_text"], "Now I run the tests.")
+        self.assertEqual((st.results, st.queued_turns), (1, 1))

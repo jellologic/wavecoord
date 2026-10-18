@@ -86,6 +86,12 @@ The server also watches for workers that are alive but do nothing (`src/wavecoor
 - Idle times are in memory only. After a server restart every count starts again.
 - **Configuration:** the constants `WATCHDOG_S` (check interval, default 60; `0` turns the watchdog off), `WATCHDOG_NUDGE_S` and `WATCHDOG_STALE_S`, with `WAVECOORD_<NAME>` overrides, or the `watchdog` object in the server config: `{"enabled": true, "interval_s": 60, "nudge_s": 1200, "stale_s": 600}`.
 
+## Worker progress and stuck notices
+
+The launcher's wrapper reads each worker's stream on its host and sends `notify.post` lines for the lead (`launcher.md`, "Listen and steer"): a `progress` line every `PROGRESS_S` (turns, tokens, context use, the last tool, the last words), and a `stuck` line when the worker loops on one tool call, keeps failing one command, waits for an answer, used 75% of its budget, or went quiet. The watchdog above sees idle leases; these lines see a worker that is busy but going nowhere.
+
+The lead answers with `wavecoord hint <task> "<text>"` or `wavecoord steer <task> interrupt|model <m>|stop`. The wrapper writes the message into the worker's stdin within `INBOX_POLL_S`, and the worker reads it at its next step. `/wavecoord:triage` drafts hints with the `steerer` subagent, as `auto_steer` allows (`adapters.md`).
+
 ## Unattended runs
 
 `/loop` runs a skill again and again. For a wave that runs while you are away:

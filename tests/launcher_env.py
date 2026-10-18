@@ -3,6 +3,7 @@ a fake pr_cmd, and tests/fake-claude + tests/fake-ssh on PATH. No network, no mo
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -28,11 +29,16 @@ class _Server(ThreadingMixIn, HTTPServer):
 
 
 class FakeCoord(object):
-    """Records every request; answers like the contract (health, claim, hb, the rest 200)."""
+    """Records every request; answers like the contract (health, claim, hb, inbox, ack, the rest 200).
+
+    `inbox` holds the worker's messages; an ack marks one acked, so it is not served again."""
 
     def __init__(self):
         self.requests = []
         self.lost = []
+        self.inbox = []
+        self.acked = set()
+        self.inbox_gate = None  # a path: the inbox is empty until the file exists
         self.epoch = 1792324800000
         self.claim_status = 200
         fc = self
@@ -54,6 +60,8 @@ class FakeCoord(object):
                 if self.path == "/api/health":
                     return self._reply(200, {"now": NOW, "ok": True, "api": 1, "schema": 1, "version": "fake",
                                              "started": NOW})
+                if self.path.startswith("/api/inbox"):
+                    return self._reply(200, {"now": NOW, "messages": fc.unacked(), "more": False})
                 return self._reply(404, {"now": NOW, "error": {"code": "not_found", "message": self.path}})
 
             def do_POST(self):
@@ -68,14 +76,27 @@ class FakeCoord(object):
                              "expires_at": NOW, "released_at": None, "released_by": None, "reason": None}
                     return self._reply(200, {"now": NOW, "lease": lease, "reservations": [], "conflicts": []})
                 if self.path == "/api/hb":
-                    return self._reply(200, {"now": NOW, "agent": {}, "lease": None, "lost": fc.lost, "inbox": [],
-                                             "more": False})
+                    return self._reply(200, {"now": NOW, "agent": {}, "lease": None, "lost": fc.lost,
+                                             "inbox": fc.unacked(), "more": False})
+                m = re.match(r"^/api/messages/(\d+)/ack$", self.path)
+                if m:
+                    fc.acked.add(int(m.group(1)))
                 return self._reply(200, {"now": NOW, "ok": True})
 
         self.server = _Server(("127.0.0.1", 0), H)
         self.url = "http://127.0.0.1:%d" % self.server.server_address[1]
         self.thread = threading.Thread(target=self.server.serve_forever, daemon=True)
         self.thread.start()
+
+    def unacked(self):
+        if self.inbox_gate and not os.path.exists(self.inbox_gate):
+            return []
+        return [dict(m, acked=False) for m in self.inbox if m["id"] not in self.acked]
+
+    def message(self, mid, body, sender="lead"):
+        """Put a message to the worker's task in the inbox."""
+        self.inbox.append({"id": mid, "ts": NOW, "sender": sender, "to": {"kind": "task", "id": "t1"}, "body": body,
+                           "reply_to": None})
 
     def posts(self, prefix):
         return [r for r in self.requests if r["method"] == "POST" and r["path"].startswith(prefix)]
@@ -117,10 +138,13 @@ class LauncherTestCase(unittest.TestCase):
                 "CLAUDE_PLUGIN_OPTION_TOKEN", "WAVECOORD_TOKEN_FILE", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
                 "WAVECOORD_NOTIFY_MIN_INTERVAL_S", "WAVECOORD_CLIENT_TIMEOUT_S", "CLAUDE_CONFIG_DIR",
                 "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
-                "API_TIMEOUT_MS", "ANTHROPIC_DEFAULT_OPUS_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL") + tuple(
+                "API_TIMEOUT_MS", "ANTHROPIC_DEFAULT_OPUS_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL",
+                "WAVECOORD_INBOX_POLL_S", "WAVECOORD_PROGRESS_S", "WAVECOORD_QUIET_S", "CLAUDE_CODE_MESSAGING_SOCKET",
+                "CLAUDE_CODE_MESSAGING_TOKEN") + tuple(
         "FAKE_CLAUDE_" + k for k in ("COMMIT", "COMMIT_FILE", "COMMIT_TEXT", "MERGE", "STATUS", "REPORT", "EXIT", "SLEEP",
                                       "COST", "DUMP", "EVENTS", "EARLY_EVENTS", "STDERR", "MAX_TURNS",
-                                      "EXPECT_ENV", "TRANSCRIPTS", "RESUME_REPORTS_NEW_ID", "FORGET", "RUNS"))
+                                      "EXPECT_ENV", "TRANSCRIPTS", "RESUME_REPORTS_NEW_ID", "FORGET", "RUNS",
+                                      "MODES", "STDIN_LOG"))
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in self.ENV_KEYS}

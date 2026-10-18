@@ -41,7 +41,7 @@ ATTEMPT_RE = re.compile(r"^Attempt:[ \t]*([0-9]+)[ \t]*$", re.M)
 
 # The lead's config: a change to these is a lead decision in a plan or config PR, never in a task PR.
 CONFIG_PATH = ".claude/wavecoord.json"
-CONFIG_KEYS = ("fence", "merge_cmd", "check_cmd", "protected_paths_cmd", "providers")
+CONFIG_KEYS = ("fence", "merge_cmd", "check_cmd", "protected_paths_cmd", "providers", "auto_steer")
 HOST_KEYS = ("claude_flags", "env")
 SETTINGS_PATHS = (".claude/settings.json", ".claude/settings.local.json")
 SETTINGS_KEYS = ("hooks", "disableAllHooks", "enabledPlugins", "extraKnownMarketplaces", "env")

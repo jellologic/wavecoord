@@ -1,4 +1,5 @@
-"""CLI commands of the lead tools: dispatch (and the dispatcher loop), collect, plan, refinery.
+"""CLI commands of the lead tools: dispatch (and the dispatcher loop), collect, plan, refinery,
+and hint and steer for a running worker (docs/launcher.md, "Listen and steer").
 
 `dispatch`, `collect` and `refinery` call the running server with the lead
 token (REST, docs/contract.md section 6). `plan` reads the built-in store of
@@ -165,6 +166,38 @@ def cmd_plan(args):
         return 1
 
 
+def _send_task(task, body):
+    from wavecoord import const
+    if len(body.encode("utf-8")) > const.get("MSG_MAX_BYTES"):
+        raise SystemExit("wavecoord: the message is longer than %d bytes" % const.get("MSG_MAX_BYTES"))
+    out = _call("POST", "/api/messages", {"to": {"kind": "task", "id": task}, "body": body})
+    return (out.get("message") or {}).get("id")
+
+
+def cmd_hint(args):
+    text = sys.stdin.read() if args.text == "-" else args.text
+    if not text.strip():
+        raise SystemExit("wavecoord: an empty hint")
+    mid = _send_task(args.task, text.strip())
+    print("hint #%s to task %s: the running worker reads it within about %ss" % (
+        mid, args.task, int(_const("INBOX_POLL_S"))))
+    return 0
+
+
+def cmd_steer(args):
+    from wavecoord.launcher.steer import action_body
+    if args.action == "model" and not args.model:
+        raise SystemExit("wavecoord: steer model needs a model name")
+    mid = _send_task(args.task, action_body(args.action, args.model, args.note))
+    print("steer #%s to task %s: %s%s" % (mid, args.task, args.action, " " + args.model if args.model else ""))
+    return 0
+
+
+def _const(name):
+    from wavecoord import const
+    return const.get(name)
+
+
 def register(sub):
     sp = sub.add_parser("dispatch", help="dispatch tasks (one task, the listed ones, or the ready wave)")
     sp.add_argument("tasks", nargs="*", help="task ids (default: the ready wave)")
@@ -190,6 +223,18 @@ def register(sub):
                     help="the user approved the protected paths of this PR in the lead session")
     sp.add_argument("--json", action="store_true")
     sp.set_defaults(func=cmd_refinery)
+
+    sp = sub.add_parser("hint", help="send a hint to the worker that runs a task (read within INBOX_POLL_S)")
+    sp.add_argument("task")
+    sp.add_argument("text", help="the hint; - reads it from stdin")
+    sp.set_defaults(func=cmd_hint)
+
+    sp = sub.add_parser("steer", help="interrupt a running worker, switch its model, or stop it")
+    sp.add_argument("task")
+    sp.add_argument("action", choices=["interrupt", "model", "stop"])
+    sp.add_argument("model", nargs="?", help="model: the model to switch to")
+    sp.add_argument("--note", help="a hint the worker reads with the action")
+    sp.set_defaults(func=cmd_steer)
 
     sp = sub.add_parser("plan", help="read the built-in plan store of the working tree (offline)")
     sp.add_argument("action", choices=["validate", "ready", "get", "graph"])

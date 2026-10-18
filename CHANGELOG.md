@@ -2,6 +2,33 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
+## 0.1.6
+
+### Added
+
+- **Listen to and steer running workers.** Workers now run with `--input-format stream-json`, and the wrapper keeps their stdin open (`launcher/steer.py`).
+  - Every `INBOX_POLL_S` (5 s), and with each heartbeat answer, the wrapper writes the worker's new messages into its stdin as one framed user line with `priority: "next"`. The worker reads it at its next step instead of after its next tool batch. The wrapper then acks the messages with the hooks' key, so the hooks do not show them again.
+  - A lead message `wavecoord:{"action": ...}` is a steer action: `interrupt` (a `control_request` `interrupt`, then the note as the next turn), `model` (`set_model`) or `stop`. From any other sender it stays plain text.
+  - After a `result`, new messages get one more turn, at most 3 per run. Otherwise the wrapper closes stdin and the run ends.
+  - New lead commands: `wavecoord hint <task> <text>` and `wavecoord steer <task> interrupt|model <m>|stop [--note]`.
+- **Progress and stuck notices.** The wrapper keeps a digest of the stream: turns, tokens, the last tool calls and text, edited files, failing commands, and the session state (`CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`). It posts a `progress` notice every `PROGRESS_S` (300 s), with the context use from a `get_context_usage` control request. It posts a `stuck` notice, once per reason, for:
+  - `loop`: the same tool call 3 times in a row
+  - `failing`: the same command failed 3 times
+  - `waiting`: `requires_action`
+  - `budget`: 75% of turns or tokens used
+  - `quiet`: no output for `QUIET_S`
+- **Inbox relay for sessions that wavecoord did not launch.** A worker session that a person started (`WAVECOORD_TASK` set, no launcher) gets its messages through its Claude Code inbox socket (`CLAUDE_CODE_MESSAGING_SOCKET`).
+  - `SessionStart` starts `wavecoord inbox-relay`, which pushes the framed messages with the session's token and acks them only after the socket took them. The hooks skip the pushed ids.
+  - The socket's line format is not documented by Claude Code. It was taken from Claude Code 2.1.302 (`hooks.md`, "Claude Code facts"). A failed push leaves the message to the hooks.
+- **`steerer` subagent and `auto_steer`.** `/wavecoord:triage` handles `progress` and `stuck` lines. With `auto_steer: "draft"` (the default), the `steerer` drafts a hint and the user decides. With `"hints"`, triage sends plain-text hints itself, at most one per attempt every 10 minutes. Interrupts, model switches and stops always need the user. `auto_steer` is lead config: a task PR that changes it fails the merge check (`config_change`).
+- New constants `INBOX_POLL_S`, `PROGRESS_S`, `QUIET_S` (contract section 5).
+- **`scripts/smoke-live.py`**: a live check with a real `claude` (hint, steer, listen and relay; this host and `--ssh` hosts). A manual release check, never in CI (CONTRIBUTING.md).
+
+### Fixed
+
+- **`wavecoord tokens provision --out` into a new directory failed** (the quick start's `~/.wavecoord/hosts/local.token` on a fresh machine), after it had already added the token to the tokens file. It now creates the directory (mode 700) first.
+- **A worker launched from inside a Claude session inherited that session's inbox.** The launcher now also removes `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` from the worker's environment.
+
 ## 0.1.5
 
 ### Fixed

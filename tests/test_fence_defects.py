@@ -274,6 +274,7 @@ def config_change_check(w):
             ("plugin hooks", write("plugin/hooks/hooks.json", "{}"), None, (1, ["the plugin hooks (plugin/hooks/hooks.json)"])),
             ("not a parse", write(".claude/wavecoord.json", "{"), None,
              (1, [".claude/wavecoord.json (the new file does not parse)"])),
+            ("auto_steer", cfg_edit(lambda c: c.update(auto_steer="hints")), None, (1, ["auto_steer"])),
             ("an unguarded key", cfg_edit(lambda c: c.update(wip_cap=5)), None, (0, [])),
             ("settings permissions", write(".claude/settings.json", json.dumps({"permissions": {"allow": []}})), None,
              (0, [])),

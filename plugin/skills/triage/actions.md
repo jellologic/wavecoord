@@ -43,6 +43,25 @@ When `attempt_get` shows `continue_suggested: true`, the worker used its turns (
 - Answer only from the spec, the code, the plan or a decision the user made in this session. Do not invent requirements.
 - Keep the answer short and concrete; the worker sees it framed as data.
 
+## Steer a running worker
+
+The launcher tails each worker's stream and sends `progress` notices (turns, tokens, context, the last tool, the last words) and `stuck` notices (`loop`: the same tool call again and again; `failing`: the same command keeps failing; `waiting`: the session waits for an answer; `budget`: 75% of turns or tokens used; `quiet`: no output for a while). It writes the worker's messages into the worker's stdin, so a hint arrives within about `INBOX_POLL_S` (5 s) and the worker reads it at its next step.
+
+On a `stuck` notice, read `auto_steer` from `config`:
+
+- `off`: nothing.
+- `draft` (default): run the `steerer` subagent with the task, the attempt, the notice and the output of `wavecoord attempts logs <task>-<n> --tail 80`. Show its draft and reason to the user, and send it only when the user agrees.
+- `hints`: run the `steerer`; when it returns `hint`, send the text yourself, at most one hint per attempt every 10 minutes. An `interrupt` or `model` draft waits for the user.
+
+Send with the commands (they work for any running worker, on any host):
+
+- `wavecoord hint <task> "<text>"`: a plain hint, read at the worker's next step.
+- `wavecoord steer <task> interrupt --note "<text>"`: stop the current turn now; the worker reads the note next.
+- `wavecoord steer <task> model <model> [--note "<text>"]`: switch the worker's model for the rest of the run.
+- `wavecoord steer <task> stop`: stop the run (the attempt ends `stopped`). Only with the user.
+
+A hint is guidance for the task; the spec stays the authority. Never use a hint to widen the task, to ask for paths outside its lease, or to relax an acceptance command. To read the worker yourself: `wavecoord attempts logs <task>-<n> -f`.
+
 ## Stale leases
 
 - `lease.stale` by `watchdog`: the worker heartbeats but does nothing. First `send` a message. If it stays idle, ask the user before you steal the lease or redispatch, unless the user allowed that for this wave.

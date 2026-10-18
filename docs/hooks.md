@@ -28,7 +28,7 @@ Every request has `Authorization: Bearer <token>`, `X-Wavecoord-Agent: <agent id
 
 | Event | Matcher | Mode | Timeout (s) | Budget (s) | Behavior | Milestone |
 |---|---|---|---|---|---|---|
-| `SessionStart` | | sync | 10 | 8 | Heartbeat (registers the agent). Worker: task, spec title, lease and epoch, own paths, peers, paths reserved by others, hot files, inbox, as `additionalContext`. Lead: wave state from `GET /api/live`; on `startup` or `clear`, move the lead cursor to the head | P2, P5 |
+| `SessionStart` | | sync | 10 | 8 | Heartbeat (registers the agent). Worker: task, spec title, lease and epoch, own paths, peers, paths reserved by others, hot files, inbox, as `additionalContext`. Lead: wave state from `GET /api/live`; on `startup` or `clear`, move the lead cursor to the head. A worker session that the launcher did not start: start the inbox relay (below) | P2, P5 |
 | `UserPromptSubmit` | | sync | 10 | 6 | Deliver messages not yet shown, and lost-lease notices, as `additionalContext`; ack them; heartbeat at most once per `HOOK_MIN_INTERVAL_S` (else `GET /api/inbox`). Lead: also the event lines after the shared lead cursor, at most 40 (`feedback.md`) | P2, P5 |
 | `PostToolBatch` | | async | 10 | 6 | Same as `UserPromptSubmit`, at most once per `HOOK_MIN_INTERVAL_S`. The output arrives on the next turn | P2 |
 | `PreToolUse` | `Edit\|Write\|MultiEdit\|NotebookEdit` | sync | 6, `onFailure: "block"` | 2.5 | **The edit fence (E1)**, below. `POST /api/check` with the normalized repo-relative path. `advisory` (the default): a warning in `additionalContext` and `systemMessage`. `enforce`: a worker write that the fence cannot prove is in the lease gets `permissionDecision: "deny"`; a lead or other session gets `ask` for a foreign exclusive path | P6 |
@@ -89,9 +89,20 @@ The design is `docs/design/edit-fence.md`; the test plan is `tests/fence/README.
 
 **Workers.** The worker `--settings` pin `"disableAllHooks": false` and the fence env (`WAVECOORD_TASK`, `WAVECOORD_AGENT_ID`, `WAVECOORD_LEASE_EPOCH`, `WAVECOORD_WORKTREE`, `WAVECOORD_FENCE`, `WAVECOORD_ROLE=worker`), so the worktree's own settings files cannot turn the hooks off or change the identity. A worker gets only its host's agent token (`<wavecoord home>/hosts/<host>.token`, or the installed token on a remote host), never the lead's token or `CLAUDE_PLUGIN_OPTION_TOKEN`. In enforce mode the launcher refuses a run with no lease, and, for `edit` enforce, a host whose `claude --version` is older than 2.1.295 or that has a user mod that handles `tool.check` (a best-effort scan of `~/.claude/plugins`, `~/.claude/dev-mods`, `~/.claude/skills` and `CLAUDE_CODE_PLUGIN_DIRS`).
 
+**Who delivers a worker's messages.** The hooks deliver at their points (`SessionStart`, `UserPromptSubmit`, `PostToolBatch`, `Stop`), so a `-p` worker would see a message only after its next tool batch, and an idle one never. So messages also take a faster path, and the hooks stay the fallback:
+
+- A worker that the launcher started (`WAVECOORD_ATTEMPT_DIR` set) gets them on its stdin from the wrapper within `INBOX_POLL_S` (`launcher.md`, "Listen and steer"). The wrapper acks them, so the hooks do not show them again.
+- **Inbox relay.** A worker or resolver session that a person started (`WAVECOORD_TASK` set, no `WAVECOORD_ATTEMPT_DIR`) has no such parent. When Claude Code gives the session an inbox socket (`CLAUDE_CODE_MESSAGING_SOCKET`, Claude Code 2.1.224 and later, not in `--bare`), `SessionStart` starts `wavecoord inbox-relay`, detached, with the socket, the session's token (`CLAUDE_CODE_MESSAGING_TOKEN`) and the Claude Code pid on stdin. Every `INBOX_POLL_S` it reads the inbox and writes new messages into the socket (an auth line with the token, then one user line with the framed messages); Claude Code reads it between tool calls, or starts a turn when the session is idle. It writes the ids to `<state dir>/pushed-<hash>.json`, then acks them; the hooks skip those ids. A push that fails is not acked, so the hooks deliver the message. One relay per agent (`relay-<hash>.lock`); it ends when the socket or the Claude Code process is gone, or after 12 h. The token proves that the push comes from the session's own child, so Claude Code's default inbound rules deliver it; a session with `crossSessionInbound: "refuse"` gets the messages from the hooks only.
+
 **Worker settings.** Plugin subagents ignore hooks in their frontmatter, so worker hooks come from the plugin itself, loaded by the launcher with `--plugin-dir <pinned copy>` and `--settings <worker settings>`. Workers do not use `--bare`, so hooks load. The launcher sets `WAVECOORD_AGENT_ID`, `WAVECOORD_TASK`, `WAVECOORD_ATTEMPT` and `WAVECOORD_HOST` for the worker.
 
 ## Claude Code facts this design uses
+
+From the Claude Code cross-session messaging docs and Claude Code itself (the inbox relay):
+
+- A session with messaging on binds an inbox socket and exports its path to hooks and Bash as `CLAUDE_CODE_MESSAGING_SOCKET`, with a per-session `CLAUDE_CODE_MESSAGING_TOKEN`; settings `env` blocks cannot set them. A `-p` session binds one too; a `--bare` session does not. A connection that sends no complete line within 30 s is closed.
+- A connection may start with `{"type":"auth","token":"<token>"}`; a message from the session's own child (checked by process or by that token) is delivered when no `crossSessionInbound` value applies.
+- The message line is `{"type":"user","message":{"role":"user","content":"<text>"}}`. **This format is not documented**; it is what Claude Code 2.1.302 prints in its own debug log ("Inject messages ..."). A change in it makes the push fail, and the hooks deliver.
 
 From the Claude Code hooks reference:
 

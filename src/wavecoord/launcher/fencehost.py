@@ -199,6 +199,8 @@ def settings_pins(task):
         env["WAVECOORD_LEASE_EPOCH"] = str(spec["lease_epoch"])
     if task.get("worktree"):
         env["WAVECOORD_WORKTREE"] = task["worktree"]
+    if task.get("attempt_dir"):
+        env["WAVECOORD_ATTEMPT_DIR"] = task["attempt_dir"]
     if task.get("fence"):
         env["WAVECOORD_FENCE"] = json.dumps(task["fence"], sort_keys=True)
     pins["env"] = env

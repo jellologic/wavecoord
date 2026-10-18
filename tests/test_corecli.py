@@ -49,6 +49,34 @@ class CoreCliTest(unittest.TestCase):
         self.assertEqual(schemaload.errors(data, "api", "#/definitions/tokens_file"), [])
         p = self.run_cli("tokens", "provision", "--role", "agent", ok=False)
         self.assertNotEqual(p.returncode, 0)
+        # --out into a directory that does not exist yet (the quick start's ~/.wavecoord/hosts/<host>.token)
+        out = os.path.join(self.tr.root, "wc", "hosts", "local.token")
+        self.run_cli("tokens", "provision", "--role", "agent", "--host", "local", "--out", out)
+        self.assertEqual(stat.S_IMODE(os.stat(out).st_mode), 0o600)
+
+    def test_hint_and_steer(self):
+        tok = self.run_cli("tokens", "provision", "--role", "lead").stdout.strip()
+        self.proc = subprocess.Popen([sys.executable, ZIPAPP, "serve", "--repo", self.tr.repo, "--home",
+                                      os.path.join(self.tr.root, "home"), "--port", "0"], stdout=subprocess.PIPE,
+                                     stderr=subprocess.PIPE, universal_newlines=True, env=self.env)
+        url = self.proc.stdout.readline().split()[2]
+        env = dict(self.env, WAVECOORD_URL=url, WAVECOORD_TOKEN=tok)
+        out = self.run_cli("hint", "api-auth", "Use the session-store interface.", env=env).stdout
+        self.assertTrue(out.startswith("hint #1 to task api-auth"), out)
+        self.run_cli("steer", "api-auth", "model", "opus", "--note", "too hard for haiku", env=env)
+        self.run_cli("steer", "api-auth", "interrupt", env=env)
+        p = self.run_cli("steer", "api-auth", "model", env=env, ok=False)
+        self.assertIn("needs a model name", p.stderr)
+        p = self.run_cli("hint", "api-auth", "x" * 5000, env=env, ok=False)
+        self.assertIn("longer than 4096 bytes", p.stderr)
+        evs = [json.loads(l) for l in self.run_cli("events", "--since", "0", env=env).stdout.splitlines()]
+        msgs = [e["payload"]["message"] for e in evs if e["kind"] == "message.new"]
+        self.assertEqual([m["to"] for m in msgs], [{"kind": "task", "id": "api-auth"}] * 3)
+        self.assertEqual([m["body"] for m in msgs], [
+            "Use the session-store interface.",
+            'wavecoord:{"action":"model","model":"opus","note":"too hard for haiku"}',
+            'wavecoord:{"action":"interrupt"}'])
+        self.assertEqual({m["sender"] for m in msgs}, {"lead"})
 
     def test_serve_end_to_end(self):
         p = self.run_cli("serve", "--port", "0", ok=False)

@@ -344,7 +344,7 @@ class WaveE2E(unittest.TestCase):
         # (c) dispatch_wave: 3 attempts in 3 worktrees, disjoint exclusive reservations
         self.step("c: dispatch_wave")
         self.write_modes({
-            "api": {"wait_for": self.wave_gate,
+            "api": {"wait_for": self.wave_gate, "wait_steer": 1, "echo_steer": True,
                     "commit": {"api/server.py": "print('api')\n", CHANGELOG: "# Changelog\n- api\n"}},
             "web": {"wait_for": self.wave_gate, "commit": {"web/index.html": "<p>web</p>\n"},
                     "send": "web: index page is in",
@@ -385,6 +385,8 @@ class WaveE2E(unittest.TestCase):
             self.assertEqual(os.path.basename(r["cwd"]), "%s-1" % r["task"])
             self.assertEqual(r["branch"], "wave/%s-1" % r["task"])
             self.assertEqual(sh(["git", "rev-parse", "--abbrev-ref", "HEAD"], r["cwd"], self.env), r["branch"])
+        # a hint from the lead reaches the running api worker on its stdin (launcher.md, "Listen and steer")
+        self.tool("send", {"to": {"kind": "task", "id": "api"}, "body": "Keep the server import-free."})
 
         # (d) reports reach the lead: Monitor lines and the inbox
         self.step("d: reports")
@@ -405,6 +407,12 @@ class WaveE2E(unittest.TestCase):
         # the workers wrote as host:local agents, never with the lead's token
         for e in self.events("report.post"):
             self.assertEqual(e["actor"]["principal"], "host:local", e)
+        # the api worker read the hint during its run; its launcher acked it as the worker
+        api_rep = [e for e in self.events("report.post") if e["task"] == "api"][0]
+        self.assertIn("steer: ", " ".join(api_rep["payload"]["report"]["risks_hit"]))
+        self.assertIn("Keep the server import-free.", " ".join(api_rep["payload"]["report"]["risks_hit"]))
+        acks = self.events("message.ack")
+        self.assertTrue([a for a in acks if a["actor"]["principal"] == "host:local"], acks)
 
         # (e) collect opens the PRs on the lead machine (docs still runs)
         self.step("e: collect")
