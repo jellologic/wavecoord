@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -124,6 +125,31 @@ class FakeClaudeTest(unittest.TestCase):
             self.assertEqual(json.loads(p.stdout)["structured_output"]["status"], "blocked")
             with open(runs) as f:
                 self.assertEqual([json.loads(l)["mode"] for l in f], ["t1", "t1@alt", "t1:resolve"])
+
+
+class FakeTranscriptsTest(unittest.TestCase):
+    def test_resume_keeps_the_id_and_unknown_ids_fail(self):
+        with tempfile.TemporaryDirectory() as d:
+            d = os.path.realpath(d)
+            env = {"FAKE_CLAUDE_TRANSCRIPTS": "1", "CLAUDE_CONFIG_DIR": os.path.join(d, "cfg")}
+            p = run(["-p", "--output-format", "json", "--session-id", SID], cwd=d, env=env)
+            self.assertEqual(p.returncode, 0, p.stderr)
+            proj = os.path.join(d, "cfg", "projects")
+            self.assertEqual(os.listdir(proj), [re.sub(r"[^A-Za-z0-9]", "-", d)])
+            p = run(["-p", "--output-format", "json", "--resume", SID], cwd=d, env=env)
+            self.assertEqual(json.loads(p.stdout)["session_id"], SID)
+            with open(os.path.join(proj, os.listdir(proj)[0], SID + ".jsonl")) as f:
+                self.assertEqual(len(f.readlines()), 2)
+            p = run(["-p", "--output-format", "json", "--resume", SID, "--session-id", str(uuid.uuid4())],
+                    cwd=d, env=env)
+            self.assertNotEqual(p.returncode, 0)
+            other = str(uuid.uuid4())
+            p = run(["-p", "--output-format", "json", "--resume", other], cwd=d, env=env)
+            self.assertEqual(p.returncode, 1)
+            self.assertIn("No conversation found with session ID: %s" % other, p.stderr)
+            res = json.loads(p.stdout)
+            self.assertEqual((res["subtype"], res["num_turns"]), ("error_during_execution", 0))
+            self.assertNotEqual(res["session_id"], other)
 
 
 if __name__ == "__main__":

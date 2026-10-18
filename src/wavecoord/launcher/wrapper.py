@@ -20,10 +20,10 @@ import threading
 from wavecoord import jsonschema_lite, zipapp
 
 from . import coord as coordmod
-from . import fencehost, providers
+from . import fencehost, providers, sessions
 from .common import (DEVNULL, Flock, LauncherError, const, git_run, host_env, iso, kill_group, now,
-                     pgroup_alive, read_json, run_cmd, signal_group, update_status, wait_group_gone,
-                     write_json)
+                     pgroup_alive, read_json, run_cmd, signal_group, tail_text, update_status,
+                     wait_group_gone, write_json)
 from .hostside import RUN_LOCK, attempt_dir, claude_bin, self_argv
 from .stream import StreamStats
 from .worktrees import REMOTE, dirty_count, merge_tree_conflicts
@@ -152,6 +152,8 @@ class Attempt(object):
         self.env = None
         self.provider = self.spec.get("provider") or providers.ANTHROPIC
         self.profile = self.spec.get("provider_profile")
+        self.prompt_path = os.path.join(self.d, "prompt.md")
+        self.session_fallback = None
 
     # -- logging and coordinator calls
     def log(self, msg):
@@ -238,16 +240,78 @@ class Attempt(object):
         self.note = "wavecoord guard install failed: %s" % text.strip()[-300:]
         return "failed"
 
+    # -- the session of a --continue run
+    def choose_session(self, env):
+        """--continue: resume the first earlier session whose transcript exists, else start a fresh one."""
+        t = self.task
+        t["resume"] = None
+        if not t.get("continue"):
+            return
+        cands = list(t.get("resume_candidates") or [])
+        for sid in cands:
+            path = sessions.transcript_path(sid, self.wt, env)
+            if path:
+                t["resume"] = sid
+                t["session_root"] = t.get("session_root") or sid
+                self.log("continue: resuming session %s (transcript %s)" % (sid, path))
+                return
+        if cands:
+            lost = "no transcript of session %s under %s" % (", ".join(cands[:4]),
+                                                             os.path.join(sessions.config_dir(env), "projects"))
+        else:
+            lost = "no earlier session of this attempt in worktree %s" % self.wt
+        self.fresh_session(lost, "no_transcript" if cands else "no_session")
+
+    def fresh_session(self, lost, reason):
+        """A fresh session in the same worktree: the first run's prompt, the continue prompt and the commits."""
+        t = self.task
+        t["resume"] = None
+        base = "%s/%s" % (REMOTE, self.default)
+        commits = self.git_lines(["log", "--reverse", "--no-decorate", "--format=%h %s", base + "..HEAD"]) or []
+        try:
+            with open(os.path.join(self.d, "prompt.md"), encoding="utf-8") as f:
+                cont = f.read()
+        except OSError:
+            cont = ""
+        self.prompt_path = os.path.join(self.d, "prompt-fresh.md")
+        with open(self.prompt_path, "w", encoding="utf-8") as f:
+            f.write(sessions.fresh_prompt(t.get("spec_prompt"), cont, commits, lost))
+        self.session_fallback = {"reason": reason, "detail": lost[:500],
+                                 "tried": list(t.get("resume_candidates") or []), "session_id": t["session_id"],
+                                 "commits": len(commits), "at": iso()}
+        self.log("continue: %s; starting a fresh session %s with the full prompt" % (lost, t["session_id"]))
+        update_status(self.d, session_fallback=self.session_fallback)
+
+    def record_session(self, env):
+        """Keep the attempt's session lineage in task.json for the next --continue run."""
+        t = self.task
+        used = t.get("resume") or t["session_id"]
+        transcript = used
+        for sid in (used, self.stats.session_id):
+            if sid and sessions.transcript_path(sid, self.wt, env):
+                transcript = sid
+                break
+        t["transcript_session"] = transcript
+        t["session_root"] = t.get("session_root") or used
+        lin = list(t.get("session_lineage") or [])
+        for sid in (used, self.stats.session_id):
+            if sid and sid not in lin:
+                lin.append(sid)
+        t["session_lineage"] = lin
+        if self.session_fallback:
+            t["session_fallback"] = self.session_fallback
+        write_json(os.path.join(self.d, "task.json"), t)
+
+    def session_used(self):
+        return self.task.get("transcript_session") or self.stats.session_id or self.task.get("resume") \
+            or self.task["session_id"]
+
     def run_claude(self):
         why = fencehost.preflight(self, claude_bin())
         if why:
             self.reason, self.note = "fence_refused", why
             self.log(why)
             return None
-        argv = claude_argv(self.task, self.d)
-        write_json(os.path.join(self.d, "argv.json"), argv[:1] + ["<%d args>" % (len(argv) - 1)])
-        self.log("claude: %s -p (session %s%s) in %s" % (argv[0], self.task.get("resume") or self.task["session_id"],
-                                                        ", resume" if self.task.get("resume") else "", self.wt))
         try:
             claude_env, names = providers.apply(self.env, self.provider, self.profile)
         except (providers.ProviderError, OSError) as e:
@@ -259,10 +323,33 @@ class Attempt(object):
             self.log("provider %s: %d variables from its env file (%s)" % (self.provider, len(names), ", ".join(names)))
         else:
             self.log("provider %s: default environment" % self.provider)
+        self.choose_session(claude_env)
+        rc = self._run_claude_once(claude_env)
+        resumed = self.task.get("resume")
+        if resumed and self.reason is None and rc != 0 and not self.stats.turns:
+            err = tail_text(os.path.join(self.d, "stderr.log"), 4000)
+            if sessions.no_conversation(err, self.stats.result):
+                # the transcript was there, but claude did not find the conversation: start fresh once
+                for n in ("stream.jsonl", "stderr.log"):
+                    src = os.path.join(self.d, n)
+                    if os.path.exists(src):
+                        os.replace(src, os.path.join(self.d, "resume-failed-" + n))
+                self.stats = StreamStats()
+                self.fresh_session("claude: %s with session ID %s" % (sessions.NO_CONVERSATION, resumed),
+                                   "no_conversation")
+                rc = self._run_claude_once(claude_env)
+        self.record_session(claude_env)
+        return rc
+
+    def _run_claude_once(self, claude_env):
+        argv = claude_argv(self.task, self.d)
+        write_json(os.path.join(self.d, "argv.json"), argv[:1] + ["<%d args>" % (len(argv) - 1)])
+        self.log("claude: %s -p (session %s%s) in %s" % (argv[0], self.task.get("resume") or self.task["session_id"],
+                                                        ", resume" if self.task.get("resume") else "", self.wt))
         out_path = os.path.join(self.d, "stream.jsonl")
         out = open(out_path, "wb")
         err = open(os.path.join(self.d, "stderr.log"), "wb")
-        inp = open(os.path.join(self.d, "prompt.md"), "rb")
+        inp = open(self.prompt_path, "rb")
         try:
             p = subprocess.Popen(argv, cwd=self.wt, env=claude_env, stdin=inp, stdout=out, stderr=err,
                                  start_new_session=True)
@@ -425,7 +512,7 @@ class Attempt(object):
         if res.get("commits"):
             lines += ["", "## Commits", ""] + ["- %s" % c for c in res["commits"]]
         lines += ["", "Dispatched by wavecoord on host `%s` with provider `%s` (session `%s`, %s turns, cost %s USD, basis %s)." % (
-            self.task["host"], self.provider, self.stats.session_id or self.task["session_id"],
+            self.task["host"], self.provider, self.session_used(),
             res.get("turns") if res.get("turns") is not None else "?",
             res.get("cost_usd") if res.get("cost_usd") is not None else "?", res.get("cost_basis")),
             "", "\U0001F916 Generated with [Claude Code](https://claude.com/claude-code)"]
@@ -449,6 +536,9 @@ class Attempt(object):
         res["throttled"] = bool(res["throttle"])
         res["next_provider"] = _next_provider(self.provider, res["provider_fallback"]) if res["throttled"] else None
         res["duration_s"] = res["ended"] - self.started
+        res["session_id"] = self.session_used()
+        res["resumed_session"] = t.get("resume")
+        res["session_fallback"] = self.session_fallback
         base = "%s/%s" % (REMOTE, self.default)
         res["new_commits"] = self.git_lines(["rev-list", "--reverse", t["base_sha"] + "..HEAD"]) or []
         branch_commits = self.git_lines(["rev-list", "--reverse", base + "..HEAD"]) or []
@@ -524,7 +614,7 @@ class Attempt(object):
 
         body = {"report": report, "cost_usd": res["cost_usd"], "cost_basis": res["cost_basis"],
                 "usage": res["usage"], "model_usage": res["model_usage"], "turns": res["turns"],
-                "session_id": self.stats.session_id or t["session_id"], "agent": t["agent"], "host": t["host"],
+                "session_id": self.session_used(), "agent": t["agent"], "host": t["host"],
                 "provider": self.provider, "throttled": res["throttled"], "throttle": res["throttle"],
                 "next_provider": res["next_provider"], "continue_suggested": res["continue_suggested"],
                 "state": state, "branch": self.branch, "pushed": res["pushed"], "pr_url": res.get("pr_url")}
@@ -546,7 +636,7 @@ class Attempt(object):
         res["report_status"] = report["status"]
         write_json(os.path.join(self.d, "result.json"), res)
         update_status(self.d, state=state, ended=res["ended"], note=getattr(self, "note", None),
-                      session_id=self.stats.session_id, turns=res["turns"], cost_usd=res["cost_usd"],
+                      session_id=res["session_id"], turns=res["turns"], cost_usd=res["cost_usd"],
                       pr_url=res.get("pr_url"), report_status=report["status"], exit_code=rc,
                       provider=self.provider, throttled=res["throttled"])
         coordmod.flush_spool()

@@ -120,7 +120,7 @@ class LauncherTestCase(unittest.TestCase):
                 "API_TIMEOUT_MS", "ANTHROPIC_DEFAULT_OPUS_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL") + tuple(
         "FAKE_CLAUDE_" + k for k in ("COMMIT", "COMMIT_FILE", "COMMIT_TEXT", "MERGE", "STATUS", "REPORT", "EXIT", "SLEEP",
                                       "COST", "DUMP", "EVENTS", "EARLY_EVENTS", "STDERR", "MAX_TURNS",
-                                      "EXPECT_ENV"))
+                                      "EXPECT_ENV", "TRANSCRIPTS", "RESUME_REPORTS_NEW_ID", "FORGET", "RUNS"))
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in self.ENV_KEYS}
@@ -155,6 +155,7 @@ class LauncherTestCase(unittest.TestCase):
             "WAVECOORD_NOTIFY_MIN_INTERVAL_S": "0", "WAVECOORD_CLIENT_TIMEOUT_S": "2",
             "FAKE_PR_OUT": os.path.join(t, "prs.jsonl"),
             "CLAUDECODE": "1", "CLAUDE_CODE_ENTRYPOINT": "cli",  # must be stripped for the worker
+            "FAKE_CLAUDE_TRANSCRIPTS": "1",  # transcripts under $HOME/.claude/projects, --resume checks them
         })
         self.origin = os.path.join(t, "origin.git")
         sh(["git", "init", "-q", "--bare", "-b", "main", self.origin], t)

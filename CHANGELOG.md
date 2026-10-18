@@ -2,6 +2,18 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
+## 0.1.5
+
+### Fixed
+
+- **`--continue` resumed a session that does not exist.** Each run of an attempt got a fresh session id in `task.json`. A `--continue` run passes only `--resume <id>`, and Claude Code keeps writing into the transcript of the resumed id (only `--fork-session` makes a new one), so the fresh id of a resumed run never had a transcript. The next `--continue` resumed that id: claude printed `No conversation found with session ID: <id>`, the result was `error_during_execution` with 0 turns, and every later `--continue` of the attempt failed the same way (seen with Claude Code 2.1.302 on Linux, after a `--continue --spec` run). Now:
+  - The launcher resumes the attempt's lineage: the session whose transcript the last run wrote (`transcript_session`), then the first run's id, then the ids of the earlier runs in `prev-*/`, oldest first. So an attempt left by 0.1.4 resumes its first run's session again.
+  - The wrapper checks that the transcript file exists (`$CLAUDE_CONFIG_DIR` or `~/.claude`, `projects/<encoded worktree path>/<id>.jsonl`, with the provider's environment) before it resumes. It never passes `--session-id` together with `--resume`.
+  - When no transcript exists, or claude says `No conversation found`, the wrapper starts a fresh session in the same worktree, one time. The prompt is a short note with the branch's commits since the base, the first run's full prompt and the continue prompt. `session_fallback` in the result, `status.json` and `task.json` records the reason. The next `--continue` resumes the fresh session.
+  - A `--continue` run with `--spec` keeps the same lineage. The result, the report request and `status.json` give the session id of the transcript.
+  - The fake claude keeps transcripts in a fake `~/.claude/projects` layout (`FAKE_CLAUDE_TRANSCRIPTS=1`, on in the launcher and e2e tests), refuses `--session-id` with `--resume`, and fails a `--resume` of an unknown id as Claude Code does. New tests: two `--continue` runs (the second with the spec prompt) resume the first id, recovery of a 0.1.4 attempt dir, the fallback without a transcript, and the fallback after `No conversation found`.
+- **`dispatch --wave` checked `wip_cap` against the same count for each task.** The dry run printed `wip 3/6` for all four tasks of a wave, because `decide` counted only the attempts in the snapshot. Now each task that the wave placed counts for the next one (`wip 3/6`, `4/6`, ...), in a dry run too, and a wave stops at the cap. New assertions in `test_wip_cap_and_wave`.
+
 ## 0.1.4
 
 ### Fixed
