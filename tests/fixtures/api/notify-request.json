@@ -1,0 +1,8 @@
+{
+  "kind": "waiting_on_you",
+  "agent": "worker-20261018-120000-ab12",
+  "task": "api-auth",
+  "attempt": 1,
+  "text": "worker-20261018-120000-ab12 waits for the user: Claude needs your permission to use Bash",
+  "detail": {"notification_type": "permission_prompt", "title": "Permission needed"}
+}

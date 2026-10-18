@@ -1,5 +1,5 @@
 {
-  "description": "wavecoord hooks. P0: SessionStart is a no-op that exits 0. Later milestones add the hook set in docs/hooks.md.",
+  "description": "wavecoord hooks (docs/hooks.md). Every hook does nothing unless a coordinator URL is configured, and never breaks a session. P2: PreToolUse is advisory.",
   "hooks": {
     "SessionStart": [
       {
@@ -7,8 +7,184 @@
           {
             "type": "command",
             "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
-            "args": ["hook", "SessionStart"],
+            "args": [
+              "hook",
+              "SessionStart"
+            ],
             "timeout": 10
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "UserPromptSubmit"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "PreToolUse"
+            ],
+            "timeout": 6
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Edit|Write|MultiEdit|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "PostToolUse"
+            ],
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PostToolBatch": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "PostToolBatch"
+            ],
+            "timeout": 10,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "Stop"
+            ],
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "SubagentStart"
+            ],
+            "timeout": 6,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "SubagentStop"
+            ],
+            "timeout": 6,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "StopFailure"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "matcher": "permission_prompt|idle_prompt|elicitation_dialog|agent_needs_input",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "Notification"
+            ],
+            "timeout": 6,
+            "async": true
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "PreCompact"
+            ],
+            "timeout": 10
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/bin/wavecoord",
+            "args": [
+              "hook",
+              "SessionEnd"
+            ],
+            "timeout": 2
           }
         ]
       }
