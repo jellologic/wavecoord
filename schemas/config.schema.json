@@ -46,7 +46,8 @@
           "prepare_cmd": {"$ref": "#/definitions/cmd"},
           "claude_flags": {"type": "array", "items": {"type": "string"}},
           "providers": {"type": "array", "items": {"$ref": "#/definitions/provider_name"}, "uniqueItems": true, "description": "Provider profiles this host has; absent means every configured profile"},
-          "labels": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 64}, "uniqueItems": true, "description": "Capabilities of the host, matched against exec.host_needs (with the host name)"}
+          "labels": {"type": "array", "items": {"type": "string", "minLength": 1, "maxLength": 64}, "uniqueItems": true, "description": "Capabilities of the host, matched against exec.host_needs (with the host name)"},
+          "dispatch": {"type": "boolean", "default": true, "description": "false: automatic placement (dispatch, dispatch_wave, the dispatcher, launch without --host) never picks this host; an explicit host (--host, dispatch host) still does"}
         }
       }
     },

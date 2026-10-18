@@ -8,7 +8,7 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `project` | required | Project name on the server |
 | `log_branch` | `coord/log` | Orphan branch for events |
 | `plan` | `{"adapter": "builtin", "dir": "plan/tasks"}` | Plan store (below) |
-| `hosts[]` | one `local` host, 2 slots, `repo_path` `.` | `name`, `ssh` (destination or alias; absent = local), `slots`, `repo_path`, `env`, `prepare_cmd`, `claude_flags`, `providers`, `labels`. See `launcher.md` |
+| `hosts[]` | one `local` host, 2 slots, `repo_path` `.` | `name`, `ssh` (destination or alias; absent = local), `slots`, `repo_path`, `env`, `prepare_cmd`, `claude_flags`, `providers`, `labels`, `dispatch`. See `launcher.md` |
 | `merge_cmd` | `gh pr merge {pr} --merge --match-head-commit {sha}` | How the refinery merges a PR (below) |
 | `pr_cmd` | `gh pr create --head {branch} --base {base} --title {title} --body-file {body_file}` | How the lead machine opens a PR for a pushed attempt branch or a plan branch (below) |
 | `check_cmd` | none | Command the refinery runs before a merge |
@@ -59,7 +59,8 @@ The edits apply in order, in memory. Every changed file must still be a valid sp
 - `repo_path`: a checkout of the consumer repo with an `origin` remote. On a local host a relative path is relative to the consumer repo root; on an ssh host use an absolute or `~/` path. Attempt worktrees go to `<repo_path>/../wt/<task>-<n>`.
 - `env`: extra environment for `prepare_cmd` and the worker on that host. Values expand `~` and `$VAR` on the host, so `"PATH": "$HOME/.local/bin:$PATH"` works.
 - `labels`: capabilities of the host (for example `gpu`, `python3`). A task's `exec.host_needs` must all be in the host's labels or be its name; dispatch places the task only on such hosts.
-- `providers`: the provider profiles this host has (default: all). Each profile's `env_file` must exist on the host with mode 600 (`providers.md`).
+- `providers`: the provider profiles this host has (default: all). Each profile's `env_file` must exist on the host with mode 600 (`providers.md`). That file is the host's credentials for that profile: a host with no claude login can take attempts of any profile it has (`launcher.md`, "Hosts and placement").
+- `dispatch`: `true` by default. With `false`, automatic placement never picks the host: `dispatch_wave`, `dispatch` without a host, the dispatcher loop and `wavecoord launch` without `--host`. An explicit host (`--host <name>`, the `host` of the `dispatch` tool) still places an attempt there. Use it for a lead machine that must keep its slots free, or a host you want to drain.
 - `claude_flags`: appended to every `claude -p` on that host. Put the permission setup for unattended workers here, for example `["--permission-mode", "acceptEdits", "--allowedTools", "Bash(make *),Bash(git add *),Bash(git commit *)"]`.
 
 ## PR command

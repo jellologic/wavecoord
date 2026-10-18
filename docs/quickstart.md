@@ -56,7 +56,7 @@ The server keeps only digests, in `~/.wavecoord/tokens.json`. The lead token is 
 cd ~/src/myapp
 wavecoord install-server --dry-run   # shows the unit and the commands
 wavecoord install-server
-wavecoord status                     # ok: http://127.0.0.1:18741 version=0.1.0 api=1
+wavecoord status                     # ok: http://127.0.0.1:18741 version=0.1.1 api=1
 ```
 
 `install-server` copies the zipapp to `~/.wavecoord/bin/wavecoord-<hash>` and writes a user service that runs `wavecoord serve --repo <repo>` from that copy: a launchd agent (`~/Library/LaunchAgents/io.github.wavecoord.<project>.plist`) on macOS, a `systemd --user` unit (`~/.config/systemd/user/wavecoord-<project>.service`) on Linux. The unit keeps your current `PATH`, so the server finds `claude`, `git` and `gh`. The log is `~/.wavecoord/<project>/serve.log`. A plugin update does not change the running server; run `install-server` again to move the pin. `--uninstall` removes the unit. `wavecoord serve` in a terminal works too.

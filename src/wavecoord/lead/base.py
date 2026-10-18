@@ -233,6 +233,8 @@ class LeadBase(object):
             h = cfg.hosts.get(n)
             if h is None:
                 raise ApiError("bad_request", "unknown host %r (hosts: %s)" % (n, ", ".join(sorted(cfg.hosts))))
+            if not host and not cfg.auto_dispatch(n):
+                continue  # `dispatch: false`: only an explicit host places a task here
             have = set([n] + list(h.get("labels") or []))
             if needs <= have:
                 out.append(n)
@@ -270,7 +272,9 @@ class LeadBase(object):
             if b:
                 why.append("%s: backed off (%s)" % (p, b))
                 continue
-            return p, fallback, why
+            # a later provider of the chain that is backed off now is not used for placement
+            avoid = [q for q in chain[i + 1:] if cfg.known_provider(q) and self.backoff(q, snap)]
+            return p, fallback, why, avoid
         reason = "rate_limited" if any("backed off" in w for w in why) else "no_provider"
         raise Refused(reason, "no provider can run %s now: %s" % (spec["id"], "; ".join(why)))
 
@@ -291,13 +295,14 @@ class LeadBase(object):
         hosts = self.host_candidates(spec, host)
         if not hosts:
             raise Refused("host_needs", "no host has %s" % ", ".join((spec.get("exec") or {}).get("host_needs") or []))
-        provider, fallback, why = self.choose_provider(spec, hosts, overrides, snap)
+        provider, fallback, why, avoid = self.choose_provider(spec, hosts, overrides, snap)
         reason = "ready; wip %d/%d; provider %s" % (flying + 1, cap, provider)
         if why:
             reason += " (skipped %s)" % "; ".join(why)
         if resolver:
             reason = "resolver; " + reason
-        return {"task": task, "hosts": hosts, "provider": provider, "provider_fallback": fallback, "reason": reason}
+        return {"task": task, "hosts": hosts, "provider": provider, "provider_fallback": fallback, "reason": reason,
+                "placement_avoid": avoid}
 
     def _claim(self, steal, holder):
         def claim(task, attempt, agent, host, reservations):
@@ -327,6 +332,7 @@ class LeadBase(object):
                 "effort": ex.get("effort"), "max_turns": ex.get("max_turns"), "max_budget_usd": ex.get("budget_usd"),
                 "fallback_model": ex.get("fallback_model"), "timeout_min": ex.get("timeout_min"),
                 "provider": decision["provider"], "provider_fallback": decision["provider_fallback"],
+                "placement_avoid": decision.get("placement_avoid") or [],
                 "reservations": [{"glob": x, "mode": "exclusive"} for x in spec.get("paths") or []] +
                                 [{"glob": x, "mode": "shared"} for x in spec.get("shared_paths") or []],
                 "prompt": prompt or overrides.get("prompt") or prompt_from_spec(spec),
@@ -345,8 +351,14 @@ class LeadBase(object):
                     pass
             reason = "hosts_full" if "full (" in str(e) else "launch_failed"
             raise Refused(reason, "dispatch of %s failed: %s" % (spec["id"], e))
+        reason = decision["reason"]
+        if rec.get("provider") and rec["provider"] != decision["provider"]:
+            reason += "; host %s runs fallback provider %s" % (rec["host"], rec["provider"])
+        if rec.get("placement_skipped"):
+            reason += "; hosts skipped: %s" % "; ".join(
+                "%s: %s" % (n, r[:120]) for n, r in sorted(rec["placement_skipped"].items()))
         payload = {"host": rec["host"], "branch": rec["branch"], "provider": rec.get("provider"),
-                   "agent": rec["agent"], "reason": decision["reason"], "lease_epoch": rec.get("lease_epoch")}
+                   "agent": rec["agent"], "reason": reason, "lease_epoch": rec.get("lease_epoch")}
         if request_id is not None:
             payload["request_id"] = request_id
         if record and record.get("resolver"):
@@ -361,7 +373,7 @@ class LeadBase(object):
                           idem="attempt-start:%s" % rec["agent"])
         return {"task": spec["id"], "attempt": rec["attempt"], "id": rec["id"], "host": rec["host"],
                 "branch": rec["branch"], "agent": rec["agent"], "provider": rec.get("provider"),
-                "lease_id": rec.get("lease_id"), "lease_epoch": rec.get("lease_epoch"), "reason": decision["reason"]}
+                "lease_id": rec.get("lease_id"), "lease_epoch": rec.get("lease_epoch"), "reason": reason}
 
     def _open_request(self, task, snap):
         for r in snap["requests"]:

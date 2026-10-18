@@ -2,7 +2,19 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
-## 0.1.0 (unreleased)
+## 0.1.1
+
+### Fixed
+
+- **Placement and AUTH by provider.** A host with no claude login but with the env file of a provider profile (mode 600) now counts as authenticated for an attempt of that profile. Placement is per attempt: a host can take it with the attempt's provider or with one of its `provider_fallback` profiles (less the ones backed off after a rate limit), limited to the host's `providers` list. Then placement takes the most free slots, then the most free memory. Before, only the first provider was looked at, so an attempt of `anthropic` with a `zai` fallback went to the `local` host (2 slots) and not to build hosts with 4 free slots and only a `zai` file. A host placed with a fallback runs that profile, and the rest of the chain stays its fallback.
+- **`wavecoord hosts` AUTH column.** It shows `provider:<name>` when the host has the env file of `default_provider`, and the login check (`logged-in`, `env`, `keychain?`, `no`) otherwise. STATUS is checked against the host's `providers` list. `--json` adds `auth` and `dispatch` per host.
+- **Skipped hosts are visible.** The `dispatch.decide` reason now names each host that placement skipped and why (for example `build1: unreachable: Permission denied (publickey)`), and a fallback provider when one was used.
+
+### Added
+
+- **`dispatch: false` on a host** (`docs/adapters.md`, `schemas/config.schema.json`): automatic placement never picks the host; `--host` and the `host` of the `dispatch` tool still do.
+
+## 0.1.0
 
 The first usable release: one lead session plans a wave in git, dispatches it to Claude Code workers on local or SSH hosts, and merges the results, with every coordination step in `coord/log`.
 

@@ -35,43 +35,93 @@ def parallel(fn, items, workers=8):
 
 # ---- placement ---------------------------------------------------------------------------------
 
-def why_ineligible(p, provider=ANTHROPIC):
-    """Why a probed host cannot take a worker of `provider` now, or None.
+def attempt_auth(p, provider=ANTHROPIC):
+    """How a probed host authenticates a worker of `provider`. -> (label, None) or (None, why not).
 
-    'full' is the only transient reason."""
+    A profile other than built-in `anthropic` authenticates with its env file on the
+    host (present, mode 600), so the label is `provider:<name>` and no claude login
+    is needed. Built-in `anthropic` needs the claude login (`logged-in`, `env`, `keychain?`)."""
+    c = p.get("claude") or {}
+    prov = (p.get("providers") or {}).get(provider)
+    if provider != ANTHROPIC or (prov and not prov.get("builtin")):
+        if not prov:
+            return None, "provider %s is not on this host" % provider
+        if not prov.get("present"):
+            return None, "provider %s: %s" % (provider, prov.get("why"))
+        return "provider:%s" % provider, None
+    if c.get("auth") == "no":
+        return None, "claude is not logged in (run `claude auth login` on the host)"
+    return c.get("auth") or "?", None
+
+
+def _base_why(p):
     if not p.get("ok"):
         return "unreachable: %s" % (p.get("error") or "?")[-200:]
     if not p.get("repo_ok"):
         return "repo_path is not a git checkout"
-    c = p.get("claude") or {}
-    if not c.get("installed"):
+    if not (p.get("claude") or {}).get("installed"):
         return "claude is not installed"
-    prov = (p.get("providers") or {}).get(provider)
-    if provider != ANTHROPIC or (prov and not prov.get("builtin")):
-        if not prov:
-            return "provider %s is not on this host" % provider
-        if not prov.get("present"):
-            return "provider %s: %s" % (provider, prov.get("why"))
-    elif c.get("auth") == "no":
-        return "claude is not logged in (run `claude auth login` on the host)"
+    return None
+
+
+def host_provider(p, chain):
+    """The first provider of `chain` that a probed host can authenticate. -> (provider, None) or (None, why not).
+
+    It does not look at free slots."""
+    why = _base_why(p)
+    if why:
+        return None, why
+    whys = []
+    for prov in chain:
+        label, w = attempt_auth(p, prov)
+        if label:
+            return prov, None
+        whys.append(w)
+    return None, "; ".join(whys) or "no provider"
+
+
+def why_ineligible(p, provider=ANTHROPIC, fallback=()):
+    """Why a probed host cannot take a worker of `provider` (or of a `fallback` provider) now, or None.
+
+    'full' is the only transient reason."""
+    _, why = host_provider(p, [provider] + [x for x in fallback or () if x != provider])
+    if why:
+        return why
     if p.get("free", 0) <= 0:
         return "full (%s/%s slots)" % (p.get("active"), p.get("slots"))
     return None
 
 
-def place(probes, provider=ANTHROPIC):
-    """Eligible host names, best first: most free slots, then most free memory, then name.
+def placement(probes, chain, allowed=None):
+    """Eligible hosts, best first, each with the provider it runs the attempt with.
 
-    -> (ordered names, {name: why not})"""
+    A host is eligible when it can authenticate one provider of `chain` (the attempt's
+    provider, then its fallbacks) and has a free slot. Order: most free slots, then most
+    free memory, then the earlier provider of `chain`, then the name. `allowed`
+    ({name: provider names}, the host's `providers` in the config) limits `chain` per host.
+    -> ([(name, provider)], {name: why not})"""
+    chain = [c for i, c in enumerate(chain) if c not in chain[:i]]
     ok, why = [], {}
     for name, p in probes.items():
-        r = why_ineligible(p, provider)
+        mine = [c for c in chain if allowed is None or c in allowed.get(name, ())]
+        prov, r = host_provider(p, mine) if mine else (None, "provider %s is not on this host" % ", ".join(chain))
+        if not r and p.get("free", 0) <= 0:
+            r = "full (%s/%s slots)" % (p.get("active"), p.get("slots"))
         if r:
             why[name] = r
         else:
-            ok.append(name)
-    ok.sort(key=lambda n: (-probes[n].get("free", 0), -(probes[n].get("mem_avail_gib") or 0), n))
+            ok.append((name, prov))
+    ok.sort(key=lambda np: (-probes[np[0]].get("free", 0), -(probes[np[0]].get("mem_avail_gib") or 0),
+                            chain.index(np[1]), np[0]))
     return ok, why
+
+
+def place(probes, provider=ANTHROPIC, fallback=()):
+    """Eligible host names, best first: most free slots, then most free memory, then name.
+
+    -> (ordered names, {name: why not})"""
+    ok, why = placement(probes, [provider] + list(fallback or ()))
+    return [n for n, _ in ok], why
 
 
 # ---- the client --------------------------------------------------------------------------------
@@ -108,6 +158,10 @@ class Launcher(object):
     def host_profiles(self, name):
         """{provider: profile or None} that host `name` has (paths and models only; no secrets)."""
         return {p: self.cfg.profile(p) for p in self.cfg.host_providers(name)}
+
+    def allowed(self, names):
+        """{host: the provider names its config lists} for placement."""
+        return {n: set(self.cfg.host_providers(n)) for n in names}
 
     def probe(self, names=None):
         names = names or sorted(self.hosts)
@@ -213,39 +267,59 @@ class Launcher(object):
         except (OSError, subprocess.TimeoutExpired) as e:
             warn("%s: coordinator tunnel failed: %s (reports are spooled on the host)" % (h.name, e))
 
-    # -- launch
-    def launch(self, opts):
-        task = opts["task"]
-        if not TASK_RE.match(task or ""):
-            raise LauncherError("bad task id %r" % task)
+    # -- placement
+    def select_host(self, opts):
+        """Pick the host and the provider of one attempt (docs/launcher.md, "Hosts and placement").
+
+        -> {host, provider, chain, fallback, probes, skipped: {host: why not}}"""
         provider = opts.get("provider") or self.cfg.default_provider
         fallback = list(opts.get("provider_fallback") or [])
         for p in [provider] + fallback:
             if not self.cfg.known_provider(p):
                 raise LauncherError("unknown provider %r (configured: %s)"
                                     % (p, ", ".join(sorted(set(self.cfg.providers) | {ANTHROPIC}))))
-        names = [opts["host"]] if opts.get("host") else sorted(opts.get("hosts") or self.hosts)
+        # the providers this attempt may be placed with: its provider, then its fallbacks
+        # (less the ones the lead backed off); the spec keeps the whole fallback list
+        avoid = set(opts.get("placement_avoid") or ())
+        chain = [provider] + [p for p in fallback if p != provider and p not in avoid]
+        if opts.get("host"):
+            names = [opts["host"]]
+        else:
+            # a host with `dispatch: false` takes an attempt only by an explicit --host
+            names = [n for n in sorted(opts.get("hosts") or self.hosts) if self.cfg.auto_dispatch(n)]
+            if not names:
+                raise LauncherError("no host for automatic placement (every host has dispatch: false; use --host)")
         for n in names:
             self.host(n)
-        names = [n for n in names if provider in self.cfg.host_providers(n)]
+        names = [n for n in names if set(chain) & set(self.cfg.host_providers(n))]
         if not names:
-            raise LauncherError("no host has provider %s" % provider)
+            raise LauncherError("no host has provider %s" % ", ".join(chain))
         announced = None
         while True:
             probes = self.probe(names)
-            order, why = place(probes, provider)
+            order, why = placement(probes, chain, self.allowed(names))
             if order:
                 break
             transient = any(r.startswith("full") for r in why.values())
             if not (opts.get("wait") and transient):
-                raise LauncherError("no host can take %s: %s" % (task, "; ".join("%s: %s" % kv for kv in sorted(why.items()))))
+                raise LauncherError("no host can take %s: %s" % (opts["task"], "; ".join("%s: %s" % kv for kv in sorted(why.items()))))
             summary = "; ".join("%s: %s" % kv for kv in sorted(why.items()))
             if summary != announced:
                 warn("waiting for a free slot (%s)" % summary)
                 announced = summary
             time.sleep(float(os.environ.get("WAVECOORD_POLL_S", POLL_S)))
-        name = order[0]
-        h, probe = self.hosts[name], probes[name]
+        name, provider = order[0]
+        return {"host": name, "provider": provider, "chain": chain, "fallback": fallback, "probes": probes,
+                "skipped": dict(why)}
+
+    # -- launch
+    def launch(self, opts):
+        task = opts["task"]
+        if not TASK_RE.match(task or ""):
+            raise LauncherError("bad task id %r" % task)
+        sel = self.select_host(opts)
+        name, provider, chain, fallback, probes = sel["host"], sel["provider"], sel["chain"], sel["fallback"], sel["probes"]
+        h, probe, skipped = self.hosts[name], probes[name], sel["skipped"]
 
         existing = self.existing_attempts(task)
         if opts.get("attempt"):
@@ -260,10 +334,14 @@ class Launcher(object):
         rec = self.index_get(aid) or {}
         if opts.get("continue") and rec.get("host") and not opts.get("host") and rec["host"] in self.hosts:
             # continue where the earlier run is, so its worktree and session are reused
-            if provider in self.cfg.host_providers(rec["host"]) and \
-                    not why_ineligible(probes.get(rec["host"]) or self.probe([rec["host"]])[rec["host"]], provider):
-                name, h = rec["host"], self.hosts[rec["host"]]
-                probe = probes.get(name) or self.probe([name])[name]
+            if set(chain) & set(self.cfg.host_providers(rec["host"])):
+                p_prev = probes.get(rec["host"]) or self.probe([rec["host"]])[rec["host"]]
+                prev = placement({rec["host"]: p_prev}, chain, self.allowed([rec["host"]]))[0]
+                if prev:
+                    name, provider = prev[0]
+                    h, probe = self.hosts[name], p_prev
+        if provider != chain[0]:
+            fallback = fallback[fallback.index(provider) + 1:]  # placed with a fallback: the rest stay fallbacks
         branch = "%s/%s" % (self.cfg.branch_prefix, aid)
         agent = "worker-%s-%s" % (aid, rand4())
         lease_id, epoch = opts.get("lease_id"), opts.get("lease_epoch")
@@ -302,6 +380,8 @@ class Launcher(object):
                "session_id": spec["session_id"], "lease_id": lease_id, "lease_epoch": epoch, "lease_note": lease_note,
                "worktree": out.get("worktree"), "provider": provider, "provider_fallback": fallback, "created": now(),
                "continue": bool(opts.get("continue")), "collected": False}
+        if skipped:
+            rec["placement_skipped"] = {n: r[:200] for n, r in sorted(skipped.items())}
         if opts.get("continue") and old.get("pr_url"):
             rec["pr_url"] = old["pr_url"]  # a --continue run keeps the PR of the earlier run
         for k, v in (opts.get("record") or {}).items():
