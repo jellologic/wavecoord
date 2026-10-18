@@ -24,6 +24,7 @@ API_DEFS = {
     "check-response.json": "check_response",
     "reservation-request.json": "reservation_request",
     "notify-request.json": "notify_request",
+    "report-request.json": "report_request",
     "tokens-file.json": "tokens_file",
     "mcp-initialize.json": "jsonrpc_exchange",
     "mcp-tools-call-inbox.json": "jsonrpc_exchange",

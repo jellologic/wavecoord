@@ -82,7 +82,7 @@ class CliTest(unittest.TestCase):
                 self.assertEqual((p.returncode, p.stdout, p.stderr), (0, "", ""), (ev, stdin))
 
     def test_stubs_exit_2(self):
-        for name in ("launch",):
+        for name in cli.STUBS:  # every command is implemented now
             p = run([name, "--any", "arg"])
             self.assertEqual(p.returncode, 2, name)
             self.assertIn("not implemented in P0", p.stderr)

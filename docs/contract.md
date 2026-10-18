@@ -126,7 +126,7 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `GET /api/plan/ready`, `GET /api/plan/tasks/<id>`, `GET /api/plan/graph` | read | Through the plan adapter (`adapters.md`) |
 | `POST /api/dispatch` | lead | Start attempts for tasks (one or a wave) |
 | `GET /api/attempts`, `GET /api/attempts/<task>/<n>` | read | Attempts with their reports |
-| `POST /api/attempts/<task>/<n>/report` | agent (own), lead | Post the report (validated against the schema) |
+| `POST /api/attempts/<task>/<n>/report` | agent (own), lead | Post the report (`report_request`; the report is validated against `report.schema.json`). The launcher stats (cost basis, usage, provider, throttling, push, PR) are kept on the attempt |
 | `POST /api/resolve` | lead | Start a resolver attempt for a conflict |
 | `GET /api/refinery`, `POST /api/refinery/merge` | read / lead | Merge queue status; merge a parked attempt through `merge_cmd` |
 | `POST /api/proposals`, `PATCH /api/proposals/<id>` | agent, lead / lead | Plan proposals and their decisions |

@@ -1,7 +1,8 @@
 """The wavecoord command line. Stdlib only, Python >= 3.9.
 
-Implemented: `version`, `status`, `hook` and `guard`, plus the core commands
-(serve, log, revert, rebuild, events, tokens; see corecli.py). Other commands are stubs.
+Implemented: `version`, `status`, `hook`, `guard`, the core commands (serve, log, revert,
+rebuild, events, tokens; see corecli.py) and the launcher (launch, hosts, attempts, gc;
+see docs/launcher.md).
 """
 
 import argparse
@@ -35,7 +36,6 @@ HOOK_EVENTS = (
 )
 
 STUBS = {
-    "launch": "launch a worker attempt on a host",
 }
 
 
@@ -152,6 +152,8 @@ def build_parser():
     gp.set_defaults(func=cmd_guard)
 
     corecli.register(sub)
+    from wavecoord.launcher.cli import register as register_launcher
+    register_launcher(sub)
 
     for name, helptext in STUBS.items():
         sp = sub.add_parser(name, help=helptext + " (not implemented in P0)")
@@ -160,6 +162,10 @@ def build_parser():
 
 
 def main(argv=None):
+    argv = sys.argv[1:] if argv is None else list(argv)
+    if argv[:1] == ["_remote"]:  # host side of the launcher; JSON on stdin and stdout
+        from wavecoord.launcher.hostside import main as remote_main
+        return remote_main(argv[1:])
     parser = build_parser()
     args, extra = parser.parse_known_args(argv)
     if extra and not getattr(args, "accepts_extra", False):

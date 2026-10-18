@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 """Build plugin/bin/wavecoord, an executable Python zipapp, from src/wavecoord.
 
+The build logic is in src/wavecoord/zipapp.py (the launcher uses it too). It
+also embeds every schemas/*.schema.json.
 The build is deterministic: sorted entries, a fixed timestamp, fixed file modes
 and no compression (zlib output can differ between platforms). So the committed
 file can be checked in CI:
@@ -10,53 +12,19 @@ file can be checked in CI:
 """
 
 import argparse
-import io
 import os
 import sys
-import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
-SCHEMAS = os.path.join(ROOT, "schemas")
-PKG = "wavecoord"
 OUT = os.path.join(ROOT, "plugin", "bin", "wavecoord")
-SHEBANG = b"#!/usr/bin/env python3\n"
-FIXED_TIME = (1980, 1, 1, 0, 0, 0)
-FILE_MODE = 0o100644 << 16
-MAIN = b"import sys\nfrom wavecoord.cli import main\nsys.exit(main())\n"
 
-
-def collect():
-    """Sorted (archive name, bytes) pairs: every .py file of the package and the schemas."""
-    entries = [("__main__.py", MAIN)]
-    base = os.path.join(SRC, PKG)
-    for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = sorted(d for d in dirnames if d != "__pycache__")
-        for fn in filenames:
-            if not fn.endswith(".py") or fn.startswith("."):
-                continue
-            full = os.path.join(dirpath, fn)
-            arc = os.path.relpath(full, SRC).replace(os.sep, "/")
-            with open(full, "rb") as f:
-                data = f.read().replace(b"\r\n", b"\n")
-            entries.append((arc, data))
-    # The schemas ship inside the package, so the server can validate events.
-    for fn in sorted(os.listdir(SCHEMAS)):
-        if fn.endswith(".schema.json"):
-            with open(os.path.join(SCHEMAS, fn), "rb") as f:
-                entries.append((PKG + "/_schemas/" + fn, f.read().replace(b"\r\n", b"\n")))
-    return sorted(entries)
+sys.path.insert(0, SRC)
+from wavecoord import zipapp  # noqa: E402  (the build logic is shared with the launcher)
 
 
 def build_bytes():
-    buf = io.BytesIO()
-    with zipfile.ZipFile(buf, "w", zipfile.ZIP_STORED) as z:
-        for arc, data in collect():
-            info = zipfile.ZipInfo(arc, date_time=FIXED_TIME)
-            info.external_attr = FILE_MODE
-            info.create_system = 3  # unix, so the result is the same on every OS
-            z.writestr(info, data, compress_type=zipfile.ZIP_STORED)
-    return SHEBANG + buf.getvalue()
+    return zipapp.build_bytes(SRC, ROOT)
 
 
 def main(argv=None):

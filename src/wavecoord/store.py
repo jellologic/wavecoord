@@ -298,6 +298,10 @@ class State(object):
         rep = p["report"]
         a = dict(a, report=rep, cost_usd=p.get("cost_usd"), turns=p.get("turns"), ended=ev["ts"],
                  state="failed" if rep.get("status") == "failed" else "reported")
+        for k in ("cost_basis", "usage", "model_usage", "provider", "throttled", "throttle", "next_provider",
+                  "pushed", "pr_url"):
+            if p.get(k) is not None:
+                a[k] = p[k]
         self.put("attempts", key, a)
 
     def _on_message_new(self, ev, p, h):

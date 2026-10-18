@@ -229,9 +229,16 @@ class RestTest(ServerCase):
         self.req("POST", "/api/leases", fixture("claim-request.json"))
         rep = {"status": "done", "summary": "ok", "commits": ["3f9a1c2"], "files": [], "checks_run": [],
                "acceptance_met": True, "questions": [], "proposals": [], "plan_feedback": "", "risks_hit": []}
-        s, b = self.req("POST", "/api/attempts/api-auth/1/report", {"report": rep, "cost_usd": 1.5},
+        s, b = self.req("POST", "/api/attempts/api-auth/1/report",
+                        {"report": rep, "cost_usd": 1.5, "cost_basis": "none", "provider": "zai", "throttled": True,
+                         "throttle": ["api_retry:2"], "next_provider": "openrouter", "usage": {"input_tokens": 9}},
                         token="h1-secret")
         self.assertEqual((s, b["attempt"]["state"]), (200, "reported"))
+        a = b["attempt"]
+        self.assertEqual((a["provider"], a["cost_basis"], a["next_provider"], a["usage"]),
+                         ("zai", "none", "openrouter", {"input_tokens": 9}))
+        s, b = self.req("POST", "/api/attempts/api-auth/1/report", {"report": rep, "bogus_field": 1})
+        self.assertEqual(s, 400)
         s, b = self.req("POST", "/api/attempts/api-auth/1/report", {"report": dict(rep, status="bogus")})
         self.assertEqual(s, 400)
         s, b = self.req("POST", "/api/rebuild", {})

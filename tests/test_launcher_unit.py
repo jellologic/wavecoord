@@ -1,0 +1,209 @@
+"""Unit tests of the launcher: placement, the stream parser, config, the zipapp and plugin archive."""
+
+import io
+import json
+import os
+import tarfile
+import tempfile
+import unittest
+import zipfile
+
+import _paths
+from wavecoord import zipapp
+from wavecoord.launcher import client, config, coord, stream
+from wavecoord.launcher.common import LauncherError
+from wavecoord.launcher.worktrees import check_branch
+from wavecoord.launcher.wrapper import synthetic_report, validate_report
+
+
+def probe(free=1, mem=8.0, ok=True, auth="logged-in", installed=True, repo_ok=True, slots=2):
+    return {"ok": ok, "free": free, "active": slots - free, "slots": slots, "mem_avail_gib": mem,
+            "repo_ok": repo_ok, "claude": {"installed": installed, "auth": auth}, "error": None if ok else "down"}
+
+
+class PlacementTest(unittest.TestCase):
+    def test_most_free_slots_then_memory(self):
+        order, why = client.place({"a": probe(free=1, mem=64), "b": probe(free=3, mem=4), "c": probe(free=3, mem=16)})
+        self.assertEqual(order, ["c", "b", "a"])
+        self.assertEqual(why, {})
+
+    def test_tie_is_by_name(self):
+        order, _ = client.place({"b": probe(), "a": probe()})
+        self.assertEqual(order, ["a", "b"])
+
+    def test_ineligible_hosts(self):
+        order, why = client.place({
+            "full": probe(free=0), "down": probe(ok=False), "noauth": probe(auth="no"),
+            "noclaude": probe(installed=False), "norepo": probe(repo_ok=False), "good": probe(mem=None)})
+        self.assertEqual(order, ["good"])
+        self.assertTrue(why["full"].startswith("full"))
+        self.assertTrue(why["down"].startswith("unreachable"))
+        self.assertIn("not logged in", why["noauth"])
+        self.assertIn("not installed", why["noclaude"])
+        self.assertIn("git checkout", why["norepo"])
+
+    def test_keychain_auth_is_eligible(self):
+        order, _ = client.place({"mac": probe(auth="keychain?")})
+        self.assertEqual(order, ["mac"])
+
+
+class AuthProbeTest(unittest.TestCase):
+    def test_presence_only(self):
+        from wavecoord.launcher.hostside import claude_auth
+        with tempfile.TemporaryDirectory() as d:
+            self.assertEqual(claude_auth({"ANTHROPIC_API_KEY": "x"}), "env")
+            cfg = os.path.join(d, "cfg")
+            os.makedirs(cfg)
+            expect_none = "keychain?" if os.uname().sysname == "Darwin" else "no"
+            self.assertEqual(claude_auth({"CLAUDE_CONFIG_DIR": cfg}), expect_none)
+            open(os.path.join(cfg, ".credentials.json"), "w").close()
+            self.assertEqual(claude_auth({"CLAUDE_CONFIG_DIR": cfg}), "logged-in")
+
+
+class StreamTest(unittest.TestCase):
+    def test_parse(self):
+        s = stream.StreamStats()
+        lines = [
+            {"type": "system", "subtype": "init", "session_id": "s1", "model": "m", "claude_code_version": "9",
+             "plugins": [{"name": "wavecoord", "path": "/x"}]},
+            {"type": "system", "subtype": "hook_started", "hook_name": "SessionStart"},
+            {"type": "assistant", "parent_tool_use_id": None,
+             "message": {"content": [{"type": "tool_use", "name": "Bash", "input": {"command": "make test"}}]}},
+            {"type": "assistant", "parent_tool_use_id": "toolu_1", "message": {"content": []}},
+            {"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 5, "retry_delay_ms": 10,
+             "error_status": 529, "error": "overloaded"},
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}},
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"}},
+            {"type": "result", "subtype": "success", "is_error": False, "num_turns": 4, "total_cost_usd": 0.5,
+             "session_id": "s1", "structured_output": {"status": "done"}},
+        ]
+        notable = []
+        for l in lines:
+            notable += s.feed(json.dumps(l))
+        notable += s.feed("not json")
+        self.assertEqual([k for k, _ in notable], ["api_retry", "rate_limit"])
+        sm = s.summary()
+        self.assertEqual((sm["session_id"], sm["turns"], sm["cost_usd"]), ("s1", 4, 0.5))
+        self.assertEqual((sm["api_retries"], sm["throttled_retries"], sm["hook_events"]), (1, 1, 1))
+        self.assertEqual(sm["last_tool"], "Bash: make test")
+        self.assertEqual(sm["plugins"], ["wavecoord"])
+        self.assertFalse(s.is_error)
+        self.assertEqual(s.structured_output, {"status": "done"})
+        self.assertEqual(s.bad_lines, 1)
+
+    def test_no_result_is_error(self):
+        s = stream.StreamStats()
+        s.feed(json.dumps({"type": "system", "subtype": "init", "session_id": "x"}))
+        self.assertTrue(s.is_error)
+        s.feed(json.dumps({"type": "result", "subtype": "error_max_turns", "is_error": True}))
+        self.assertTrue(s.is_error)
+
+
+class ReportTest(unittest.TestCase):
+    def test_synthetic_report_is_valid(self):
+        self.assertEqual(validate_report(synthetic_report("x" * 5000, ["a" * 40], ["f.py"])), [])
+        self.assertEqual(validate_report(synthetic_report("")), [])
+
+    def test_validate(self):
+        with open(os.path.join(_paths.FIXTURES, "report", "done.json")) as f:
+            self.assertEqual(validate_report(json.load(f)), [])
+        self.assertTrue(validate_report(None))
+        self.assertTrue(validate_report({"status": "done"}))
+
+
+class BranchTest(unittest.TestCase):
+    def test_refuses(self):
+        for b in ("main", "master", "HEAD", "-x", "", "trunk", "dev", "coord/log", "a..b"):
+            with self.assertRaises(LauncherError, msg=b):
+                check_branch(b, "dev", "coord/log")
+        check_branch("wave/t1-1", "main", "coord/log")
+
+
+class ConfigTest(unittest.TestCase):
+    def test_defaults_without_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = config.load_config(cwd=d)
+            self.assertEqual(list(cfg.hosts), ["local"])
+            self.assertEqual(cfg.hosts["local"]["slots"], 2)
+            self.assertEqual(cfg.hosts["local"]["repo_path"], cfg.root)
+            self.assertEqual(cfg.branch_prefix, "wave")
+            self.assertEqual(cfg.pr_cmd, config.DEFAULT_PR_CMD)
+
+    def test_fixture_and_relative_repo_path(self):
+        with tempfile.TemporaryDirectory() as d:
+            os.makedirs(os.path.join(d, ".claude"))
+            with open(os.path.join(_paths.FIXTURES, "config", "full.json")) as f:
+                raw = json.load(f)
+            with open(os.path.join(d, ".claude", "wavecoord.json"), "w") as f:
+                json.dump(raw, f)
+            sub = os.path.join(d, "x", "y")
+            os.makedirs(sub)
+            cfg = config.load_config(cwd=sub)
+            self.assertEqual(cfg.hosts["local"]["repo_path"], os.path.normpath(cfg.root))
+            self.assertEqual(cfg.hosts["build-1"]["repo_path"], "/srv/repo")
+            self.assertEqual(cfg.wip_cap, 6)
+            self.assertEqual(cfg.coord_url(), os.environ.get("WAVECOORD_URL") or
+                             os.environ.get("CLAUDE_PLUGIN_OPTION_COORD_URL") or "http://127.0.0.1:18741")
+
+    def test_invalid(self):
+        with tempfile.TemporaryDirectory() as d:
+            p = os.path.join(d, ".claude", "wavecoord.json")
+            os.makedirs(os.path.dirname(p))
+            with open(p, "w") as f:
+                json.dump({"project": "demo", "hosts": [{"name": "x"}]}, f)
+            with self.assertRaises(LauncherError):
+                config.load_config(cwd=d)
+
+
+class ZipappTest(unittest.TestCase):
+    def test_embedded_schemas_match(self):
+        with open(os.path.join(_paths.ROOT, "plugin", "bin", "wavecoord"), "rb") as f:
+            data = f.read()
+        z = zipfile.ZipFile(io.BytesIO(data[len(zipapp.SHEBANG):]))
+        for name in zipapp.EMBEDDED_SCHEMAS:
+            with open(os.path.join(_paths.SCHEMAS, name), "rb") as f:
+                self.assertEqual(z.read("wavecoord/_schemas/" + name), f.read(), name)
+        with open(os.path.join(_paths.SCHEMAS, "report.schema.json"), "rb") as f:
+            self.assertEqual(zipapp.load_schema_bytes("report.schema.json"), f.read())
+
+    def test_plugin_tar_is_deterministic_and_pins_this_build(self):
+        pd = os.path.join(_paths.ROOT, "plugin")
+        a, b = zipapp.plugin_tar(pd), zipapp.plugin_tar(pd)
+        self.assertEqual(a, b)
+        with tarfile.open(fileobj=io.BytesIO(a)) as t:
+            names = t.getnames()
+            self.assertIn(".claude-plugin/plugin.json", names)
+            self.assertEqual(t.extractfile("bin/wavecoord").read(), zipapp.self_bytes())
+            self.assertTrue(t.getmember("bin/wavecoord").mode & 0o100)
+
+    def test_safe_extract_refuses_escape(self):
+        buf = io.BytesIO()
+        with tarfile.open(fileobj=buf, mode="w") as t:
+            info = tarfile.TarInfo("../evil")
+            info.size = 1
+            t.addfile(info, io.BytesIO(b"x"))
+        with tempfile.TemporaryDirectory() as d:
+            with self.assertRaises(ValueError):
+                zipapp.safe_extract(buf.getvalue(), d)
+
+
+class SpoolTest(unittest.TestCase):
+    def test_spool_and_flush_to_dead_server(self):
+        with tempfile.TemporaryDirectory() as d:
+            old = os.environ.get("WAVECOORD_HOME")
+            os.environ["WAVECOORD_HOME"] = d
+            try:
+                c = coord.Coord("http://127.0.0.1:9", agent="a", token="")
+                self.assertEqual(c.post_or_spool("/api/notify", {"kind": "x"}), "spooled")
+                self.assertEqual(coord.spool_count(), 1)
+                self.assertEqual(coord.flush_spool()["kept"], 1)
+                self.assertEqual(coord.Coord(None).post_or_spool("/api/notify", {}), "off")
+            finally:
+                if old is None:
+                    os.environ.pop("WAVECOORD_HOME")
+                else:
+                    os.environ["WAVECOORD_HOME"] = old
+
+
+if __name__ == "__main__":
+    unittest.main()

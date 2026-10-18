@@ -1,0 +1,13 @@
+{
+  "schema": "config",
+  "doc": {
+    "project": "demo",
+    "providers": {
+      "zai": {
+        "models": {
+          "opus": "glm-5.3"
+        }
+      }
+    }
+  }
+}
