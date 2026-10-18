@@ -310,7 +310,10 @@ class McpTest(ServerCase):
     def test_initialize_matches_fixture(self):
         fx = fixture("mcp-initialize.json")
         s, b = self.rpc(fx["request"])
-        self.assertEqual((s, b), (200, fx["response"]))
+        from wavecoord import __version__
+        want = json.loads(json.dumps(fx["response"]))
+        want["result"]["serverInfo"]["version"] = __version__  # the fixture is an example of an older release
+        self.assertEqual((s, b), (200, want))
         s, b = self.rpc({"jsonrpc": "2.0", "method": "notifications/initialized"})
         self.assertEqual((s, b), (202, None))
         s, b = self.rpc({"jsonrpc": "2.0", "id": 9, "method": "ping"})

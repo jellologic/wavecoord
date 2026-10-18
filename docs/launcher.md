@@ -44,7 +44,7 @@ Every host command is `python3 -I ~/.wavecoord/bin/wavecoord-<hash> _remote <cmd
 
 The client also pins the plugin: it builds a deterministic tar of the plugin directory with `bin/wavecoord` replaced by this exact zipapp, and installs it as `~/.wavecoord/plugin-<hash>/` on the host when missing. Every worker gets that copy as `--plugin-dir`, so all workers run the same plugin version; rolling back is moving the pin.
 
-**Coordinator access from a host.** The client sends the coordinator URL. When the host cannot reach a loopback coordinator, the client starts `ssh -f -N -R <port>:127.0.0.1:<port>` to it. When `~/.wavecoord/hosts/<host>.token` exists on the client, it copies that agent token to the host's `~/.wavecoord/token` (mode 600) through stdin, never on a command line, when the host's copy differs.
+**Coordinator access from a host.** The client sends the coordinator URL. When the host cannot reach a loopback coordinator, the client starts `ssh -f -N -R <port>:127.0.0.1:<port>` to it. When `~/.wavecoord/hosts/<host>.token` exists on the client, it copies that agent token to the host's `~/.wavecoord/token` (mode 600) through stdin, never on a command line, when the host's copy differs. A local host shares `~/.wavecoord` with the client, so nothing is copied: the wrapper uses `~/.wavecoord/hosts/<host>.token` directly (`WAVECOORD_TOKEN_FILE`) when it exists, so local workers do not use the lead's `~/.wavecoord/token` (`security.md`).
 
 ## Attempt lifecycle (host side)
 

@@ -104,6 +104,11 @@ class Attempt(object):
             raise LauncherError("no task.json in %s" % self.d)
         t = self.task
         self.spec = t["spec"]
+        tf = self.spec.get("token_file")
+        if tf and os.path.isfile(tf):
+            # a local host's own agent token (client.py, ensure_token): never the lead's token
+            os.environ["WAVECOORD_TOKEN_FILE"] = tf
+            os.environ.pop("CLAUDE_PLUGIN_OPTION_TOKEN", None)
         self.wt = t["worktree"]
         self.branch = t["branch"]
         self.default = t["default_branch"]

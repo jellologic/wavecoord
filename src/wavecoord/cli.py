@@ -3,7 +3,7 @@
 Implemented: `version`, `status`, `hook`, `guard`, the core commands (serve, log, revert,
 rebuild, events, tokens; see corecli.py), `channel` (see docs/feedback.md), the launcher
 (launch, hosts, attempts, gc; see docs/launcher.md) and the lead tools (dispatch, collect,
-refinery, plan; see leadcli.py).
+refinery, plan; see leadcli.py) and `install-server` (installsrv.py).
 """
 
 import argparse
@@ -166,6 +166,8 @@ def build_parser():
     register_launcher(sub)
     from wavecoord.leadcli import register as register_lead
     register_lead(sub)
+    from wavecoord.installsrv import register as register_install
+    register_install(sub)
 
     for name, helptext in STUBS.items():
         sp = sub.add_parser(name, help=helptext + " (not implemented in P0)")
