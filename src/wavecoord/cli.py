@@ -1,6 +1,7 @@
 """The wavecoord command line. Stdlib only, Python >= 3.9.
 
-Implemented: `version`, `status`, `hook` and `guard`. Other commands are stubs.
+Implemented: `version`, `status`, `hook` and `guard`, plus the core commands
+(serve, log, revert, rebuild, events, tokens; see corecli.py). Other commands are stubs.
 """
 
 import argparse
@@ -10,7 +11,7 @@ import sys
 import urllib.error
 import urllib.request
 
-from wavecoord import __version__
+from wavecoord import __version__, corecli
 
 NOT_IMPLEMENTED_EXIT = 2
 STATUS_TIMEOUT_S = 3.0
@@ -34,11 +35,7 @@ HOOK_EVENTS = (
 )
 
 STUBS = {
-    "serve": "run the coordinator server",
     "launch": "launch a worker attempt on a host",
-    "log": "inspect the coord/log event branch",
-    "revert": "revert one coordination event",
-    "rebuild": "rebuild the state cache from the event log",
 }
 
 
@@ -93,9 +90,8 @@ def cmd_status(args):
         with urllib.request.urlopen(health, timeout=args.timeout) as r:
             body = json.loads(r.read().decode("utf-8"))
     except (urllib.error.URLError, OSError, ValueError) as e:
-        # P0 rule: anything short of a reachable coordinator is "not configured".
-        print("not configured: no coordinator reachable at %s (%s)" % (url, getattr(e, "reason", e)))
-        return 0
+        print("unreachable: no coordinator answers at %s (%s)" % (url, getattr(e, "reason", e)))
+        return 1
     print("ok: %s version=%s api=%s" % (url, body.get("version"), body.get("api")))
     return 0
 
@@ -154,6 +150,8 @@ def build_parser():
     mode.add_argument("--push", metavar="RANGE", help="check a revision range, or - for pre-push stdin")
     gp.add_argument("--enforce", action="store_true", help="fail on a violation (reserved for the P6 fence)")
     gp.set_defaults(func=cmd_guard)
+
+    corecli.register(sub)
 
     for name, helptext in STUBS.items():
         sp = sub.add_parser(name, help=helptext + " (not implemented in P0)")

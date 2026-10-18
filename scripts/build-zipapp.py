@@ -17,6 +17,7 @@ import zipfile
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 SRC = os.path.join(ROOT, "src")
+SCHEMAS = os.path.join(ROOT, "schemas")
 PKG = "wavecoord"
 OUT = os.path.join(ROOT, "plugin", "bin", "wavecoord")
 SHEBANG = b"#!/usr/bin/env python3\n"
@@ -26,7 +27,7 @@ MAIN = b"import sys\nfrom wavecoord.cli import main\nsys.exit(main())\n"
 
 
 def collect():
-    """Sorted (archive name, bytes) pairs for every .py file of the package."""
+    """Sorted (archive name, bytes) pairs: every .py file of the package and the schemas."""
     entries = [("__main__.py", MAIN)]
     base = os.path.join(SRC, PKG)
     for dirpath, dirnames, filenames in os.walk(base):
@@ -39,6 +40,11 @@ def collect():
             with open(full, "rb") as f:
                 data = f.read().replace(b"\r\n", b"\n")
             entries.append((arc, data))
+    # The schemas ship inside the package, so the server can validate events.
+    for fn in sorted(os.listdir(SCHEMAS)):
+        if fn.endswith(".schema.json"):
+            with open(os.path.join(SCHEMAS, fn), "rb") as f:
+                entries.append((PKG + "/_schemas/" + fn, f.read().replace(b"\r\n", b"\n")))
     return sorted(entries)
 
 

@@ -2,7 +2,7 @@
 
 This page is the contract between the wavecoord server and its clients: the worker launcher, the Claude Code hooks, the lead's MCP tools, the channel bridge and any UI. The schemas in `schemas/` and the examples in `tests/fixtures/` are part of the contract. Change them together, in one PR.
 
-Status: P0 (contract only). The server arrives in P1.
+Status: P1. The server (`wavecoord serve`), the log, the cache, REST, SSE and the MCP tools of section 8 exist. Plan, dispatch, resolve and refinery tools answer `isError` until P4.
 
 ## 1. Model in one paragraph
 
@@ -29,10 +29,11 @@ Terms:
   snapshots/<seq:012d>.json                          full folded state at <seq>, every SNAPSHOT_EVERY events
   meta.json                                          {"schema": 1, "project": "<project>"}
   ```
-  `hash12` is the first 12 hex digits of the sha256 of the event's canonical JSON (sorted keys, no spaces, UTF-8). `prev` is the full sha256 of event `seq-1`, so the log is a hash chain and a gap or edit is detectable.
+  `hash12` is the first 12 hex digits of the sha256 of the event's canonical JSON (sorted keys, no spaces, UTF-8). `prev` is the full sha256 of event `seq-1`, so the log is a hash chain and a gap or edit is detectable. An event file holds exactly the canonical JSON (no trailing newline), so `prev` is also the sha256 of the file bytes. The server verifies the chain on start and refuses a broken log.
 - **Transitions only.** The server logs a change of state, never a repeat of the same state. Heartbeats are not logged; they only renew a lease in the cache. The event kinds are the `kind` enum of `event.schema.json`: server, agent, lease, reservation, attempt, report, message, notify, dispatch, conflict, resolve, refinery, proposal and revert.
 - **Idempotency.** A write may carry `idem` (for example `report:api-auth:1`). A second write with the same `idem` returns the first result and logs nothing. Clients send it in the header `Idempotency-Key`, so the request bodies stay as the schemas define them.
 - **Durability.** The server writes the event files and makes a local git commit (group commit: all events of a short window, at most `COMMIT_WINDOW_MS`, in one commit) **before** it acknowledges the request. It pushes `coord/log` to the remote asynchronously, with retry. A crash after the ack loses nothing that was acked; a lost machine loses at most the unpushed tail.
+- **Log location.** The branch is checked out in a worktree of the consumer repo at `$WAVECOORD_HOME/log` (default `~/.wavecoord/<project>/log`); the cache is `$WAVECOORD_HOME/cache.sqlite`. One server per home: `serve` holds a lock file. On start the server discards uncommitted files in the worktree (they were never acked), and fetches the branch from `origin` when it has no local copy.
 - **Cache.** On start the server loads the newest snapshot and replays the events after it into sqlite. `wavecoord rebuild` drops the cache and replays from scratch (or `--at <sha>`, see `rollback.md`). A test checks: replay of any prefix equals the fold of that prefix.
 
 ## 3. State machines
@@ -50,7 +51,8 @@ Rules:
 
 - At most one non-released lease per task, and at most one per agent. A claim that breaks this gets 409 `held` or `agent_busy`.
 - **Epoch (fencing token).** A grant sets `epoch = max(last_epoch(task) + 1, now_ms)`. A steal makes a new epoch; renew, revive and park keep it. A merge or gate check compares the epoch in the PR body (`Lease: <task>@<epoch>`) with the current one.
-- **Clock.** If the clock goes back more than `CLOCK_BACK_MS` below the last tick, grants fail with 503 `clock` until it catches up. A forward jump larger than `GAP_S` (laptop sleep) shifts every non-null `expires_at` by the gap, so a sleep never makes a lease stale.
+- **Clock.** If the clock goes back more than `CLOCK_BACK_MS` below the last tick, grants fail with 503 `clock` until it catches up. A forward jump larger than `GAP_S` (laptop sleep) shifts every non-null `expires_at` by the gap, so a sleep never makes a lease stale. Both transitions are logged as `server.clock` (`state`: `back` or `ok`) and `server.gap` (`gap_ms`).
+- **Liveness is in memory.** Heartbeat renewals of `renewed` and `expires_at` are not logged; a lease event holds the values at that transition. After a server restart every `active` lease gets a fresh `LEASE_TTL_S`, because no holder could renew it while the server was down.
 - A steal or release is atomic. Activity after it does not revive the lease; the holder sees the lease in `lost` on every heartbeat, from every source, until it holds a new lease, and must stop.
 
 ### 3.2 Reservations
@@ -117,7 +119,7 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `POST /api/leases` | agent (own), lead | Claim (`steal` is lead only); returns lease, reservations, conflicts |
 | `GET /api/leases`, `GET /api/tasks/<task>/lease` | read, gate | Current leases; `last_epoch` per task |
 | `POST /api/leases/<id>/release` | agent (own), ui (stale only), lead | Release |
-| `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease), lead | Add (`reservation_request`) or remove reservations |
+| `POST /api/reservations`, `DELETE /api/reservations/<id>` | agent (own lease), lead | Add (`reservation_request`, or `{lease_id, reservations: [{glob, mode}]}` for several) or remove reservations |
 | `GET /api/conflicts?globs=&lease_id=` | read | Overlap check without reserving |
 | `POST /api/check` | agent, lead | Path check for the hooks and the git guards (`check_request`, `check_response`). A violation is `foreign_exclusive` (inside an exclusive glob of another non-released lease), `outside_lease` (the caller holds an active lease and the path matches none of its globs) or `stale_epoch` (the given epoch is not the current epoch of the task). Reads only; logs nothing |
 | `POST /api/messages`, `GET /api/inbox?agent=`, `POST /api/messages/<id>/ack` | see section 4 | Messages |
@@ -129,8 +131,11 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `GET /api/refinery`, `POST /api/refinery/merge` | read / lead | Merge queue status; merge a parked attempt through `merge_cmd` |
 | `POST /api/proposals`, `PATCH /api/proposals/<id>` | agent, lead / lead | Plan proposals and their decisions |
 | `POST /api/notify` | agent, lead | A notice for the lead (`notify_request`: CI result, rate limit, `waiting_on_you`, handoff note) |
-| `POST /api/revert` | lead | Revert one event (section 9) |
-| `GET /api/events?since=<seq>` | read | SSE stream (section 7) |
+| `GET /api/proposals`, `GET /api/requests`, `POST /api/requests` | read / read, ui, lead | List proposals; dispatch requests (`{task, note?}`, logged as `dispatch.request`) |
+| `GET /api/config` | read | The effective consumer config (no secrets) |
+| `POST /api/revert` | lead | `{seq, reason?}` reverts one event; `{at_sha, reason?}` rolls back to a commit (section 9) |
+| `POST /api/rebuild` | lead | Drop the cache and replay the log; returns `unchanged` (it must be true) |
+| `GET /api/events?since=<seq>` | read | SSE stream (section 7); `once=1` sends the backlog and closes |
 
 ## 7. Server-sent events
 
