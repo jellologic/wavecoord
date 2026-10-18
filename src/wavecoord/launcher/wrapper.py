@@ -19,6 +19,7 @@ import threading
 from wavecoord import jsonschema_lite, zipapp
 
 from . import coord as coordmod
+from . import providers
 from .common import (DEVNULL, Flock, LauncherError, const, git_run, host_env, iso, kill_group, now,
                      pgroup_alive, read_json, run_cmd, signal_group, update_status, wait_group_gone,
                      write_json)
@@ -113,6 +114,8 @@ class Attempt(object):
         self.reason = None
         self.stats = StreamStats()
         self.env = None
+        self.provider = self.spec.get("provider") or providers.ANTHROPIC
+        self.profile = self.spec.get("provider_profile")
 
     # -- logging and coordinator calls
     def log(self, msg):
@@ -143,15 +146,24 @@ class Attempt(object):
         return None
 
     def notify(self, kind, detail):
-        """A notice for the lead (rate limits, API retries), at most one per kind per minute."""
+        """A notice for the lead (`notify_request`), at most one per kind per minute.
+
+        kind: api_retry, rate_limit, stop_failure or conflict (mapped to the contract's kinds)."""
         if now() - self.last_notify.get(kind, 0) < const("NOTIFY_MIN_INTERVAL_S", NOTIFY_MIN_INTERVAL_S):
             return
         self.last_notify[kind] = now()
         self.notify_seq += 1
-        body = {"kind": kind, "agent": self.task["agent"], "host": self.task["host"], "task": self.task["task"],
-                "attempt": self.task["attempt"], "detail": detail,
-                "idem": "notify:%s:%s:%d" % (self.task["agent"], kind, self.notify_seq)}
-        r = self.coord.post_or_spool("/api/notify", body)
+        throttled = kind in ("rate_limit", "stop_failure") or \
+            (kind == "api_retry" and (detail or {}).get("error") in ("rate_limit", "overloaded"))
+        api_kind = "rate_limit" if throttled else ("api_error" if kind == "api_retry" else "other")
+        detail = dict(detail or {}, event=kind, provider=self.provider, host=self.task["host"])
+        text = "%s (%s, task %s #%s, provider %s): %s" % (
+            self.task["agent"], self.task["host"], self.task["task"], self.task["attempt"], self.provider,
+            kind.replace("_", " "))
+        body = {"kind": api_kind, "agent": self.task["agent"], "task": self.task["task"],
+                "attempt": self.task["attempt"], "text": text[:4096], "detail": detail}
+        r = self.coord.post_or_spool("/api/notify", body,
+                                     idem="notify:%s:%s:%d" % (self.task["agent"], kind, self.notify_seq))
         self.log("notify %s: %s" % (kind, r))
 
     # -- phases
@@ -195,12 +207,23 @@ class Attempt(object):
         write_json(os.path.join(self.d, "argv.json"), argv[:1] + ["<%d args>" % (len(argv) - 1)])
         self.log("claude: %s -p (session %s%s) in %s" % (argv[0], self.task.get("resume") or self.task["session_id"],
                                                         ", resume" if self.task.get("resume") else "", self.wt))
+        try:
+            claude_env, names = providers.apply(self.env, self.provider, self.profile)
+        except (providers.ProviderError, OSError) as e:
+            self.reason = "provider_error"
+            self.note = "refusing to start claude: %s" % e
+            self.log(self.note)
+            return None
+        if names:
+            self.log("provider %s: %d variables from its env file (%s)" % (self.provider, len(names), ", ".join(names)))
+        else:
+            self.log("provider %s: default environment" % self.provider)
         out_path = os.path.join(self.d, "stream.jsonl")
         out = open(out_path, "wb")
         err = open(os.path.join(self.d, "stderr.log"), "wb")
         inp = open(os.path.join(self.d, "prompt.md"), "rb")
         try:
-            p = subprocess.Popen(argv, cwd=self.wt, env=self.env, stdin=inp, stdout=out, stderr=err,
+            p = subprocess.Popen(argv, cwd=self.wt, env=claude_env, stdin=inp, stdout=out, stderr=err,
                                  start_new_session=True)
         except OSError as e:
             self.reason = "claude_missing"
@@ -348,10 +371,10 @@ class Attempt(object):
             lines += ["", "## Risks hit", ""] + ["- %s" % r for r in report["risks_hit"]]
         if res.get("commits"):
             lines += ["", "## Commits", ""] + ["- %s" % c for c in res["commits"]]
-        lines += ["", "Dispatched by wavecoord on host `%s` (session `%s`, %s turns, cost %s USD)." % (
-            self.task["host"], self.stats.session_id or self.task["session_id"],
+        lines += ["", "Dispatched by wavecoord on host `%s` with provider `%s` (session `%s`, %s turns, cost %s USD, basis %s)." % (
+            self.task["host"], self.provider, self.stats.session_id or self.task["session_id"],
             res.get("turns") if res.get("turns") is not None else "?",
-            res.get("cost_usd") if res.get("cost_usd") is not None else "?"),
+            res.get("cost_usd") if res.get("cost_usd") is not None else "?", res.get("cost_basis")),
             "", "\U0001F916 Generated with [Claude Code](https://claude.com/claude-code)"]
         return "\n".join(lines) + "\n"
 
@@ -385,6 +408,11 @@ class Attempt(object):
                "started": self.started, "ended": now(), "pushed": False, "push_error": None}
         res.update(self.stats.summary())
         res["cost_usd"] = self.stats.cost_usd
+        res["provider"] = self.provider
+        res["provider_fallback"] = list(self.spec.get("provider_fallback") or [])
+        res["cost_basis"] = self.spec.get("cost_basis") or providers.cost_basis(self.provider, self.profile)
+        res["throttled"] = bool(res["throttle"])
+        res["next_provider"] = _next_provider(self.provider, res["provider_fallback"]) if res["throttled"] else None
         res["duration_s"] = res["ended"] - self.started
         base = "%s/%s" % (REMOTE, self.default)
         res["new_commits"] = self.git_lines(["rev-list", "--reverse", t["base_sha"] + "..HEAD"]) or []
@@ -393,7 +421,7 @@ class Attempt(object):
 
         rep = self.stats.structured_output
         errs = validate_report(rep) if rep is not None else ["no structured_output in the result"]
-        if self.reason in ("prepare_failed", "guard_failed", "claude_missing"):
+        if self.reason in ("prepare_failed", "guard_failed", "claude_missing", "provider_error"):
             errs = [self.note]
         res["report_errors"] = errs
         if self.reason == "stopped":
@@ -442,25 +470,38 @@ class Attempt(object):
             elif t.get("pr_cmd"):
                 self.open_pr(report, res)
 
-        body = {"report": report, "cost_usd": res["cost_usd"], "turns": res["turns"],
+        body = {"report": report, "cost_usd": res["cost_usd"], "cost_basis": res["cost_basis"],
+                "usage": res["usage"], "model_usage": res["model_usage"], "turns": res["turns"],
                 "session_id": self.stats.session_id or t["session_id"], "agent": t["agent"], "host": t["host"],
-                "state": state, "branch": self.branch, "pushed": res["pushed"], "pr_url": res.get("pr_url"),
-                "idem": "report:%s:%s" % (t["task"], t["attempt"])}
-        res["report_post"] = self.coord.post_or_spool("/api/attempts/%s/%s/report" % (t["task"], t["attempt"]), body)
+                "provider": self.provider, "throttled": res["throttled"], "throttle": res["throttle"],
+                "next_provider": res["next_provider"],
+                "state": state, "branch": self.branch, "pushed": res["pushed"], "pr_url": res.get("pr_url")}
+        res["report_post"] = self.coord.post_or_spool("/api/attempts/%s/%s/report" % (t["task"], t["attempt"]), body,
+                                                      idem="report:%s:%s" % (t["task"], t["attempt"]))
         self.hb_seq += 1
         fin = {"state": {"reported": "done", "stopped": "stopped"}.get(state, "failed"), "pushed": res["pushed"],
                "source": "launcher", "seq": self.hb_seq}
-        res["finish_post"] = self.coord.post_or_spool("/api/agents/%s/finish" % t["agent"], fin)
+        res["finish_post"] = self.coord.post_or_spool("/api/agents/%s/finish" % t["agent"], fin,
+                                                      idem="finish:%s" % t["agent"])
         res["state"] = state
         res["report_status"] = report["status"]
         write_json(os.path.join(self.d, "result.json"), res)
         update_status(self.d, state=state, ended=res["ended"], note=getattr(self, "note", None),
                       session_id=self.stats.session_id, turns=res["turns"], cost_usd=res["cost_usd"],
-                      pr_url=res.get("pr_url"), report_status=report["status"], exit_code=rc)
+                      pr_url=res.get("pr_url"), report_status=report["status"], exit_code=rc,
+                      provider=self.provider, throttled=res["throttled"])
         coordmod.flush_spool()
         self.log("finished: %s (exit %s, %d commits, pushed %s, report %s)"
                  % (state, rc, len(branch_commits), res["pushed"], res["report_post"]))
         return state
+
+
+def _next_provider(current, fallback):
+    """The profile after `current` in the fallback list (P4 dispatches the next attempt with it)."""
+    if current in fallback:
+        rest = fallback[fallback.index(current) + 1:]
+        return rest[0] if rest else None
+    return fallback[0] if fallback else None
 
 
 def _fill(arg, values):

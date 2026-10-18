@@ -13,6 +13,7 @@ from concurrent.futures import ThreadPoolExecutor
 from wavecoord import zipapp
 
 from . import coord as coordmod
+from .providers import ANTHROPIC, cost_basis
 from .common import (FINAL, TASK_RE, LauncherError, Unreachable, ensure_dir, git_run, now, rand4, read_json,
                      wc_home, write_json)
 from .transport import Host
@@ -34,8 +35,10 @@ def parallel(fn, items, workers=8):
 
 # ---- placement ---------------------------------------------------------------------------------
 
-def why_ineligible(p):
-    """Why a probed host cannot take a worker now, or None. 'full' is the only transient reason."""
+def why_ineligible(p, provider=ANTHROPIC):
+    """Why a probed host cannot take a worker of `provider` now, or None.
+
+    'full' is the only transient reason."""
     if not p.get("ok"):
         return "unreachable: %s" % (p.get("error") or "?")[-200:]
     if not p.get("repo_ok"):
@@ -43,20 +46,26 @@ def why_ineligible(p):
     c = p.get("claude") or {}
     if not c.get("installed"):
         return "claude is not installed"
-    if c.get("auth") == "no":
+    prov = (p.get("providers") or {}).get(provider)
+    if provider != ANTHROPIC or (prov and not prov.get("builtin")):
+        if not prov:
+            return "provider %s is not on this host" % provider
+        if not prov.get("present"):
+            return "provider %s: %s" % (provider, prov.get("why"))
+    elif c.get("auth") == "no":
         return "claude is not logged in (run `claude auth login` on the host)"
     if p.get("free", 0) <= 0:
         return "full (%s/%s slots)" % (p.get("active"), p.get("slots"))
     return None
 
 
-def place(probes):
+def place(probes, provider=ANTHROPIC):
     """Eligible host names, best first: most free slots, then most free memory, then name.
 
     -> (ordered names, {name: why not})"""
     ok, why = [], {}
     for name, p in probes.items():
-        r = why_ineligible(p)
+        r = why_ineligible(p, provider)
         if r:
             why[name] = r
         else:
@@ -96,11 +105,16 @@ class Launcher(object):
         return {"project": self.project, "coord_url": self.coord_url, "plugin_hash": self.plugin()[0],
                 "log_branch": self.cfg.log_branch}
 
+    def host_profiles(self, name):
+        """{provider: profile or None} that host `name` has (paths and models only; no secrets)."""
+        return {p: self.cfg.profile(p) for p in self.cfg.host_providers(name)}
+
     def probe(self, names=None):
         names = names or sorted(self.hosts)
 
         def one(n):
-            return n, self.hosts[n].safe_call("probe", self.base_payload(), timeout=120)
+            payload = dict(self.base_payload(), providers=self.host_profiles(n))
+            return n, self.hosts[n].safe_call("probe", payload, timeout=120)
         return dict(parallel(one, names))
 
     # -- attempt numbers
@@ -196,13 +210,22 @@ class Launcher(object):
         task = opts["task"]
         if not TASK_RE.match(task or ""):
             raise LauncherError("bad task id %r" % task)
+        provider = opts.get("provider") or self.cfg.default_provider
+        fallback = list(opts.get("provider_fallback") or [])
+        for p in [provider] + fallback:
+            if not self.cfg.known_provider(p):
+                raise LauncherError("unknown provider %r (configured: %s)"
+                                    % (p, ", ".join(sorted(set(self.cfg.providers) | {ANTHROPIC}))))
         names = [opts["host"]] if opts.get("host") else sorted(self.hosts)
         for n in names:
             self.host(n)
+        names = [n for n in names if provider in self.cfg.host_providers(n)]
+        if not names:
+            raise LauncherError("no host has provider %s" % provider)
         announced = None
         while True:
             probes = self.probe(names)
-            order, why = place(probes)
+            order, why = place(probes, provider)
             if order:
                 break
             transient = any(r.startswith("full") for r in why.values())
@@ -229,7 +252,8 @@ class Launcher(object):
         rec = self.index_get(aid) or {}
         if opts.get("continue") and rec.get("host") and not opts.get("host") and rec["host"] in self.hosts:
             # continue where the earlier run is, so its worktree and session are reused
-            if not why_ineligible(probes.get(rec["host"]) or self.probe([rec["host"]])[rec["host"]]):
+            if provider in self.cfg.host_providers(rec["host"]) and \
+                    not why_ineligible(probes.get(rec["host"]) or self.probe([rec["host"]])[rec["host"]], provider):
                 name, h = rec["host"], self.hosts[rec["host"]]
                 probe = probes.get(name) or self.probe([name])[name]
         branch = "%s/%s" % (self.cfg.branch_prefix, aid)
@@ -246,7 +270,9 @@ class Launcher(object):
                                          "timeout_min", "claude_flags")}
         spec.update({"task": task, "attempt": attempt, "attempt_id": aid, "branch": branch, "agent": agent,
                      "session_id": str(uuid.uuid4()), "prompt": opts["prompt"], "continue": bool(opts.get("continue")),
-                     "lease_id": lease_id, "lease_epoch": epoch})
+                     "lease_id": lease_id, "lease_epoch": epoch, "provider": provider, "provider_fallback": fallback,
+                     "provider_profile": self.cfg.profile(provider),
+                     "cost_basis": cost_basis(provider, self.cfg.profile(provider))})
         self.ensure_plugin(h, probe)
         self.ensure_token(h, probe)
         self.ensure_tunnel(h, probe)
@@ -259,7 +285,7 @@ class Launcher(object):
             raise LauncherError(out.get("error") or "launch failed")
         rec = {"id": aid, "host": name, "task": task, "attempt": attempt, "branch": branch, "agent": agent,
                "session_id": spec["session_id"], "lease_id": lease_id, "lease_epoch": epoch, "lease_note": lease_note,
-               "worktree": out.get("worktree"), "created": now()}
+               "worktree": out.get("worktree"), "provider": provider, "provider_fallback": fallback, "created": now()}
         self.index_put(rec)
         rec["state_dir"] = out.get("state_dir")
         return rec

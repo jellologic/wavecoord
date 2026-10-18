@@ -1,8 +1,9 @@
 """A minimal REST client for the coordinator (docs/contract.md section 6), with a spool.
 
 A write that cannot reach the coordinator is spooled to
-`<wavecoord home>/spool/` and sent again later (`flush_spool`). A spooled
-write keeps its `idem` key, so a repeat never logs twice on the server.
+`<wavecoord home>/spool/` and sent again later (`flush_spool`). A write's
+idempotency key goes in the `Idempotency-Key` header (as in the hooks
+client); a spooled write keeps it, so a repeat never logs twice.
 """
 
 import json
@@ -50,7 +51,7 @@ class Coord(object):
     def configured(self):
         return bool(self.url)
 
-    def request(self, method, path, body=None):
+    def request(self, method, path, body=None, idem=None):
         """-> (http status, parsed JSON body or {}). Raises Unreachable on a network error."""
         if not self.url:
             raise Unreachable("coordinator not configured")
@@ -63,6 +64,8 @@ class Coord(object):
             req.add_header("Authorization", "Bearer " + self.token)
         if self.agent:
             req.add_header("X-Wavecoord-Agent", self.agent)
+        if idem:
+            req.add_header("Idempotency-Key", idem)
         try:
             with urllib.request.urlopen(req, timeout=self.timeout) as r:
                 raw = r.read()
@@ -78,17 +81,17 @@ class Coord(object):
             out = {"raw": raw[:500].decode("utf-8", "replace")}
         return status, out if isinstance(out, dict) else {"body": out}
 
-    def post_or_spool(self, path, body):
+    def post_or_spool(self, path, body, idem=None):
         """POST; spool on a network error or a 5xx. -> 'sent', 'spooled', 'rejected:<code>' or 'off'."""
         if not self.url:
             return "off"
         try:
-            status, out = self.request("POST", path, body)
+            status, out = self.request("POST", path, body, idem=idem)
         except Unreachable:
-            spool(self, path, body)
+            spool(self, path, body, idem)
             return "spooled"
         if status >= 500 or status in (408, 429):
-            spool(self, path, body)
+            spool(self, path, body, idem)
             return "spooled"
         if status >= 400:
             return "rejected:%s" % ((out.get("error") or {}).get("code") or status)
@@ -99,9 +102,9 @@ def spool_dir():
     return ensure_dir(os.path.join(wc_home(), "spool"))
 
 
-def spool(coord, path, body):
+def spool(coord, path, body, idem=None):
     d = spool_dir()
-    rec = {"url": coord.url, "agent": coord.agent, "path": path, "body": body, "spooled": now()}
+    rec = {"url": coord.url, "agent": coord.agent, "path": path, "body": body, "idem": idem, "spooled": now()}
     name = "%d-%s.json" % (int(now() * 1000), rand4())
     write_json(os.path.join(d, name), rec)
     return name
@@ -124,7 +127,7 @@ def flush_spool(limit=200):
             continue
         c = Coord(rec["url"], agent=rec.get("agent"))
         try:
-            status, _ = c.request("POST", rec["path"], rec.get("body"))
+            status, _ = c.request("POST", rec["path"], rec.get("body"), idem=rec.get("idem"))
         except Unreachable:
             if now() - float(rec.get("spooled") or 0) > SPOOL_MAX_AGE_S:
                 _drop(d, n)

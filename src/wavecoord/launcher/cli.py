@@ -40,7 +40,8 @@ def cmd_launch(args):
                 "fallback_model": args.fallback_model, "timeout_min": args.timeout_min,
                 "continue": args.cont, "wait": args.wait, "attempt": args.attempt,
                 "lease_id": args.lease_id, "lease_epoch": args.lease_epoch, "no_claim": args.no_claim,
-                "claude_flags": args.claude_flag or None}
+                "claude_flags": args.claude_flag or None, "provider": args.provider,
+                "provider_fallback": [x for x in (args.provider_fallback or "").split(",") if x] or None}
         prompt = None
         if args.spec:
             spec = load_spec(args.spec)
@@ -48,7 +49,8 @@ def cmd_launch(args):
             ex = spec.get("exec") or {}
             for src, dst in (("model", "model"), ("effort", "effort"), ("max_turns", "max_turns"),
                              ("budget_usd", "max_budget_usd"), ("fallback_model", "fallback_model"),
-                             ("timeout_min", "timeout_min")):
+                             ("timeout_min", "timeout_min"), ("provider", "provider"),
+                             ("provider_fallback", "provider_fallback")):
                 if opts.get(dst) is None and ex.get(src) is not None:
                     opts[dst] = ex[src]
             opts["reservations"] = [{"glob": g, "mode": "exclusive"} for g in spec.get("paths") or []] + \
@@ -70,8 +72,8 @@ def cmd_launch(args):
             if args.json:
                 _print(rec, True)
             else:
-                print("launched %s on %s (branch %s, lease %s)" % (rec["id"], rec["host"], rec["branch"],
-                                                                   rec.get("lease_epoch") or "none"))
+                print("launched %s on %s (branch %s, provider %s, lease %s)" % (
+                rec["id"], rec["host"], rec["branch"], rec.get("provider"), rec.get("lease_epoch") or "none"))
             return 0
         if not args.json:
             sys.stderr.write("wavecoord: launched %s on %s; waiting\n" % (rec["id"], rec["host"]))
@@ -85,8 +87,8 @@ def cmd_launch(args):
 def _print_result(r):
     print("%s on %s: %s%s" % (r.get("id"), r.get("host"), r.get("state"),
                               (" (%s)" % r["note"]) if r.get("note") else ""))
-    for k in ("branch", "report_status", "pushed", "pr_url", "pr_error", "conflicts", "turns", "cost_usd",
-              "session_id", "worktree"):
+    for k in ("branch", "provider", "report_status", "pushed", "pr_url", "pr_error", "conflicts", "turns", "cost_usd",
+              "cost_basis", "throttle", "next_provider", "session_id", "worktree"):
         if r.get(k) not in (None, "", []):
             print("  %s: %s" % (k, r[k]))
 
@@ -101,16 +103,18 @@ def cmd_hosts(args):
     if args.json:
         _print(probes, True)
         return 0
-    print("%-12s %-6s %-10s %-8s %-8s %-28s %s" % ("HOST", "SLOTS", "MEM_GIB", "DISK_GIB", "AUTH", "CLAUDE", "STATUS"))
+    print("%-12s %-6s %-8s %-8s %-10s %-24s %-24s %s" % ("HOST", "SLOTS", "MEM_GIB", "DISK_GIB", "AUTH", "CLAUDE",
+                                                        "PROVIDERS", "STATUS"))
     for n in sorted(probes):
         p = probes[n]
         c = p.get("claude") or {}
         mem = p.get("mem_avail_gib")
         disk = p.get("disk_free_gib")
-        print("%-12s %-6s %-10s %-8s %-8s %-28s %s" % (
+        provs = ",".join(k + ("" if v.get("present") else "(missing)") for k, v in sorted((p.get("providers") or {}).items()))
+        print("%-12s %-6s %-8s %-8s %-10s %-24s %-24s %s" % (
             n, "%s/%s" % (p.get("active", "?"), p.get("slots", "?")), "%.1f" % mem if mem is not None else "?",
-            "%.0f" % disk if disk is not None else "?", c.get("auth", "?"), (c.get("version") or "-")[:28],
-            why_ineligible(p) or "ok"))
+            "%.0f" % disk if disk is not None else "?", c.get("auth", "?"), (c.get("version") or "-")[:24],
+            provs or "-", why_ineligible(p, L.cfg.default_provider) or "ok"))
     return 0
 
 
@@ -195,6 +199,8 @@ def register(sub):
     sp.add_argument("--lease-epoch", type=int, help="fencing epoch of that lease")
     sp.add_argument("--no-claim", action="store_true", help="do not claim a lease")
     sp.add_argument("--claude-flag", action="append", help="extra flag for claude (repeat)")
+    sp.add_argument("--provider", help="provider profile (default: default_provider, else anthropic); docs/providers.md")
+    sp.add_argument("--provider-fallback", help="comma-separated profiles to try next after a rate limit (recorded for the dispatcher)")
     sp.add_argument("--coord-url", help="coordinator URL (default: WAVECOORD_URL, plugin option, config)")
     sp.add_argument("--plugin-dir", help="plugin dir to pin on hosts (default: this wavecoord's plugin)")
     sp.set_defaults(func=cmd_launch)

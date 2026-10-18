@@ -7,9 +7,11 @@ rate-limit events, the last tool and the final result with its
 """
 
 import json
+import re
 
 # api_retry error categories that mean the account or the API is throttled.
 THROTTLE_ERRORS = ("rate_limit", "overloaded")
+THROTTLE_RE = re.compile(r"rate.?limit|overloaded|\b(429|529)\b", re.I)
 
 
 class StreamStats(object):
@@ -27,6 +29,7 @@ class StreamStats(object):
         self.rate_limits = []
         self.hook_events = 0
         self.last_tool = None
+        self.stop_failures = []
         self.lines = 0
         self.bad_lines = 0
         self.other = {}
@@ -60,6 +63,10 @@ class StreamStats(object):
             notable.append(("api_retry", ev))
         elif t == "system" and st in ("hook_started", "hook_progress", "hook_response"):
             self.hook_events += 1
+            if e.get("hook_event") == "StopFailure" and st == "hook_started":
+                ev = {"hook": e.get("hook_name")}
+                self.stop_failures.append(ev)
+                notable.append(("stop_failure", ev))
         elif t == "rate_limit_event":
             info = e.get("rate_limit_info") or {}
             ev = {k: info.get(k) for k in ("status", "resetsAt", "rateLimitType", "utilization",
@@ -93,6 +100,29 @@ class StreamStats(object):
             return True
         return bool(self.result.get("is_error")) or self.result.get("subtype") not in (None, "success")
 
+    @property
+    def usage(self):
+        return (self.result or {}).get("usage")
+
+    @property
+    def model_usage(self):
+        return (self.result or {}).get("modelUsage")
+
+    def throttle(self):
+        """Why this run looks rate limited or overloaded ([] = not). The dispatcher switches providers on it."""
+        why = []
+        n = len([r for r in self.api_retries if r.get("error") in THROTTLE_ERRORS])
+        if n:
+            why.append("api_retry:%d" % n)
+        if [r for r in self.rate_limits if (r.get("status") or "allowed") != "allowed"]:
+            why.append("rate_limit_event")
+        if self.stop_failures:
+            why.append("stop_failure")
+        r = self.result or {}
+        if r.get("is_error") and THROTTLE_RE.search(str(r.get("result") or "")):
+            why.append("result")
+        return why
+
     def summary(self):
         return {
             "session_id": self.session_id,
@@ -107,6 +137,9 @@ class StreamStats(object):
             "last_tool": self.last_tool,
             "result_subtype": (self.result or {}).get("subtype"),
             "is_error": self.is_error,
+            "usage": self.usage,
+            "model_usage": self.model_usage,
+            "throttle": self.throttle(),
             "plugins": self.plugins,
             "plugin_errors": self.plugin_errors,
             "lines": self.lines,

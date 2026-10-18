@@ -116,8 +116,10 @@ class LauncherTestCase(unittest.TestCase):
                 "FAKE_SSH_HOME", "FAKE_SSH_DOWN", "WAVECOORD_URL", "CLAUDE_PLUGIN_OPTION_COORD_URL",
                 "CLAUDE_PLUGIN_OPTION_TOKEN", "WAVECOORD_TOKEN_FILE", "CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT",
                 "WAVECOORD_NOTIFY_MIN_INTERVAL_S", "WAVECOORD_CLIENT_TIMEOUT_S", "CLAUDE_CONFIG_DIR",
-                "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN") + tuple(
-        "FAKE_CLAUDE_" + k for k in ("COMMIT", "STATUS", "REPORT", "EXIT", "SLEEP", "COST", "DUMP", "EVENTS"))
+                "ANTHROPIC_API_KEY", "CLAUDE_CODE_OAUTH_TOKEN", "ANTHROPIC_BASE_URL", "ANTHROPIC_AUTH_TOKEN",
+                "API_TIMEOUT_MS", "ANTHROPIC_DEFAULT_OPUS_MODEL", "CLAUDE_CODE_SUBAGENT_MODEL") + tuple(
+        "FAKE_CLAUDE_" + k for k in ("COMMIT", "STATUS", "REPORT", "EXIT", "SLEEP", "COST", "DUMP", "EVENTS", "STDERR",
+                                      "EXPECT_ENV"))
 
     def setUp(self):
         self._saved = {k: os.environ.get(k) for k in self.ENV_KEYS}
@@ -140,7 +142,7 @@ class LauncherTestCase(unittest.TestCase):
         os.chmod(self.pr_script, 0o755)
         env = os.environ
         for k in self.ENV_KEYS:
-            if k.startswith(("FAKE_", "CLAUDE", "WAVECOORD_URL", "WAVECOORD_TOKEN", "ANTHROPIC_")):
+            if k.startswith(("FAKE_", "CLAUDE", "WAVECOORD_URL", "WAVECOORD_TOKEN", "ANTHROPIC_", "API_TIMEOUT")):
                 env.pop(k, None)
         env.update({
             "PATH": os.pathsep.join([FAKE_CLAUDE_DIR, FAKE_SSH_DIR, bindir, os.environ.get("PATH", "")]),

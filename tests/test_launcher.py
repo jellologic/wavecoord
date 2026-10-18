@@ -96,7 +96,9 @@ class LocalEndToEnd(LauncherTestCase):
         body = reps[0]["body"]
         self.assertEqual(jsonschema_lite.validate(body["report"], report_schema()), [])
         self.assertEqual(body["report"]["status"], "done")
-        self.assertEqual(body["idem"], "report:t1:1")
+        self.assertEqual(reps[0]["headers"].get("Idempotency-Key"), "report:t1:1")
+        self.assertEqual((body["provider"], body["cost_basis"]), ("anthropic", "anthropic"))
+        self.assertTrue(body["model_usage"])
         self.assertEqual(body["state"], "reported")
         fin = self.coord.posts("/api/agents/%s/finish" % rec["agent"])
         self.assertEqual(fin[0]["body"]["state"], "done")
@@ -136,7 +138,7 @@ class LocalEndToEnd(LauncherTestCase):
         self.assertEqual(r["conflicts"], ["fake-claude-%s.txt" % rec["session_id"][:8]])
         self.assertIn("conflicts", r["pr_error"])
         self.assertEqual(self.prs(), [])
-        self.assertTrue([p for p in self.coord.posts("/api/notify") if p["body"]["kind"] == "conflict"])
+        self.assertTrue([p for p in self.coord.posts("/api/notify") if p["body"]["detail"]["event"] == "conflict"])
 
     def test_push_rejected_is_failed(self):
         hook = os.path.join(self.origin, "hooks", "pre-receive")
@@ -242,8 +244,9 @@ class LocalEndToEnd(LauncherTestCase):
         r = self.wait_state(L, "t1-1", ("reported", "failed", "timed_out"))
         self.assertEqual(r["state"], "reported", r)
         self.assertEqual(r["api_retries"], 1)
-        kinds = sorted(p["body"]["kind"] for p in self.coord.posts("/api/notify"))
-        self.assertEqual(kinds, ["api_retry", "rate_limit"])
+        notes = self.coord.posts("/api/notify")
+        self.assertEqual(sorted(p["body"]["detail"]["event"] for p in notes), ["api_retry", "rate_limit"])
+        self.assertEqual([p["body"]["kind"] for p in notes], ["rate_limit", "rate_limit"])
 
     def test_unreachable_coord_spools_report(self):
         L = self.launcher(coord=False)
@@ -256,7 +259,7 @@ class LocalEndToEnd(LauncherTestCase):
         recs = [load(os.path.join(spool, n)) for n in os.listdir(spool) if n.endswith(".json")]
         paths = sorted(x["path"] for x in recs)
         self.assertIn("/api/attempts/t1/1/report", paths)
-        rep = [x for x in recs if x["path"].endswith("/report")][0]["body"]
+        rep = [x for x in recs if x["path"].endswith("/report")][0]
         self.assertEqual(rep["idem"], "report:t1:1")
 
     def test_lease_lost_stops_worker(self):

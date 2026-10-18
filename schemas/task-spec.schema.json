@@ -45,7 +45,9 @@
         "timeout_min": {"type": "integer", "minimum": 1, "maximum": 10080},
         "host_needs": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
         "split_if": {"type": "string", "description": "A condition, in words, under which the worker stops and proposes a split instead of continuing."},
-        "autocompact_window": {"type": "integer", "minimum": 1, "description": "Context window size, in tokens, at which the worker session compacts."}
+        "autocompact_window": {"type": "integer", "minimum": 1, "description": "Context window size, in tokens, at which the worker session compacts."},
+        "provider": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$", "description": "Provider profile (config providers, or anthropic) the worker runs against."},
+        "provider_fallback": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"}, "uniqueItems": true, "description": "Profiles to try next, in order, after a rate limit or overload."}
       }
     },
     "risk": {

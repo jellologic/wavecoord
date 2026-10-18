@@ -50,9 +50,33 @@
       "claude_flags": [
         "--model",
         "opus"
+      ],
+      "providers": [
+        "zai",
+        "openrouter"
       ]
     }
   ],
+  "providers": {
+    "zai": {
+      "env_file": "~/.config/wavecoord/providers/zai.env",
+      "models": {
+        "opus": "glm-5.3",
+        "sonnet": "glm-5.3",
+        "haiku": "glm-5.3-flash",
+        "subagent": "glm-5.3-flash"
+      },
+      "cost_basis": "none"
+    },
+    "openrouter": {
+      "env_file": "~/.config/wavecoord/providers/openrouter.env",
+      "models": {
+        "opus": "~anthropic/claude-opus-latest[1m]"
+      },
+      "cost_basis": "anthropic_estimate"
+    }
+  },
+  "default_provider": "zai",
   "merge_cmd": [
     "gh",
     "pr",

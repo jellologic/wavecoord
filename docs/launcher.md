@@ -22,6 +22,7 @@ wavecoord gc [--host H] [--dry-run]
 - `--spec` takes a task spec as JSON (`schemas/task-spec.schema.json`). It gives the task id, the `exec` values (CLI flags win), the reservations (`paths` exclusive, `shared_paths` shared) and a prompt built from the context, acceptance and prompt sections. `--prompt-file` replaces that prompt.
 - `--wait` queues while every candidate host is full, then waits for the attempt to end. Exit 0 only when the attempt is `reported`.
 - `--continue` runs the latest attempt (or `--attempt N`) again on its existing branch. On the host of the earlier run it reuses the worktree and resumes the Claude session (`claude --resume`); the new prompt is the next user turn.
+- `--provider P` runs the worker with provider profile `P` (default: `exec.provider` of `--spec`, then `default_provider`, then `anthropic`); `--provider-fallback A,B` records the profiles to use next. See `providers.md`.
 - `--claude-flag` passes one more flag to `claude`; use the `=` form for values that start with `-`.
 - Attempt ids are `<task>-<n>`. `n` is the next number after every `<branch_prefix>/<task>-<n>` branch on `origin`, local branch and known attempt.
 
@@ -30,6 +31,8 @@ wavecoord gc [--host H] [--dry-run]
 Hosts come from `hosts[]` in `.claude/wavecoord.json` (`adapters.md`). A host without `ssh` is local. `repo_path` is a checkout of the consumer repo with an `origin` remote; a relative path on a local host is relative to the consumer repo root.
 
 `wavecoord hosts` probes every host in parallel: slots in use, free memory, free disk at `repo_path`, `claude --version`, and whether claude has credentials. The auth check only looks for presence (an API key variable, `~/.claude/.credentials.json`, or the macOS keychain, which it cannot check); it never reads a secret.
+
+Placement only considers hosts that have the attempt's provider profile (`providers.md`). For `anthropic` the host needs a claude login; for any other profile it needs the profile's env file, present with mode 600, and no login.
 
 Placement takes the eligible host with the most free slots, then the most free memory, then the name. A host is not eligible when it is unreachable, its `repo_path` is not a git checkout, claude is missing or not logged in, or it is full. Only "full" makes `--wait` wait; any other reason fails at once.
 
@@ -64,7 +67,7 @@ The wrapper then:
           [--fallback-model F] --plugin-dir ~/.wavecoord/plugin-<hash> --settings <worker settings>
           --append-system-prompt <worker rules> <host claude_flags> <--claude-flag ...>
    ```
-   The environment is the host env plus `WAVECOORD_URL`, `WAVECOORD_AGENT_ID`, `WAVECOORD_TASK`, `WAVECOORD_ATTEMPT`, `WAVECOORD_LEASE_ID`, `WAVECOORD_LEASE_EPOCH`, `WAVECOORD_WORKTREE`, `WAVECOORD_BRANCH`, `WAVECOORD_HOST`, `WAVECOORD_PROJECT`, `WAVECOORD_SESSION_ID` and `WAVECOORD_TOKEN_FILE` (when the host has a token). `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_SSE_PORT` are removed. The worker settings deny `git push`: the launcher pushes. Workers do not use `--bare`, so hooks load. Permission flags (`--permission-mode ...`, `--allowedTools ...`) belong in the host's `claude_flags`.
+   The `claude` child alone also gets the provider profile (`providers.md`): the parent's `ANTHROPIC_*` variables are removed and the host's env file is loaded. The environment is the host env plus `WAVECOORD_URL`, `WAVECOORD_AGENT_ID`, `WAVECOORD_TASK`, `WAVECOORD_ATTEMPT`, `WAVECOORD_LEASE_ID`, `WAVECOORD_LEASE_EPOCH`, `WAVECOORD_WORKTREE`, `WAVECOORD_BRANCH`, `WAVECOORD_HOST`, `WAVECOORD_PROJECT`, `WAVECOORD_SESSION_ID` and `WAVECOORD_TOKEN_FILE` (when the host has a token). `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT` and `CLAUDE_CODE_SSE_PORT` are removed. The worker settings deny `git push`: the launcher pushes. Workers do not use `--bare`, so hooks load. Permission flags (`--permission-mode ...`, `--allowedTools ...`) belong in the host's `claude_flags`.
 4. Tails `stream.jsonl`: session, turns, cost, last tool, hook events, `system/api_retry` and `rate_limit_event`. A retry or a rejected rate limit posts `POST /api/notify` (at most one per kind per minute). Every `HB_INTERVAL_S` it posts `POST /api/hb` (`source: launcher`); a heartbeat answer that lists this task's lease in `lost` stops the worker.
 5. Stops the worker on timeout (`--timeout-min`, default 120), `attempts stop` or a lost lease: SIGINT to its process group first (ends the turn), SIGTERM after `STOP_GRACE_S` (30 s), SIGKILL 10 s later.
 
@@ -73,7 +76,7 @@ After the run:
 1. **Report.** The `structured_output` of the final result must validate against `schemas/report.schema.json`. Otherwise, or on any failure, the report is a synthetic `failed` one that says why. `report.commits` is set to the commits on the branch as pushed.
 2. **Push.** When the branch has commits ahead of `origin/<default>`, fetch the default branch and run `git merge-tree --write-tree` against it. If that is clean and the branch is behind, rebase onto it (only in a clean worktree). Push `HEAD:refs/heads/<branch>` without force. Only after its own rebase, and only if the remote branch is where it was before, does it retry with `--force-with-lease=<branch>:<seen sha>`. A run with commits that does not push is `failed`. Nothing is pushed after a stop or a lost lease.
 3. **PR.** Only for a `reported`, pushed attempt whose merge-tree is clean (a conflict posts a `conflict` notice instead). `pr_cmd` runs in the worktree; see `adapters.md` for placeholders. The body starts with `Task: <task>`, `Attempt: <n>` and `Lease: <task>@<epoch>` (`none` without a lease), then the report summary, checks, questions, risks and commits. A `--continue` run keeps the PR of the earlier run.
-4. **Report and finish.** `POST /api/attempts/<task>/<n>/report`, then `POST /api/agents/<agent>/finish`. A write that cannot reach the coordinator is spooled in `~/.wavecoord/spool/` and sent again at the next probe or attempt end; the `idem` key makes a resend safe.
+4. **Report and finish.** `POST /api/attempts/<task>/<n>/report`, then `POST /api/agents/<agent>/finish`. A write that cannot reach the coordinator is spooled in `~/.wavecoord/spool/` and sent again at the next probe or attempt end; its `Idempotency-Key` makes a resend safe.
 
 ### Attempt states
 
@@ -85,17 +88,17 @@ After the run:
 
 ## Coordinator calls
 
-All calls carry `Authorization: Bearer <token>` (plugin option, else `WAVECOORD_TOKEN_FILE`, else `~/.wavecoord/token`) and `X-Wavecoord-Agent: <agent id>`. The agent id is `worker-<task>-<n>-<4 hex>`.
+Writes carry an `Idempotency-Key` header (as in the hooks client). All calls carry `Authorization: Bearer <token>` (plugin option, else `WAVECOORD_TOKEN_FILE`, else `~/.wavecoord/token`) and `X-Wavecoord-Agent: <agent id>`. The agent id is `worker-<task>-<n>-<4 hex>`.
 
 | When | Call | Body |
 |---|---|---|
 | launch, unless `--lease-epoch` or `--no-claim` | `POST /api/leases` | `claim_request`: task, attempt, holder (agent id), host, reservations from `--spec`. A 409 fails the launch; an unreachable server only warns |
 | start and every `HB_INTERVAL_S` | `POST /api/hb` | `hb_request` with `source: launcher` |
-| api_retry, rate limit, conflict | `POST /api/notify` | `{kind, agent, host, task, attempt, detail, idem}` |
-| end | `POST /api/attempts/<task>/<n>/report` | `{report, cost_usd, turns, session_id, agent, host, state, branch, pushed, pr_url, idem: "report:<task>:<n>"}` |
+| api_retry, rate limit, StopFailure, conflict | `POST /api/notify` | `notify_request`: kind `rate_limit`, `api_error` or `other`; `detail` has the event, provider and host |
+| end | `POST /api/attempts/<task>/<n>/report` | `{report, cost_usd, cost_basis, usage, model_usage, turns, session_id, agent, host, provider, throttled, throttle, next_provider, state, branch, pushed, pr_url}`; key `report:<task>:<n>` |
 | end | `POST /api/agents/<agent>/finish` | `finish_request`: state done, failed or stopped; pushed; `source: launcher` |
 
-The notify and report bodies are not yet in `api.schema.json`; P1 fixes them there.
+The report body is not yet in `api.schema.json`; P1 adds it there.
 
 ## gc
 

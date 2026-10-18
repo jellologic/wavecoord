@@ -13,6 +13,8 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `pr_cmd` | `gh pr create --head {branch} --base {base} --title {title} --body-file {body_file}` | How the launcher opens a PR for a pushed attempt branch (below) |
 | `check_cmd` | none | Command the refinery runs before a merge |
 | `protected_paths_cmd` | none | Prints protected globs, one per line. A PR that touches one stops in the refinery until the user approves it in the lead session |
+| `providers` | none | Provider profiles for workers: `{<name>: {env_file, models?, cost_basis?}}`. See `providers.md` |
+| `default_provider` | `anthropic` | Profile when the task and the launch name none |
 | `wip_cap` | number of slots | Maximum attempts in flight |
 | `branch_prefix` | `wave` | Attempt branches are `<prefix>/<task>-<attempt>` |
 
@@ -40,6 +42,7 @@ A command is an array (run without a shell, preferred) or a string (run with `sh
 
 - `repo_path`: a checkout of the consumer repo with an `origin` remote. On a local host a relative path is relative to the consumer repo root; on an ssh host use an absolute or `~/` path. Attempt worktrees go to `<repo_path>/../wt/<task>-<n>`.
 - `env`: extra environment for `prepare_cmd`, the worker and `pr_cmd` on that host. Values expand `~` and `$VAR` on the host, so `"PATH": "$HOME/.local/bin:$PATH"` works.
+- `providers`: the provider profiles this host has (default: all). Each profile's `env_file` must exist on the host with mode 600 (`providers.md`).
 - `claude_flags`: appended to every `claude -p` on that host. Put the permission setup for unattended workers here, for example `["--permission-mode", "acceptEdits", "--allowedTools", "Bash(make *),Bash(git add *),Bash(git commit *)"]`.
 
 ## PR command

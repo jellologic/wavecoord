@@ -44,10 +44,37 @@
           "repo_path": {"type": "string", "minLength": 1},
           "env": {"type": "object", "additionalProperties": {"type": "string"}},
           "prepare_cmd": {"$ref": "#/definitions/cmd"},
-          "claude_flags": {"type": "array", "items": {"type": "string"}}
+          "claude_flags": {"type": "array", "items": {"type": "string"}},
+          "providers": {"type": "array", "items": {"$ref": "#/definitions/provider_name"}, "uniqueItems": true, "description": "Provider profiles this host has; absent means every configured profile"}
         }
       }
     },
+    "providers": {
+      "type": "object",
+      "description": "Provider profiles for workers (docs/providers.md). The secrets live in env_file on each host, never here.",
+      "propertyNames": {"$ref": "#/definitions/provider_name"},
+      "additionalProperties": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["env_file"],
+        "properties": {
+          "env_file": {"type": "string", "minLength": 1, "description": "Path on the host to a mode-600 KEY=VALUE file"},
+          "models": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "opus": {"type": "string", "minLength": 1},
+              "sonnet": {"type": "string", "minLength": 1},
+              "haiku": {"type": "string", "minLength": 1},
+              "fable": {"type": "string", "minLength": 1},
+              "subagent": {"type": "string", "minLength": 1}
+            }
+          },
+          "cost_basis": {"enum": ["provider", "anthropic_estimate", "none"], "description": "What total_cost_usd means for this profile (default anthropic_estimate)"}
+        }
+      }
+    },
+    "default_provider": {"$ref": "#/definitions/provider_name"},
     "merge_cmd": {"$ref": "#/definitions/cmd"},
     "pr_cmd": {"$ref": "#/definitions/cmd"},
     "check_cmd": {"$ref": "#/definitions/cmd"},
@@ -56,6 +83,7 @@
     "branch_prefix": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,31}$"}
   },
   "definitions": {
+    "provider_name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},
     "cmd": {
       "description": "A command, run without a shell when it is an array; as a shell string otherwise.",
       "type": ["string", "array"],

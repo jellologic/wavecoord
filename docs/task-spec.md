@@ -66,6 +66,8 @@ The frontmatter is a small YAML subset (scalars, flow lists `[a, b]`, one nested
 | `exec.timeout_min` | yes | Wall clock limit; the launcher kills the attempt after it |
 | `exec.host_needs` | no | Capabilities a host must have (matched against host names and labels) |
 | `exec.split_if` | no | When the worker should stop and propose a split |
+| `exec.provider` | no | Provider profile for the worker (`providers.md`); default `default_provider` |
+| `exec.provider_fallback` | no | Profiles to use next, in order, after a rate limit or overload |
 | `exec.autocompact_window` | no | Token count at which the worker compacts |
 
 ## Body sections

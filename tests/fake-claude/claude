@@ -24,6 +24,9 @@ Environment:
   FAKE_CLAUDE_COST=<usd>   total_cost_usd (default 0.0)
   FAKE_CLAUDE_DUMP=<p>     write {"argv", "env" (WAVECOORD_* and CLAUDE* keys), "cwd", "stdin"} to <p>
   FAKE_CLAUDE_EVENTS=<p>   a JSONL file; each line goes into the stream-json output before the result
+  FAKE_CLAUDE_STDERR=<s>   write <s> as a line to stderr first (like a provider's model warning)
+  FAKE_CLAUDE_EXPECT_ENV=<p>  a JSON object {KEY: value}; a null value means KEY must be absent.
+                           On a mismatch: print the KEY names to stderr and exit 3 (is_error)
 """
 
 import argparse
@@ -118,14 +121,27 @@ def main(argv):
         prompt = (prompt + "\n" + data) if prompt else data
 
     if os.environ.get("FAKE_CLAUDE_DUMP"):
-        keep = {k: v for k, v in os.environ.items() if k.startswith(("WAVECOORD_", "CLAUDE"))}
+        keep = {k: v for k, v in os.environ.items()
+                if k.startswith(("WAVECOORD_", "CLAUDE", "ANTHROPIC_")) or k == "API_TIMEOUT_MS"}
         with open(os.environ["FAKE_CLAUDE_DUMP"], "w", encoding="utf-8") as f:
             json.dump({"argv": argv, "env": keep, "cwd": os.getcwd(), "stdin": prompt}, f)
+
+    if os.environ.get("FAKE_CLAUDE_STDERR"):
+        sys.stderr.write(os.environ["FAKE_CLAUDE_STDERR"] + "\n")
+        sys.stderr.flush()
+    env_errors = []
+    if os.environ.get("FAKE_CLAUDE_EXPECT_ENV"):
+        with open(os.environ["FAKE_CLAUDE_EXPECT_ENV"], encoding="utf-8") as f:
+            for k, want in json.load(f).items():
+                if os.environ.get(k) != want:
+                    env_errors.append(k)
+        if env_errors:
+            sys.stderr.write("fake claude: unexpected env: %s\n" % ", ".join(sorted(env_errors)))
 
     started = time.time()
     if os.environ.get("FAKE_CLAUDE_SLEEP"):
         time.sleep(float(os.environ["FAKE_CLAUDE_SLEEP"]))
-    exit_code = int(os.environ.get("FAKE_CLAUDE_EXIT", "0"))
+    exit_code = 3 if env_errors else int(os.environ.get("FAKE_CLAUDE_EXIT", "0"))
     structured = report_for(prompt, session_id)
     text = str(structured.get("summary") or "fake claude done")
     usage = {"input_tokens": len(prompt.split()), "output_tokens": len(text.split()),
@@ -141,6 +157,8 @@ def main(argv):
         "session_id": session_id,
         "total_cost_usd": float(os.environ.get("FAKE_CLAUDE_COST", "0")),
         "usage": usage,
+        "modelUsage": {args.model: {"inputTokens": usage["input_tokens"], "outputTokens": usage["output_tokens"],
+                                    "cacheReadInputTokens": 0, "cacheCreationInputTokens": 0, "costUSD": 0.0}},
     }
     result["structured_output"] = structured
 

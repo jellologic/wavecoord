@@ -28,6 +28,7 @@ import time
 from wavecoord import zipapp
 
 from . import coord as coordmod
+from . import providers
 from .common import (ACTIVE, ATTEMPT_ID_RE, DEVNULL, FINAL, PIPE, Flock, LauncherError, ensure_dir, iso,
                      lock_held, now, pid_alive, read_json, tail_text, update_status, wc_home, write_json)
 from .worktrees import (dirty_count, prepare_worktree, remove_worktree, unpushed_commits)
@@ -102,6 +103,8 @@ def attempt_view(d):
         "pr_url": st.get("pr_url"),
         "report_status": st.get("report_status"),
         "worktree": task.get("worktree"),
+        "provider": (task.get("spec") or {}).get("provider") or providers.ANTHROPIC,
+        "throttled": st.get("throttled"),
     }
 
 
@@ -216,6 +219,7 @@ def r_probe(payload, args):
         "plugin_present": bool(payload.get("plugin_hash")) and
         os.path.isfile(os.path.join(plugin_copy_dir(payload["plugin_hash"]), ".claude-plugin", "plugin.json")),
         "token_sha": file_sha(coordmod.token_path()),
+        "providers": providers.probe(payload.get("providers") or {}),
     }
     if payload.get("flush_spool", True):
         out["spool"] = coordmod.flush_spool()
@@ -281,6 +285,12 @@ def r_launch(payload, args):
     project = payload["project"]
     aid = spec["attempt_id"]
     d = attempt_dir(project, aid)
+    prov = spec.get("provider") or providers.ANTHROPIC
+    if not providers.is_builtin(prov, spec.get("provider_profile")):
+        why = providers.check_env_file((spec.get("provider_profile") or {}).get("env_file") or "")
+        if why:
+            return {"ok": False, "error": "refusing to start %s on %s: provider %s: %s"
+                    % (aid, cfg["name"], prov, why)}
     plugin_dir = plugin_copy_dir(payload["plugin_hash"]) if payload.get("plugin_hash") else None
     if plugin_dir and not os.path.isdir(plugin_dir):
         return {"ok": False, "need_plugin": True, "error": "plugin copy %s missing" % plugin_dir}

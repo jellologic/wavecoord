@@ -6,6 +6,7 @@ import os
 from wavecoord import jsonschema_lite, zipapp
 
 from .common import LauncherError, git_run
+from .providers import ANTHROPIC
 
 CONFIG_REL_PATH = os.path.join(".claude", "wavecoord.json")
 DEFAULT_HOSTS = [{"name": "local", "slots": 2, "repo_path": "."}]
@@ -56,6 +57,26 @@ class Config(object):
                 raise LauncherError("duplicate host name %r in %s" % (h["name"], path or "config"))
             self.hosts[h["name"]] = h
         self.wip_cap = raw.get("wip_cap") or sum(h["slots"] for h in self.hosts.values())
+        self.providers = dict(raw.get("providers") or {})
+        self.default_provider = raw.get("default_provider") or ANTHROPIC
+        for n in [self.default_provider] + [x for h in self.hosts.values() for x in h.get("providers") or []]:
+            if not self.known_provider(n):
+                raise LauncherError("unknown provider %r in %s (providers: %s)"
+                                    % (n, path or "config", ", ".join(sorted(self.providers)) or "none"))
+
+    def known_provider(self, name):
+        return name == ANTHROPIC or name in self.providers
+
+    def profile(self, name):
+        """The profile (no secrets: env_file path, models, cost_basis), or None for built-in anthropic."""
+        return self.providers.get(name)
+
+    def host_providers(self, host_name):
+        """The profiles a host has: its `providers` list, else every configured one plus anthropic."""
+        h = self.hosts[host_name]
+        if h.get("providers") is not None:
+            return list(h["providers"])
+        return sorted(set(self.providers) | {ANTHROPIC})
 
     def coord_url(self):
         from wavecoord.cli import resolve_coord_url

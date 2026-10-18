@@ -1,0 +1,30 @@
+{
+  "schema": "task-spec",
+  "doc": {
+    "id": "readme-install",
+    "phase": "p0",
+    "needs": [],
+    "paths": [
+      "README.md"
+    ],
+    "class": "C",
+    "size": "XS",
+    "state": "done",
+    "exec": {
+      "model": "sonnet",
+      "effort": "low",
+      "max_turns": 10,
+      "budget_usd": 0.5,
+      "timeout_min": 10,
+      "provider": "Bad Name"
+    },
+    "sections": {
+      "context": "The README has no install line.",
+      "risks": [],
+      "acceptance": [
+        "grep -q 'plugin install' README.md"
+      ],
+      "prompt": "Add the install line to README.md."
+    }
+  }
+}

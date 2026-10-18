@@ -26,7 +26,12 @@
       "python3"
     ],
     "split_if": "the change needs a storage schema migration",
-    "autocompact_window": 160000
+    "autocompact_window": 160000,
+    "provider": "zai",
+    "provider_fallback": [
+      "openrouter",
+      "anthropic"
+    ]
   },
   "sections": {
     "context": "Refresh tokens never rotate today. The session store owns token persistence.",
