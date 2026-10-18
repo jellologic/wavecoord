@@ -74,6 +74,10 @@ Some providers make `claude` print warnings such as `[claude-code:unrecognized_m
 
 `total_cost_usd` is Claude Code's estimate at Anthropic prices. The attempt result and the report post therefore also carry `usage` and `model_usage` (token counts from the final result) and `cost_basis` from the profile.
 
+### Budgets
+
+For a profile with `cost_basis: none` (a provider with its own prices behind an Anthropic-compatible endpoint, for example GLM), `total_cost_usd` means nothing, so a dollar limit means nothing too. The launcher then does not pass `--max-budget-usd` (`exec.budget_usd`, `--max-budget-usd`), and `wrapper.log` says that the budget is not enforced. Limit such a run with `exec.max_tokens` (`--max-tokens` on `wavecoord launch`): the wrapper counts the input, output and cache-write tokens of the main conversation from the stream (cache reads are not counted) and interrupts the run when the count reaches the limit (`reason: token_budget`, state `failed`). Without `exec.max_tokens`, only `exec.max_turns` and `exec.timeout_min` limit the run. For the other cost bases (`anthropic`, `anthropic_estimate`, `provider`) `--max-budget-usd` is passed as before, and `exec.max_tokens` applies too when it is set. The result has `tokens`, the count of the run.
+
 The wrapper marks a run `throttled` on an `api_retry` with error `rate_limit` or `overloaded`, a rejected `rate_limit_event`, a `StopFailure` hook event, or an error result that names a rate limit or overload. The result and the report post carry `provider`, `throttled`, `throttle` (the reasons) and `next_provider` (the profile after the current one in `provider_fallback`). The launcher does not switch profiles itself.
 
 ## Fallback

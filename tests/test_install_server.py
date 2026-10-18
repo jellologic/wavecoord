@@ -118,5 +118,93 @@ class InstallServerTest(unittest.TestCase):
         self.assertEqual(ran[-1], ["systemctl", "--user", "restart", "wavecoord-demo.service"])
 
 
+FAKE_LAUNCHCTL = """#!/usr/bin/env python3
+# A fake launchctl: the job stays loaded for $FAKE_LC_LINGER `print` calls after a bootout (the old
+# process still exits); a bootstrap while it is loaded fails with exit 5, as launchd does.
+import json, os, sys
+st_path = os.environ["FAKE_LC_STATE"]
+st = json.load(open(st_path)) if os.path.exists(st_path) else {"loaded": True, "linger": 0, "eio": 0}
+args = sys.argv[1:]
+with open(os.environ["FAKE_LC_LOG"], "a") as f:
+    f.write(" ".join(args) + "\\n")
+rc = 0
+if args[0] == "bootout":
+    if st["loaded"]:
+        st["linger"] = int(os.environ.get("FAKE_LC_LINGER", "0"))
+        st["loaded"] = st["linger"] > 0
+    else:
+        sys.stderr.write("Boot-out failed: 3: No such process\\n"); rc = 3
+elif args[0] == "print":
+    if st["linger"] > 0:
+        st["linger"] -= 1
+        st["loaded"] = st["linger"] > 0
+        rc = 0
+    else:
+        rc = 0 if st["loaded"] else 113
+elif args[0] == "bootstrap":
+    if st["loaded"] or st.get("eio", 0) < int(os.environ.get("FAKE_LC_EIO", "0")):
+        st["eio"] = st.get("eio", 0) + 1
+        sys.stderr.write("Bootstrap failed: 5: Input/output error\\n"); rc = 5
+    else:
+        st["loaded"] = True
+json.dump(st, open(st_path, "w"))
+sys.exit(rc)
+"""
+
+
+class LaunchdRestartTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = os.path.realpath(tempfile.mkdtemp(prefix="wc-lc-"))
+        self.addCleanup(shutil.rmtree, self.tmp, True)
+        bindir = os.path.join(self.tmp, "bin")
+        os.makedirs(bindir)
+        with open(os.path.join(bindir, "launchctl"), "w") as f:
+            f.write(FAKE_LAUNCHCTL)
+        os.chmod(os.path.join(bindir, "launchctl"), 0o755)
+        self.log = os.path.join(self.tmp, "lc.log")
+        self.state = os.path.join(self.tmp, "lc.json")
+        self.env = dict(os.environ, PATH=bindir + os.pathsep + os.environ.get("PATH", ""),
+                        FAKE_LC_LOG=self.log, FAKE_LC_STATE=self.state)
+        self.p = {"platform": "darwin", "zipapp": os.path.join(self.tmp, "wc.pyz"), "log": os.path.join(self.tmp, "l", "s.log"),
+                  "unit_path": os.path.join(self.tmp, "u.plist"), "unit": "<plist/>",
+                  "start": [["launchctl", "bootout", "gui/501/dev.wavecoord.demo"],
+                            ["launchctl", "bootstrap", "gui/501", os.path.join(self.tmp, "u.plist")]]}
+
+    def run_install(self, **env):
+        e = dict(self.env, **env)
+        run = lambda argv: subprocess.run(argv, env=e, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                                          universal_newlines=True)
+        return installsrv.install(self.p, start=True, run=run, sleep=lambda s: None, wait_s=5)
+
+    def calls(self):
+        with open(self.log) as f:
+            return [l.split()[0] for l in f if l.strip()]
+
+    def test_waits_for_the_old_job_before_bootstrap(self):
+        self.run_install(FAKE_LC_LINGER="3")
+        c = self.calls()
+        self.assertEqual(c[0], "bootout")
+        self.assertEqual(c[-1], "bootstrap")
+        self.assertEqual(c.count("bootstrap"), 1)  # no EIO: it waited until `print` said gone
+        self.assertGreaterEqual(c.count("print"), 3)
+
+    def test_not_loaded_is_fine(self):
+        with open(self.state, "w") as f:
+            json.dump({"loaded": False, "linger": 0, "eio": 0}, f)
+        self.run_install()
+        self.assertEqual(self.calls(), ["bootout", "print", "bootstrap"])
+
+    def test_retries_once_on_eio(self):
+        self.run_install(FAKE_LC_EIO="1")
+        c = self.calls()
+        self.assertEqual(c.count("bootstrap"), 2)
+
+    def test_second_eio_fails_loudly(self):
+        with self.assertRaises(RuntimeError) as cm:
+            self.run_install(FAKE_LC_EIO="2")
+        self.assertIn("exit 5", str(cm.exception))
+        self.assertEqual(self.calls().count("bootstrap"), 2)
+
+
 if __name__ == "__main__":
     unittest.main()

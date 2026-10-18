@@ -148,8 +148,7 @@ def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None
         else:
             err.write("wavecoord gate-check: %s%s\n" % (verdict, (": " + detail) if detail else ""))
             for v in res["violations"][:50]:
-                err.write("  %s: %s%s\n" % (v.get("path"), v.get("kind"),
-                                             " (task %s, %s)" % (v.get("task"), v.get("glob")) if v.get("glob") else ""))
+                err.write("  %s\n" % fence.violation_line(v))
         return code
 
     try:

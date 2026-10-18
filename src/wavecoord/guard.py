@@ -99,12 +99,20 @@ def write_identity(hooks_dir, env):
             pass
         return None
     ident = {"agent": agent, "task": (env.get("WAVECOORD_TASK") or "").strip() or None,
-             "epoch": fence._epoch_from_env(env), "attempt": (env.get("WAVECOORD_ATTEMPT") or "").strip() or None,
+             "epoch": fence._epoch_from_env(env), "lease_id": _int_or_none(env.get("WAVECOORD_LEASE_ID")),
+             "attempt": (env.get("WAVECOORD_ATTEMPT") or "").strip() or None,
              "worktree": (env.get("WAVECOORD_WORKTREE") or "").strip() or None,
              "fence": fence.launcher_modes(env)}
     with open(p, "w", encoding="utf-8") as f:
         json.dump(ident, f, sort_keys=True)
     return ident
+
+
+def _int_or_none(v):
+    try:
+        return int(str(v).strip())
+    except (TypeError, ValueError):
+        return None
 
 
 def read_identity(top):
@@ -258,8 +266,10 @@ def check(mode, spec=None, enforce=False, cwd=None, env=None, stdin=sys.stdin, e
         return 0
     err.write("wavecoord guard: this %s touches paths outside your lease or inside another lease:\n" % what)
     for v in violations[:50]:
-        err.write("  %s: %s%s\n" % (v.get("path"), v.get("kind"),
-                                     " (task %s, %s)" % (v.get("task"), v.get("glob")) if v.get("task") else ""))
+        err.write("  %s\n" % fence.violation_line(v))
+    if any(v.get("kind") == "outside_lease" for v in violations) and ident and ident.get("lease_id"):
+        err.write("wavecoord guard: checked as agent %s, lease #%s, epoch %s (recorded at `guard install`)\n"
+                  % (agent, ident.get("lease_id"), epoch))
     if enforce:
         err.write("wavecoord guard: %s refused (--enforce)\n" % what)
         return 1

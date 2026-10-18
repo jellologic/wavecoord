@@ -172,6 +172,53 @@ class ProviderEndToEnd(LauncherTestCase):
         rows = L.ls()["local"]
         self.assertEqual(rows[0]["provider"], "glmtest")
 
+    def argv_of(self, dump):
+        with open(dump) as f:
+            return json.load(f)["argv"]
+
+    def test_no_usd_budget_for_cost_basis_none(self):
+        """total_cost_usd is an Anthropic-priced estimate for a cost_basis none provider: no --max-budget-usd."""
+        dump = os.path.join(self.tmp, "dump.json")
+        os.environ["FAKE_CLAUDE_DUMP"] = dump
+        L = self.provider_launcher()
+        L.launch(self.opts(max_budget_usd=2.5, max_turns=7))
+        r = self.wait_state(L, "t1-1", ("reported", "failed", "timed_out"))
+        self.assertEqual((r["state"], r["cost_basis"]), ("reported", "none"))
+        argv = self.argv_of(dump)
+        self.assertNotIn("--max-budget-usd", argv)
+        self.assertEqual(argv[argv.index("--max-turns") + 1], "7")
+        with open(os.path.join(r["state_dir"], "wrapper.log")) as f:
+            log = f.read()
+        self.assertIn("--max-budget-usd 2.5 is not enforced: provider glmtest has cost_basis none", log)
+        self.assertIn("only max_turns and timeout_min limit the run", log)
+        # another cost basis keeps the dollar limit
+        dump2 = os.path.join(self.tmp, "dump2.json")
+        os.environ["FAKE_CLAUDE_DUMP"] = dump2
+        L.launch(self.opts(task="t2", max_budget_usd=2.5, provider="spare"))
+        self.wait_state(L, "t2-1", ("reported", "failed", "timed_out"))
+        argv = self.argv_of(dump2)
+        self.assertEqual(argv[argv.index("--max-budget-usd") + 1], "2.5")
+
+    def test_token_budget_stops_the_run(self):
+        ev = os.path.join(self.tmp, "early.jsonl")
+        with open(ev, "w") as f:
+            for i, (inp, out) in enumerate(((40, 10), (40, 30), (50, 20))):
+                msg = {"id": "msg_%d" % i, "role": "assistant", "content": [{"type": "text", "text": "x"}],
+                       "usage": {"input_tokens": inp, "output_tokens": out, "cache_read_input_tokens": 100000}}
+                f.write(json.dumps({"type": "assistant", "parent_tool_use_id": None, "message": msg}) + "\n")
+                f.write(json.dumps({"type": "assistant", "parent_tool_use_id": None, "message": msg}) + "\n")
+        os.environ["FAKE_CLAUDE_EARLY_EVENTS"] = ev
+        os.environ["FAKE_CLAUDE_SLEEP"] = "60"
+        L = self.provider_launcher()
+        L.launch(self.opts(max_budget_usd=1, max_tokens=150))
+        r = self.wait_state(L, "t1-1", ("reported", "failed", "timed_out"), timeout=40)
+        self.assertEqual((r["state"], r["reason"]), ("failed", "token_budget"), r)
+        self.assertEqual(r["tokens"], 190)  # each message once; cache reads not counted
+        with open(os.path.join(r["state_dir"], "wrapper.log")) as f:
+            log = f.read()
+        self.assertIn("token budget 150", log)
+        self.assertIn("token_budget: interrupting claude", log)
+
     def test_refuses_mode_0644(self):
         os.chmod(self.env_file, 0o644)
         L = self.provider_launcher()

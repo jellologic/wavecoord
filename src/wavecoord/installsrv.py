@@ -17,6 +17,7 @@ import re
 import shlex
 import subprocess
 import sys
+import time
 from xml.sax.saxutils import escape
 
 from wavecoord import const
@@ -176,7 +177,47 @@ def _write(path, data, mode):
     os.replace(tmp, path)
 
 
-def install(p, start=True, run=None):
+BOOTOUT_WAIT_S = 15.0  # how long to wait for the old launchd job to exit after `bootout`
+LAUNCHD_EIO = 5  # `launchctl bootstrap`: "Bootstrap failed: 5: Input/output error" (the old job still exits)
+
+
+def _fail(argv, r):
+    return RuntimeError("%s failed (exit %s): %s" % (" ".join(argv), r.returncode,
+                                                     (r.stderr or r.stdout or "").strip()[-300:]))
+
+
+def _launchd_wait_gone(run, target, sleep, clock, wait_s):
+    """Poll `launchctl print <target>` until the job is gone. -> True when it is gone in time."""
+    end = clock() + wait_s
+    while True:
+        if run(["launchctl", "print", target]).returncode != 0:
+            return True
+        if clock() >= end:
+            return False
+        sleep(0.25)
+
+
+def _launchd_restart(p, run, done, sleep, clock, wait_s):
+    """bootout (a job that is not loaded is fine), wait until the old process exits, bootstrap;
+    retry the bootstrap once after an EIO (exit 5)."""
+    bootout, bootstrap = p["start"][0], p["start"][-1]
+    target = bootout[-1]
+    run(bootout)
+    done.append(bootout)
+    _launchd_wait_gone(run, target, sleep, clock, wait_s)
+    r = run(bootstrap)
+    done.append(bootstrap)
+    if r.returncode == LAUNCHD_EIO:
+        run(bootout)  # a half-loaded job: take it out again
+        done.append(bootout)
+        _launchd_wait_gone(run, target, sleep, clock, wait_s)
+        r = run(bootstrap)
+        done.append(bootstrap)
+    if r.returncode != 0:
+        raise _fail(bootstrap, r)
+
+
+def install(p, start=True, run=None, sleep=None, clock=None, wait_s=None):
     """Copy the zipapp, write the unit, (re)start it. -> list of commands run."""
     from wavecoord import zipapp
     run = run or (lambda argv: subprocess.run(argv, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
@@ -186,14 +227,15 @@ def install(p, start=True, run=None):
     os.makedirs(os.path.dirname(p["log"]), exist_ok=True)
     _write(p["unit_path"], p["unit"].encode("utf-8"), 0o644)
     done = []
-    if start:
-        for i, argv in enumerate(p["start"]):
+    if start and p["platform"] == "darwin":
+        _launchd_restart(p, run, done, sleep or time.sleep, clock or time.time,
+                         BOOTOUT_WAIT_S if wait_s is None else wait_s)
+    elif start:
+        for argv in p["start"]:
             r = run(argv)
             done.append(argv)
-            # `launchctl bootout` of an agent that is not loaded fails; that is fine
-            if r.returncode != 0 and not (p["platform"] == "darwin" and i == 0):
-                raise RuntimeError("%s failed (exit %s): %s" % (" ".join(argv), r.returncode,
-                                                                 (r.stderr or r.stdout or "").strip()[-300:]))
+            if r.returncode != 0:
+                raise _fail(argv, r)
     return done
 
 

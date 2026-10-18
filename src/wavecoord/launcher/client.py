@@ -208,14 +208,17 @@ class Launcher(object):
         return read_json(os.path.join(self.index_dir(), aid + ".json"))
 
     # -- lease
-    def claim(self, task, attempt, agent, host, reservations):
-        """Claim the task's lease. -> (lease dict or None, note)."""
+    def claim(self, task, attempt, agent, host, reservations, resume=False):
+        """Claim the task's lease. `resume`: a --continue run takes over the attempt's parked lease.
+        -> (lease dict or None, note)."""
         if not self.coord_url:
             return None, "no coordinator configured"
         c = coordmod.Coord(self.coord_url, agent=agent)
         body = {"task": task, "attempt": attempt, "holder": agent, "host": host}
         if reservations:
             body["reservations"] = reservations
+        if resume:
+            body["resume"] = True
         try:
             status, out = c.request("POST", "/api/leases", body)
         except Unreachable as e:
@@ -354,14 +357,21 @@ class Launcher(object):
         agent = "worker-%s-%s" % (aid, rand4())
         lease_id, epoch = opts.get("lease_id"), opts.get("lease_epoch")
         lease_note = "given" if epoch else None
+        reservations = opts.get("reservations")
+        if not reservations and opts.get("continue"):
+            # a --continue run without --spec: the paths of the earlier run of the attempt
+            reservations = rec.get("reservations") or None
         if not epoch and not opts.get("no_claim"):
-            claim = opts.get("claim") or self.claim
-            lease, lease_note = claim(task, attempt, agent, name, opts.get("reservations"))
+            if opts.get("claim"):
+                lease, lease_note = opts["claim"](task, attempt, agent, name, reservations)
+            else:
+                lease, lease_note = self.claim(task, attempt, agent, name, reservations,
+                                               resume=bool(opts.get("continue")))
             if lease:
                 lease_id, epoch = lease["id"], lease["epoch"]
             else:
                 warn("running %s without a lease: %s" % (aid, lease_note))
-        spec = {k: opts.get(k) for k in ("model", "effort", "max_turns", "max_budget_usd", "fallback_model",
+        spec = {k: opts.get(k) for k in ("model", "effort", "max_turns", "max_budget_usd", "max_tokens", "fallback_model",
                                          "timeout_min", "claude_flags")}
         spec.update({"task": task, "attempt": attempt, "attempt_id": aid, "branch": branch, "agent": agent,
                      "session_id": str(uuid.uuid4()), "prompt": opts["prompt"], "continue": bool(opts.get("continue")),
@@ -387,7 +397,8 @@ class Launcher(object):
         rec = {"id": aid, "host": name, "task": task, "attempt": attempt, "branch": branch, "agent": agent,
                "session_id": spec["session_id"], "lease_id": lease_id, "lease_epoch": epoch, "lease_note": lease_note,
                "worktree": out.get("worktree"), "provider": provider, "provider_fallback": fallback, "created": now(),
-               "continue": bool(opts.get("continue")), "collected": False}
+               "continue": bool(opts.get("continue")), "collected": False,
+               "reservations": reservations or old.get("reservations") or []}
         if skipped:
             rec["placement_skipped"] = {n: r[:200] for n, r in sorted(skipped.items())}
         if opts.get("continue") and old.get("pr_url"):

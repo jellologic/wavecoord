@@ -150,6 +150,7 @@
         "holder": {"$ref": "#/definitions/agent_id"},
         "host": {"$ref": "#/definitions/host"},
         "steal": {"type": "boolean"},
+        "resume": {"type": "boolean", "description": "A --continue run of the same attempt: take over the attempt's parked lease (a new epoch); with no reservations, keep the paths of the earlier lease"},
         "user_set": {"type": "boolean", "description": "Lead only: the user set this lease; the watchdog never nudges it or makes it stale"},
         "force": {"description": "lead only: grant an overlapping exclusive in fence enforce mode (logged)", "type": "boolean"},
         "reservations": {

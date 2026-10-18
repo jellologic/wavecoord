@@ -22,6 +22,8 @@ class StreamStats(object):
         self.plugins = []
         self.plugin_errors = []
         self.turns = 0  # assistant messages of the main conversation (live count)
+        self.tokens = 0  # input + output + cache-write tokens of the main conversation (live count)
+        self._usage_ids = {}
         self.cost_usd = None
         self.num_turns = None
         self.result = None  # the final `result` line (dict)
@@ -77,6 +79,7 @@ class StreamStats(object):
         elif t == "assistant":
             if e.get("parent_tool_use_id") is None:
                 self.turns += 1
+                self._count_tokens(e.get("message") or {})
             for block in ((e.get("message") or {}).get("content") or []):
                 if isinstance(block, dict) and block.get("type") == "tool_use":
                     self.last_tool = _tool_summary(block)
@@ -89,6 +92,20 @@ class StreamStats(object):
             key = "%s/%s" % (t, st) if st else str(t)
             self.other[key] = self.other.get(key, 0) + 1
         return notable
+
+    def _count_tokens(self, msg):
+        """One message id can come in several lines (one per content block): count its latest usage once."""
+        u = msg.get("usage") if isinstance(msg, dict) else None
+        if not isinstance(u, dict):
+            return
+        n = 0
+        for k in ("input_tokens", "output_tokens", "cache_creation_input_tokens"):
+            v = u.get(k)
+            if isinstance(v, int) and v > 0:
+                n += v
+        mid = msg.get("id") or "line-%d" % self.lines
+        self.tokens += n - self._usage_ids.get(mid, 0)
+        self._usage_ids[mid] = n
 
     @property
     def structured_output(self):
@@ -130,6 +147,7 @@ class StreamStats(object):
             "claude_version": self.version,
             "turns": self.num_turns if self.num_turns is not None else self.turns,
             "cost_usd": self.cost_usd,
+            "tokens": self.tokens,
             "api_retries": len(self.api_retries),
             "throttled_retries": len([r for r in self.api_retries if r.get("error") in THROTTLE_ERRORS]),
             "rate_limits": self.rate_limits[-5:],

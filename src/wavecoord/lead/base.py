@@ -11,7 +11,7 @@ import os
 import threading
 
 from wavecoord import const
-from wavecoord.core import ApiError, Ctx
+from wavecoord.core import PARKED_FAILED, ApiError, Ctx
 from wavecoord.launcher.common import LauncherError
 from wavecoord.plan import graph as g
 from wavecoord.plan.adapters import BuiltinPlan, CommandPlan, DirSource, GitSource, PlanError, plan_dir
@@ -136,8 +136,8 @@ class LeadBase(object):
         for l in snap["leases"]:
             if l["state"] in ("active", "stale"):
                 out[l["task"]] = "active"
-            elif l["state"] == "parked":
-                out.setdefault(l["task"], "review")
+            elif l["state"] == "parked" and l.get("reason") != PARKED_FAILED:
+                out.setdefault(l["task"], "review")  # a failed run's parked lease is no review
         for a in snap["attempts"]:
             if a["state"] in IN_FLIGHT:
                 out[a["task"]] = "active"
@@ -325,11 +325,12 @@ class LeadBase(object):
         from wavecoord.launcher.client import prompt_from_spec
         overrides = overrides or {}
         ex = dict(spec.get("exec") or {})
-        for k in ("model", "effort", "max_turns", "budget_usd", "timeout_min", "fallback_model"):
+        for k in ("model", "effort", "max_turns", "budget_usd", "max_tokens", "timeout_min", "fallback_model"):
             if overrides.get(k) is not None:
                 ex[k] = overrides[k]
         opts = {"task": spec["id"], "hosts": decision["hosts"], "host": host, "model": ex.get("model"),
                 "effort": ex.get("effort"), "max_turns": ex.get("max_turns"), "max_budget_usd": ex.get("budget_usd"),
+                "max_tokens": ex.get("max_tokens"),
                 "fallback_model": ex.get("fallback_model"), "timeout_min": ex.get("timeout_min"),
                 "provider": decision["provider"], "provider_fallback": decision["provider_fallback"],
                 "placement_avoid": decision.get("placement_avoid") or [],

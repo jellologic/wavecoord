@@ -75,6 +75,11 @@ def worker_settings(task=None):
     return out
 
 
+def usd_budget_enforced(spec):
+    """--max-budget-usd only when total_cost_usd means something for the provider (cost_basis not none)."""
+    return (spec.get("cost_basis") or "anthropic") != "none"
+
+
 def claude_argv(task, d):
     spec = task["spec"]
     cfg = task["hostcfg"]
@@ -87,6 +92,8 @@ def claude_argv(task, d):
              "--json-schema", json.dumps(report_schema(), separators=(",", ":"), sort_keys=True)]
     for key, flag in (("model", "--model"), ("effort", "--effort"), ("max_turns", "--max-turns"),
                       ("max_budget_usd", "--max-budget-usd"), ("fallback_model", "--fallback-model")):
+        if key == "max_budget_usd" and not usd_budget_enforced(spec):
+            continue  # total_cost_usd is an Anthropic-priced estimate here: the limit would mean nothing
         if spec.get(key) not in (None, ""):
             argv += [flag, str(spec[key])]
     if task.get("plugin_dir"):
@@ -249,6 +256,11 @@ class Attempt(object):
         finally:
             inp.close()
         update_status(self.d, claude_pid=p.pid)
+        max_tokens = self.spec.get("max_tokens")
+        if self.spec.get("max_budget_usd") and not usd_budget_enforced(self.spec):
+            self.log("budget: --max-budget-usd %s is not enforced: provider %s has cost_basis none; %s" % (
+                self.spec["max_budget_usd"], self.provider,
+                "token budget %s" % max_tokens if max_tokens else "only max_turns and timeout_min limit the run"))
         timeout_s = float(self.spec.get("timeout_min") or 120) * 60
         deadline = now() + timeout_s
         hb_every = const("HB_INTERVAL_S", 30.0)
@@ -270,6 +282,9 @@ class Attempt(object):
                     self.reason = "stopped"
                 elif now() > deadline:
                     self.reason = "timeout"
+                elif max_tokens and self.stats.tokens >= int(max_tokens):
+                    self.reason = "token_budget"
+                    self.note = "token budget used up: %d of %s tokens" % (self.stats.tokens, max_tokens)
                 elif now() >= next_hb:
                     next_hb = now() + hb_every
                     lost = self.heartbeat()

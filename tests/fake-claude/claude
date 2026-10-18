@@ -29,6 +29,7 @@ Environment:
   FAKE_CLAUDE_COST=<usd>   total_cost_usd (default 0.0)
   FAKE_CLAUDE_DUMP=<p>     write {"argv", "env" (WAVECOORD_* and CLAUDE* keys), "cwd", "stdin"} to <p>
   FAKE_CLAUDE_EVENTS=<p>   a JSONL file; each line goes into the stream-json output before the result
+  FAKE_CLAUDE_EARLY_EVENTS=<p>  a JSONL file; its lines go out (flushed) at start, before FAKE_CLAUDE_SLEEP
   FAKE_CLAUDE_STDERR=<s>   write <s> as a line to stderr first (like a provider's model warning)
   FAKE_CLAUDE_EDIT=<path>  emulate one Edit tool call on <path> before the result: run the PreToolUse
                            hooks of --plugin-dir (and of FAKE_CLAUDE_EXTRA_HOOKS, a hooks.json file) as
@@ -325,6 +326,12 @@ def main(argv):
                                 "provider": os.environ.get("FAKE_PROVIDER") or "anthropic", "mode": mode_key,
                                 "cwd": os.getcwd(), "branch": os.environ.get("WAVECOORD_BRANCH")}) + "\n")
     started = time.time()
+    if os.environ.get("FAKE_CLAUDE_EARLY_EVENTS"):
+        with open(os.environ["FAKE_CLAUDE_EARLY_EVENTS"], encoding="utf-8") as f:
+            for ln in f:
+                if ln.strip():
+                    sys.stdout.write(ln.rstrip("\n") + "\n")
+        sys.stdout.flush()
     if mode.get("send"):
         send_to_lead(mode["send"])
     if mode.get("wait_for"):
