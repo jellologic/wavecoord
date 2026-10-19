@@ -14,7 +14,7 @@ from wavecoord import schemaload
 from wavecoord.plan import graph as g
 from wavecoord.plan.adapters import BuiltinPlan, CommandPlan, DirSource, GitSource, PlanError
 from wavecoord.plan.edit import EditError, apply_edits, plan_edit
-from wavecoord.plan.spec import SpecError, load_text, parse_text
+from wavecoord.plan.spec import SpecError, load_text, parse_frontmatter, parse_text
 
 PLAN = os.path.join(_paths.FIXTURES, "plan", "tasks")
 ADAPTER = os.path.join(_paths.FIXTURES, "plan-adapter")
@@ -57,7 +57,10 @@ class ParseTest(unittest.TestCase):
     def test_rejects_outside_the_subset(self):
         base = read("cli-flags.md")
         cases = {
-            "block list": base.replace("needs: []", "needs:\n  - a"),
+            "empty key": base.replace("needs: []", "needs:"),
+            "list in a list item": base.replace("needs: []", "needs:\n  - id: a\n    x: [b]"),
+            "mixed list": base.replace("needs: []", "needs:\n  - a\n  - id: b"),
+            "nested map in a list item": base.replace("needs: []", "needs:\n  - id: a\n    x:\n      y: 1"),
             "tab": base.replace("size: S", "size:\tS"),
             "unknown section": base + "\n## Extra\ntext\n",
             "no frontmatter": base.split("---\n", 2)[2],
@@ -72,6 +75,17 @@ class ParseTest(unittest.TestCase):
             with self.subTest(what=what):
                 with self.assertRaises(SpecError):
                     load_text(text)
+
+    def test_block_lists_parse_like_flow_lists(self):
+        base = read("api-auth.md")
+        block = base.replace("needs: [session-store]", "needs:\n  - session-store").replace(
+            "paths: [src/auth/**, tests/test_rotate.py]", "paths:\n  - src/auth/**\n  - tests/test_rotate.py")
+        self.assertNotEqual(block, base)
+        self.assertEqual(load_text(block), load_text(base))
+        fm = parse_frontmatter(["outputs:", "  - id: a.b", "    kind: interface", "    contract: 'f(x) -> y'",
+                                "  - id: src/x.py", "    kind: file", "tags:", "  - z"])
+        self.assertEqual(fm, {"outputs": [{"id": "a.b", "kind": "interface", "contract": "f(x) -> y"},
+                                          {"id": "src/x.py", "kind": "file"}], "tags": ["z"]})
 
     def test_schema_errors_and_id_check(self):
         with self.assertRaises(SpecError) as cm:

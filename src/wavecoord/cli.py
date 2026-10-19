@@ -182,6 +182,8 @@ def build_parser():
     register_launcher(sub)
     from wavecoord.leadcli import register as register_lead
     register_lead(sub)
+    from wavecoord.specs.cli import register as register_spec
+    register_spec(sub)
     from wavecoord.installsrv import register as register_install
     register_install(sub)
 

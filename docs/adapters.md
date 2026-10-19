@@ -18,6 +18,7 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `default_provider` | `anthropic` | Profile when the task and the launch name none |
 | `wip_cap` | number of slots | Maximum attempts in flight |
 | `branch_prefix` | `wave` | Attempt branches are `<prefix>/<task>-<attempt>` |
+| `spec.dir` | `specs` | The spec tree's folder, relative to the repo root (`specs.md`). More `spec` keys arrive with the later phases of `design/spec-layer.md` |
 | `auto_resolve` | `false` | On a merge-tree conflict of a finished attempt, the collector dispatches a resolver by itself (at most `MAX_RESOLVES` per conflict) |
 | `auto_steer` | `draft` | What `/wavecoord:triage` does with a `stuck` notice of a running worker: `off` nothing; `draft` the `steerer` subagent drafts a hint and the lead decides; `hints` triage sends plain-text hints itself (at most one per attempt every 10 minutes). Interrupts and model switches always need the lead's decision. A task PR cannot change it (`config_change`) |
 

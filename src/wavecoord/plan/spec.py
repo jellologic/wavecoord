@@ -5,11 +5,17 @@ sections. The frontmatter subset is:
 
     key: scalar            # int, float, true/false, 'single' or "double" quoted, or bare text
     key: [a, b, 'c d']     # a flow list of scalars ([] for empty)
+    key:                   # a block list of scalars, one item per line
+      - a
+      - b
+    key:                   # a block list of flat maps (the spec tree's artifacts)
+      - id: x
+        kind: file
     exec:                  # exactly one level of nesting, indented by spaces
       key: scalar-or-list
     # a full-line comment
 
-Anything else (block lists, multi-line values, anchors, tabs) is an error.
+Anything else (nested collections, multi-line values, anchors, tabs) is an error.
 The body sections are `## Context`, `## Risks`, `## Acceptance`, `## Prompt` and
 `## Notes`; another `## ` heading is an error. Stdlib only.
 """
@@ -106,7 +112,7 @@ def _value(text, where):
 def parse_frontmatter(lines, first_line=2):
     """Frontmatter lines (between the --- markers) -> dict."""
     out, errs = {}, []
-    nest = None
+    rows = []  # (line number, indent, stripped text) of the lines that carry content
     for i, raw in enumerate(lines):
         where = "line %d" % (first_line + i)
         if "\t" in raw:
@@ -114,37 +120,106 @@ def parse_frontmatter(lines, first_line=2):
             continue
         if not raw.strip() or raw.lstrip().startswith("#"):
             continue
-        indent = len(raw) - len(raw.lstrip(" "))
-        m = KEY_RE.match(raw.strip())
-        if not m:
-            errs.append("%s: expected `key: value`, got %r" % (where, raw.strip()[:80]))
-            continue
-        key, val = m.group(1), m.group(2)
+        rows.append((first_line + i, len(raw) - len(raw.lstrip(" ")), raw.strip()))
+    i = 0
+    while i < len(rows):
+        ln, indent, text = rows[i]
+        where = "line %d" % ln
+        i += 1
         try:
-            if indent == 0:
-                nest = None
-                if key in out:
-                    raise SpecError(["%s: duplicate key %s" % (where, key)])
-                if val in (None, ""):
-                    if key not in NESTED:
-                        raise SpecError(["%s: %s needs a value" % (where, key)])
-                    out[key] = {}
-                    nest = key
-                else:
-                    out[key] = _value(val, where)
+            m = KEY_RE.match(text)
+            if indent != 0 or not m:
+                raise SpecError(["%s: %s" % (where, "unexpected indentation" if indent else
+                                                     "expected `key: value`, got %r" % text[:80])])
+            key, val = m.group(1), m.group(2)
+            if key in out:
+                raise SpecError(["%s: duplicate key %s" % (where, key)])
+            if val not in (None, ""):
+                out[key] = _value(val, where)
+                continue
+            body = []
+            while i < len(rows) and rows[i][1] > 0:
+                body.append(rows[i])
+                i += 1
+            if body and body[0][2].startswith("- "):
+                out[key] = _block_list(key, body)
+            elif key in NESTED and body:
+                out[key] = _nested_map(key, body)
+            elif key in NESTED:
+                out[key] = {}
             else:
-                if nest is None:
-                    raise SpecError(["%s: unexpected indentation" % where])
-                if val in (None, ""):
-                    raise SpecError(["%s: %s.%s needs a value (only one level of nesting)" % (where, nest, key)])
-                if key in out[nest]:
-                    raise SpecError(["%s: duplicate key %s.%s" % (where, nest, key)])
-                out[nest][key] = _value(val, where)
+                raise SpecError(["%s: %s needs a value (an empty list is `%s: []`)" % (where, key, key)])
         except SpecError as e:
             errs.extend(e.errors)
     if errs:
         raise SpecError(errs)
     return out
+
+
+def _nested_map(key, body):
+    out = {}
+    for ln, _indent, text in body:
+        where = "line %d" % ln
+        m = KEY_RE.match(text)
+        if not m:
+            raise SpecError(["%s: expected `key: value` under %s" % (where, key)])
+        if m.group(2) in (None, ""):
+            raise SpecError(["%s: %s.%s needs a value (only one level of nesting)" % (where, key, m.group(1))])
+        if m.group(1) in out:
+            raise SpecError(["%s: duplicate key %s.%s" % (where, key, m.group(1))])
+        out[m.group(1)] = _value(m.group(2), where)
+    return out
+
+
+def _block_list(key, body):
+    """`- item` lines: all scalars, or all flat maps (`- k: v` then indented `k: v` lines)."""
+    items, maps, errs = [], None, []
+    dash = body[0][1]
+    cur = None
+    for ln, indent, text in body:
+        where = "line %d" % ln
+        if indent == dash and text.startswith("- "):
+            item = text[2:].strip()
+            m = KEY_RE.match(item)
+            is_map = bool(m) and m.group(2) not in (None, "")
+            if maps is None:
+                maps = is_map
+            if is_map != maps:
+                errs.append("%s: %s mixes scalars and maps" % (where, key))
+                cur = None
+                continue
+            if not item:
+                errs.append("%s: empty list item" % where)
+                continue
+            if is_map:
+                cur = {m.group(1): _value(m.group(2), where)}
+                if isinstance(cur[m.group(1)], list):
+                    errs.append("%s: a list inside a list item is outside the YAML subset" % where)
+                items.append(cur)
+            else:
+                try:
+                    items.append(_scalar(item, where))
+                except SpecError as e:
+                    errs.extend(e.errors)
+            continue
+        m = KEY_RE.match(text)
+        if not maps or cur is None or indent <= dash or not m:
+            errs.append("%s: unexpected line in the list %s: %r" % (where, key, text[:80]))
+            continue
+        if m.group(2) in (None, ""):
+            errs.append("%s: %s needs a value (no nesting inside a list item)" % (where, m.group(1)))
+            continue
+        if m.group(1) in cur:
+            errs.append("%s: duplicate key %s in a list item" % (where, m.group(1)))
+            continue
+        v = _value(m.group(2), where)
+        if isinstance(v, list):
+            errs.append("%s: a list inside a list item is outside the YAML subset" % where)
+            continue
+        cur[m.group(1)] = v
+    if errs:
+        raise SpecError(errs)
+    return items
 
 
 def _risks(text, first_line):
