@@ -98,7 +98,15 @@
     "wip_cap": {"type": "integer", "minimum": 1},
     "auto_resolve": {"type": "boolean", "default": false, "description": "On a merge-tree conflict, the collector dispatches a resolver attempt by itself"},
     "auto_steer": {"enum": ["off", "draft", "hints"], "default": "draft", "description": "What triage does with a stuck worker: off (nothing), draft (the steerer drafts a hint for the lead), hints (triage sends plain-text hints itself)"},
-    "branch_prefix": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,31}$"}
+    "branch_prefix": {"type": "string", "pattern": "^[A-Za-z0-9][A-Za-z0-9._/-]{0,31}$"},
+    "spec": {
+      "description": "The spec tree (docs/specs.md, docs/design/spec-layer.md).",
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "dir": {"description": "The spec directory, relative to the repo root (default specs)", "type": "string", "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]+$"}
+      }
+    }
   },
   "definitions": {
     "provider_name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"},

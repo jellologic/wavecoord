@@ -1,0 +1,136 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "$id": "https://github.com/jellologic/wavecoord/schemas/spec-record.schema.json",
+  "title": "wavecoord spec tree record",
+  "description": "One parsed record of the spec tree (docs/design/spec-layer.md, section 3): the frontmatter keys plus `sections`. One definition per kind; the record's `kind` picks it. Body sections are checked by the parser (src/wavecoord/specs/doc.py).",
+  "definitions": {
+    "name": {"type": "string", "pattern": "^[a-z0-9][a-z0-9-]{0,62}$"},
+    "node_id": {
+      "description": "A node of the tree: 1 to 4 names joined by '/'.",
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}(/[a-z0-9][a-z0-9-]{0,62}){0,3}$"
+    },
+    "decision_id": {
+      "type": "string",
+      "pattern": "^[a-z0-9][a-z0-9-]{0,62}(/[a-z0-9][a-z0-9-]{0,62}){0,2}/decisions/[0-9]{4}-[0-9]{2}-[0-9]{2}-[a-z0-9][a-z0-9-]{0,62}$"
+    },
+    "node_ids": {"type": "array", "items": {"$ref": "#/definitions/node_id"}, "uniqueItems": true},
+    "glob": {
+      "description": "Repo-relative glob: no space, no leading '/', no '..', no braces.",
+      "type": "string", "minLength": 1, "maxLength": 300,
+      "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[^\\s{}]+$"
+    },
+    "title": {"type": "string", "minLength": 1, "maxLength": 200},
+    "tags": {"type": "array", "items": {"type": "string", "pattern": "^[a-z0-9][a-z0-9._-]{0,63}$"}, "uniqueItems": true},
+    "artifact": {
+      "description": "An input or output of a node (section 3.6).",
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "kind"],
+      "properties": {
+        "id": {"type": "string", "minLength": 1, "maxLength": 300, "pattern": "^[^\\s{}]+$"},
+        "kind": {"enum": ["file", "files", "interface", "api", "schema", "data", "config", "doc", "event"]},
+        "contract": {"type": "string", "minLength": 1, "maxLength": 500},
+        "from": {"$ref": "#/definitions/node_id"},
+        "external": {"type": "boolean"}
+      }
+    },
+    "artifacts": {"type": "array", "items": {"$ref": "#/definitions/artifact"}},
+    "capability": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "kind", "schema", "title", "sections"],
+      "properties": {
+        "status": {"enum": ["draft", "active", "deprecated"]},
+        "kind": {"const": "capability"},
+        "schema": {"const": 1},
+        "title": {"$ref": "#/definitions/title"},
+        "owners": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "needs": {"$ref": "#/definitions/node_ids"},
+        "conflicts_with": {"$ref": "#/definitions/node_ids"},
+        "inputs": {"$ref": "#/definitions/artifacts"},
+        "outputs": {"$ref": "#/definitions/artifacts"},
+        "tags": {"$ref": "#/definitions/tags"},
+        "aliases": {"$ref": "#/definitions/node_ids"},
+        "sections": {"type": "object"}
+      }
+    },
+    "feature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "kind", "schema", "title", "sections"],
+      "properties": {
+        "status": {"enum": ["draft", "active", "deprecated"]},
+        "kind": {"const": "feature"},
+        "schema": {"const": 1},
+        "title": {"$ref": "#/definitions/title"},
+        "owners": {"type": "array", "items": {"type": "string", "minLength": 1}, "uniqueItems": true},
+        "needs": {"$ref": "#/definitions/node_ids"},
+        "conflicts_with": {"$ref": "#/definitions/node_ids"},
+        "inputs": {"$ref": "#/definitions/artifacts"},
+        "outputs": {"$ref": "#/definitions/artifacts"},
+        "tags": {"$ref": "#/definitions/tags"},
+        "aliases": {"$ref": "#/definitions/node_ids"},
+        "sections": {"type": "object"}
+      }
+    },
+    "requirement": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "kind", "schema", "title", "sections"],
+      "properties": {
+        "status": {"enum": ["draft", "approved", "deprecated"]},
+        "kind": {"const": "requirement"},
+        "schema": {"const": 1},
+        "title": {"$ref": "#/definitions/title"},
+        "needs": {"$ref": "#/definitions/node_ids"},
+        "conflicts_with": {"$ref": "#/definitions/node_ids"},
+        "inputs": {"$ref": "#/definitions/artifacts"},
+        "outputs": {"$ref": "#/definitions/artifacts"},
+        "supersedes": {"$ref": "#/definitions/node_ids"},
+        "tags": {"$ref": "#/definitions/tags"},
+        "aliases": {"$ref": "#/definitions/node_ids"},
+        "sections": {"type": "object"}
+      }
+    },
+    "task": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "kind", "schema", "title", "paths", "class", "size", "exec", "sections"],
+      "properties": {
+        "status": {"enum": ["draft", "planned", "on_hold", "dropped", "in_progress", "in_review", "done"]},
+        "kind": {"const": "task"},
+        "schema": {"const": 1},
+        "title": {"$ref": "#/definitions/title"},
+        "basis": {"type": "string", "pattern": "^[0-9a-f]{8}$"},
+        "needs": {"$ref": "#/definitions/node_ids"},
+        "conflicts_with": {"$ref": "#/definitions/node_ids"},
+        "inputs": {"$ref": "#/definitions/artifacts"},
+        "outputs": {"$ref": "#/definitions/artifacts"},
+        "paths": {"type": "array", "items": {"$ref": "#/definitions/glob"}, "minItems": 1, "uniqueItems": true},
+        "shared_paths": {"type": "array", "items": {"$ref": "#/definitions/glob"}, "uniqueItems": true},
+        "class": {"enum": ["A", "B", "C"]},
+        "size": {"enum": ["XS", "S", "M", "L", "XL"]},
+        "exec": {"description": "task-spec.schema.json#/definitions/exec (checked against that schema)", "type": "object"},
+        "tags": {"$ref": "#/definitions/tags"},
+        "aliases": {"$ref": "#/definitions/node_ids"},
+        "sections": {"type": "object"}
+      }
+    },
+    "decision": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "kind", "schema", "title", "sections"],
+      "properties": {
+        "status": {"enum": ["proposed", "accepted", "rejected"]},
+        "kind": {"const": "decision"},
+        "schema": {"const": 1},
+        "title": {"$ref": "#/definitions/title"},
+        "affects": {"type": "array", "items": {"$ref": "#/definitions/node_id"}, "uniqueItems": true},
+        "supersedes": {"type": "array", "items": {"$ref": "#/definitions/decision_id"}, "uniqueItems": true},
+        "tags": {"$ref": "#/definitions/tags"},
+        "sections": {"type": "object"}
+      }
+    }
+  }
+}

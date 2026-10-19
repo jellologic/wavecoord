@@ -323,7 +323,7 @@ Git reports a conflict when both sides change the same lines, or lines that touc
 | M1 | One node per file; the ID is the path; no allocated numbers | Branches that work on different nodes touch different files; there is no shared counter |
 | M2 | One fact per line: each key, list item, artifact key, scenario step and command on its own line | A change is a one-line hunk |
 | M3 | Block lists only; `[]` only for an empty list | Branches that add different items change different lines |
-| M4 | Unordered lists are sorted: `needs`, `conflicts_with`, `tags`, `aliases`, `owners`, `supersedes`, `paths`, `shared_paths`, Verify, Acceptance; `inputs` and `outputs` by `id`. Tools insert in sorted position. Steps, scenarios and prose keep the author's order | Inserts at different positions, with an unchanged line between, merge |
+| M4 | Unordered lists are sorted: `needs`, `conflicts_with`, `tags`, `aliases`, `owners`, `supersedes`, `affects`, `paths`, `shared_paths`; `inputs` and `outputs` by `id`. Tools insert in sorted position. Verify and Acceptance (slowest command last), steps, scenarios and prose keep the author's order | Inserts at different positions, with an unchanged line between, merge |
 | M5 | No committed derived data: no index, counts, roll-ups, `ready`/`blocked`, back links, "superseded by", "produced by" | Derived data turns independent changes into changes of one shared line |
 | M6 | Prose has one sentence per line; tools split sentences; `fmt` never reflows | A sentence edit is a one-line hunk |
 | M7 | No tables for data that changes (lint warns outside Design) | A row change rewrites the alignment of other rows |
@@ -359,7 +359,7 @@ New package `src/wavecoord/specs/` (stdlib only):
 
 `plan/spec.py` gets the YAML additions (block lists of scalars and of flat maps), a shared typed section splitter, and in-place rewriting of one frontmatter key (used by status commits so a task file is never re-rendered by the coordinator).
 
-The kind schemas are `schemas/spec-capability.schema.json`, `spec-feature`, `spec-requirement`, `spec-task`, plus `spec-ops.schema.json` for the op API and the JSON of each query. `task-spec.schema.json` is kept for the migration only.
+The kind schemas are the definitions of one file, `schemas/spec-record.schema.json` (one per kind; the validator reads references within one file only), plus `spec-ops.schema.json` for the op API and the JSON of each query (S2). A task's `exec` is checked against `task-spec.schema.json#/definitions/exec`. `task-spec.schema.json` stays for the flat store until the migration.
 
 ### 9.2 Reads and queries
 

@@ -2,6 +2,15 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
+## Unreleased
+
+### Added
+
+- **Spec tree, phase S1** (`docs/design/spec-layer.md`, `docs/specs.md`): typed Markdown records for capabilities, features, requirements, tasks and decisions under `specs/` (`spec.dir`).
+  - `wavecoord spec tree|show|query|check|lint|fmt|fp`: read the tree from the working tree or a git ref (`--ref`, two git processes for any number of files), query it (`kind=task status=planned outputs~src/*`), check each record (layout, frame, schema, sections, artifacts, EARS, canonical form), format it canonically, and print a requirement's fingerprint.
+  - `schemas/spec-record.schema.json`, and the `spec.dir` config key.
+- **Block lists in the YAML subset**: `key:` followed by `- item` lines, in task specs too, and block lists of flat maps for the spec tree's inputs and outputs. Every file that parsed before parses to the same value.
+
 ## 0.1.6
 
 ### Added
