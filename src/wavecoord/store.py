@@ -308,8 +308,10 @@ class State(object):
     def _on_report_post(self, ev, p, h):
         key, a = self._attempt(ev)
         rep = p["report"]
-        a = dict(a, report=rep, cost_usd=p.get("cost_usd"), turns=p.get("turns"), ended=ev["ts"],
-                 state="failed" if rep.get("status") == "failed" else "reported")
+        state = "failed" if rep.get("status") == "failed" else "reported"
+        if a["state"] == "merged":
+            state = "merged"  # merged is final: a late report never puts the task back in the queue
+        a = dict(a, report=rep, cost_usd=p.get("cost_usd"), turns=p.get("turns"), ended=ev["ts"], state=state)
         for k in ("cost_basis", "usage", "model_usage", "provider", "throttled", "throttle", "next_provider",
                   "pushed", "pr_url", "fence", "continue_suggested"):
             if p.get(k) is not None:
@@ -456,8 +458,11 @@ class State(object):
             new.d["agents"][aid] = dict(a)
         for k, v in self.d["idem"].items():
             new.d["idem"].setdefault(k, v)
+        # A revert marker stays only when its target is not in the restored prefix: a reverted
+        # event at or before to_seq comes back with the prefix, and can be reverted again.
         for k, v in self.d["reverted"].items():
-            new.d["reverted"].setdefault(k, v)
+            if int(k) > p["to_seq"]:
+                new.d["reverted"].setdefault(k, v)
         new.d["meta"] = dict(self.d["meta"])
         new.d["meta"]["rolled_back_to"] = p["to_seq"]
         for c in COLLECTIONS:

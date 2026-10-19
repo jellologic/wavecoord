@@ -7,7 +7,7 @@ All tool schemas are in TOOLS below.
 
 import json
 
-from wavecoord import __version__
+from wavecoord import __version__, jsonschema_lite
 from wavecoord.core import ApiError
 
 PROTOCOL_VERSIONS = ("2025-06-18", "2025-03-26", "2024-11-05")
@@ -205,6 +205,12 @@ def handle(coord, ctx, msg):
             return 200, _error(rid, -32602, "unknown tool %r" % (name,))
         if not isinstance(args, dict):
             return 200, _error(rid, -32602, "arguments must be an object")
+        errs = jsonschema_lite.validate(args, tool[2])  # the inputSchema that tools/list advertises
+        if errs:
+            text = json.dumps({"error": {"code": "bad_request", "message": "bad arguments: " + "; ".join(errs[:3])}},
+                              sort_keys=True)
+            return 200, {"jsonrpc": "2.0", "id": rid,
+                         "result": {"content": [{"type": "text", "text": text}], "isError": True}}
         try:
             out = tool[3](coord, ctx, args)
             err = False

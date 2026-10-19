@@ -14,6 +14,7 @@ and logs nothing.
 """
 
 import hashlib
+import hmac
 import ipaddress
 import json
 import os
@@ -24,7 +25,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 from wavecoord import const, mcp
-from wavecoord.core import ApiError, Ctx
+from wavecoord.core import ApiError, Ctx, agent_id_error, reserved_id
 
 LOOPBACK_NAMES = ("127.0.0.1", "localhost", "[::1]")
 
@@ -60,6 +61,58 @@ class Tokens(object):
             return None
         return ent["role"], ent["principal"]
 
+    def digests(self, role, principal):
+        """The token digests of one role and principal (the keys of the health proof)."""
+        try:
+            toks = self._load().get("tokens", {})
+        except (OSError, ValueError):
+            return []
+        return sorted(d for d, e in toks.items() if isinstance(e, dict)
+                      and e.get("role") == role and e.get("principal") == principal)
+
+
+def health_proof(digest, challenge):
+    """HMAC-SHA256 of a host's challenge, keyed by the sha256 digest of its agent token (security.md).
+
+    The host knows its token, so it computes the same value. A process that took the coordinator's
+    port on the host does not know the digest, so it cannot answer the challenge."""
+    return hmac.new(digest.encode("ascii"), challenge.encode("ascii"), hashlib.sha256).hexdigest()
+
+
+CHALLENGE_RE = re.compile(r"[0-9a-f]{16,64}")
+HOST_RE = re.compile(r"[a-z0-9][a-z0-9_-]{0,31}")
+
+
+class _Bounded(ThreadingHTTPServer):
+    """A ThreadingHTTPServer with at most MAX_CONNS connections; the next ones get a 503 and a close."""
+
+    daemon_threads = True
+
+    def __init__(self, addr, handler, max_conns):
+        self._slots = threading.BoundedSemaphore(max_conns)
+        ThreadingHTTPServer.__init__(self, addr, handler)
+
+    def process_request(self, request, client_address):
+        if not self._slots.acquire(blocking=False):
+            try:
+                request.settimeout(1)
+                request.sendall(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            except OSError:
+                pass
+            self.shutdown_request(request)
+            return
+        try:
+            ThreadingHTTPServer.process_request(self, request, client_address)
+        except Exception:
+            self._slots.release()
+            raise
+
+    def process_request_thread(self, request, client_address):
+        try:
+            ThreadingHTTPServer.process_request_thread(self, request, client_address)
+        finally:
+            self._slots.release()
+
 
 def _is_loopback_bind(bind):
     try:
@@ -81,15 +134,15 @@ class Server(object):
         self.allow_origins = set(allow_origins or [])
         self.verbose = verbose
         self.stopping = threading.Event()
-        handler = type("Handler", (Handler,), {"app": self})
-        cls = ThreadingHTTPServer
+        # a request must arrive within REQ_TIMEOUT_S (request line, headers and body)
+        handler = type("Handler", (Handler,), {"app": self, "timeout": const.get("REQ_TIMEOUT_S")})
+        cls = _Bounded
         if ":" in bind:
-            cls = type("Server6", (ThreadingHTTPServer,), {"address_family": socket.AF_INET6})
-        self.httpd = cls((bind, port), handler)
-        self.httpd.daemon_threads = True
+            cls = type("Server6", (_Bounded,), {"address_family": socket.AF_INET6})
+        self.httpd = cls((bind, port), handler, int(const.get("MAX_CONNS")))
         self.port = self.httpd.server_address[1]
         if getattr(coord, "server_url", None) is None:
-            coord.server_url = self.url  # the lead tools give it to workers when no coord_url is configured
+            coord.server_url = self.worker_url()  # the lead tools give it to workers when no coord_url is configured
         hosts = set(self.allow_hosts_cfg)
         for n in LOOPBACK_NAMES:
             hosts.update((n, "%s:%d" % (n, self.port)))
@@ -100,6 +153,20 @@ class Server(object):
     def url(self):
         host = self.bind if ":" not in self.bind else "[%s]" % self.bind
         return "http://%s:%d" % (host, self.port)
+
+    def worker_url(self):
+        """The URL workers get when no coord_url is configured. Never a wildcard bind address, which
+        fails the Host allowlist: the first allowed host name instead, else loopback."""
+        try:
+            wild = ipaddress.ip_address(self.bind).is_unspecified
+        except ValueError:
+            wild = self.bind in ("", "*")
+        if not wild:
+            return self.url
+        for h in self.allow_hosts_cfg:
+            if h and "/" not in h:
+                return "http://%s" % (h if re.search(r":\d+$", h) else "%s:%d" % (h, self.port))
+        return "http://127.0.0.1:%d" % self.port
 
     def start(self):
         self._thread = threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.2},
@@ -144,6 +211,8 @@ def _lead(app, ctx, write, fn):
         out = fn(lead_for(c))
     except ApiError:
         raise
+    except (KeyError, TypeError, ValueError, AttributeError) as e:  # a malformed body (as in mcp.handle)
+        raise ApiError("bad_request", "bad request: %s: %s" % (type(e).__name__, e))
     except Exception as e:  # noqa: BLE001 - reported to the caller, never a traceback
         raise ApiError("unavailable", "%s: %s" % (type(e).__name__, e))
     out = dict(out) if isinstance(out, dict) else {"result": out}
@@ -158,6 +227,10 @@ def _dispatch(lead, b):
     if not b.get("task"):
         raise ApiError("bad_request", "need {task, host?, overrides?, dry_run?} or {wave: true, tasks?, dry_run?}")
     return lead.dispatch(b["task"], b.get("host"), b.get("overrides"), bool(b.get("dry_run")))
+
+
+def _no_constant(name):
+    raise ValueError("%s is not JSON" % name)
 
 
 DRAIN_MAX = 1 << 20  # bytes of an oversized body the server reads before it answers 413
@@ -312,9 +385,14 @@ class Handler(BaseHTTPRequestHandler):
         host = self.headers.get("Host", "")
         if host not in app.allow_hosts:
             raise ApiError("misdirected", "Host %s is not allowed" % host)
+        if self.headers.get("Transfer-Encoding"):
+            # the body would be dropped and the request run with its defaults: refuse it
+            self.close_connection = True
+            raise ApiError("length_required", "chunked bodies are not supported; send Content-Length")
         try:
             length = int(self.headers.get("Content-Length") or 0)
         except ValueError:
+            self.close_connection = True
             raise ApiError("bad_request", "bad Content-Length")
         if length > const.get("REQ_MAX_BYTES") or length < 0:
             # read (and drop) a body up to DRAIN_MAX first, so the client gets the 413 instead of a reset of a
@@ -327,14 +405,16 @@ class Handler(BaseHTTPRequestHandler):
                 left -= len(chunk)
             self.close_connection = True
             raise ApiError("too_large", "the request body is larger than %d bytes" % const.get("REQ_MAX_BYTES"))
-        raw = self.rfile.read(length) if length else b""
         url = urllib.parse.urlsplit(self.path)
         path, query = url.path.rstrip("/") or "/", urllib.parse.parse_qs(url.query)
 
         if path == "/api/health":
             if method != "GET":
+                self.close_connection = True
                 raise ApiError("method_not_allowed", "use GET")
-            return self._send_json(200, app.coord.health())
+            if length:
+                self.rfile.read(length)
+            return self._send_json(200, self._health(query))
 
         route, match, allowed = None, None, False
         if path not in SPECIAL:
@@ -346,9 +426,15 @@ class Handler(BaseHTTPRequestHandler):
                         route, match = fn, m
                         break
             if not allowed:
+                self.close_connection = True
                 raise ApiError("not_found", "no such path %s" % path)
 
-        ctx = self._auth()
+        try:
+            ctx = self._auth()  # before the body is read: an unauthenticated client never holds a reader
+        except ApiError:
+            self.close_connection = True
+            raise
+        raw = self.rfile.read(length) if length else b""
         if path == "/mcp":
             if method != "POST":
                 raise ApiError("method_not_allowed", "MCP uses POST; GET streams are not offered")
@@ -367,16 +453,28 @@ class Handler(BaseHTTPRequestHandler):
                 and not (method == "POST" and path == "/api/check"):
             raise ApiError("forbidden", "the gate role may read leases and health, and send a gate check, only")
         body = self._json(raw) if method in ("POST", "PATCH", "PUT") else None
+        if raw and not isinstance(body, dict):
+            raise ApiError("bad_request", "the body must be a JSON object")
         idem = self.headers.get("Idempotency-Key")
         self._send_json(200, route(app, ctx, match, body, query, idem))
+
+    def _health(self, query):
+        """GET /api/health. With ?challenge=<hex>&host=<name>, also the proofs that this is the coordinator."""
+        out = self.app.coord.health()
+        ch, h = _q1(query, "challenge"), _q1(query, "host")
+        if ch is not None or h is not None:
+            if not (ch and CHALLENGE_RE.fullmatch(ch) and h and HOST_RE.fullmatch(h)):
+                raise ApiError("bad_request", "challenge must be 16..64 hex digits and host a host name")
+            out["proofs"] = [health_proof(d, ch) for d in self.app.tokens.digests("agent", "host:" + h)]
+        return out
 
     def _json(self, raw):
         if not raw:
             return {}
         try:
-            return json.loads(raw.decode("utf-8"))
+            return json.loads(raw.decode("utf-8"), parse_constant=_no_constant)
         except (ValueError, UnicodeDecodeError):
-            raise ApiError("bad_request", "the body is not valid JSON")
+            raise ApiError("bad_request", "the body is not valid JSON (NaN and Infinity are not JSON)")
 
     def _auth(self):
         h = self.headers.get("Authorization", "")
@@ -388,8 +486,11 @@ class Handler(BaseHTTPRequestHandler):
         agent = self.headers.get("X-Wavecoord-Agent") or None
         if agent is not None and (len(agent) > 128 or not agent.strip()):
             raise ApiError("bad_request", "bad X-Wavecoord-Agent")
-        if role == "agent" and agent in ("lead", "ui"):
-            raise ApiError("forbidden", "%s is a reserved id" % agent)
+        if role == "agent" and agent is not None:
+            # the sender id of an agent token: a plain id, never one the coordinator sends as
+            why = agent_id_error(agent)
+            if why:
+                raise ApiError("forbidden" if reserved_id(agent) else "bad_request", why)
         if role in ("lead", "ui"):
             agent = role if agent is None or role == "ui" else agent
         return Ctx(role, principal, agent, self.headers.get("X-Wavecoord-Session") or None)
@@ -411,6 +512,8 @@ class Handler(BaseHTTPRequestHandler):
             pos = int(last) if last not in (None, "") else coord.log.committed_seq
         except ValueError:
             raise ApiError("bad_request", "bad Last-Event-ID or since")
+        if pos < 0:
+            raise ApiError("bad_request", "Last-Event-ID and since must be 0 or more")
         once = _q1(query, "once") == "1"
         self.send_response(200)
         self.send_header("Content-Type", "text/event-stream")

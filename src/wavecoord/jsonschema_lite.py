@@ -8,6 +8,7 @@ a keyword was ignored.
     errors = validate(instance, root, "#/definitions/lease")
 """
 
+import math
 import re
 
 ANNOTATIONS = frozenset(
@@ -37,8 +38,8 @@ def _is_type(value, t):
         return isinstance(value, bool)
     if t == "integer":
         return isinstance(value, int) and not isinstance(value, bool)
-    if t == "number":
-        return isinstance(value, (int, float)) and not isinstance(value, bool)
+    if t == "number":  # NaN and Infinity are not JSON numbers
+        return isinstance(value, (int, float)) and not isinstance(value, bool) and math.isfinite(value)
     if t == "string":
         return isinstance(value, str)
     if t == "array":

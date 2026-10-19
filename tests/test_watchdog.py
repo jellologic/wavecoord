@@ -6,7 +6,7 @@ import unittest
 from unittest import mock
 
 import _coord
-from wavecoord.core import Ctx
+from wavecoord.core import Ctx, lead_ctx
 from wavecoord.watchdog import Watchdog
 
 AGENT = Ctx("agent", "host:build-1", agent="w1")
@@ -30,7 +30,8 @@ class WatchdogCase(unittest.TestCase):
         kw.setdefault("stale_s", 30)
         return Watchdog(self.coord, head=lambda b: self.heads.get(b), **kw)
 
-    def claim(self, holder="w1", task="api-auth", ctx=AGENT, host="build-1", **extra):
+    def claim(self, holder="w1", task="api-auth", ctx=None, host="build-1", **extra):
+        ctx = ctx or lead_ctx()  # the lead grants a lease; an agent token only renews it
         body = {"task": task, "attempt": 1, "holder": holder, "host": host}
         body.update(extra)
         return self.coord.claim(ctx, body)["lease"]["id"]
@@ -121,7 +122,7 @@ class NudgeThenStaleTest(WatchdogCase):
     def test_only_the_lead_sets_user_set(self):
         from wavecoord.core import ApiError
         with self.assertRaises(ApiError) as cm:
-            self.claim(user_set=True)
+            self.claim(user_set=True, ctx=AGENT)
         self.assertEqual(cm.exception.code, "forbidden")
 
     def test_restart_starts_the_count_again(self):
@@ -151,7 +152,7 @@ class ThreadTest(unittest.TestCase):
         tr = _coord.TempRepo()
         coord = _coord.make_coord(tr, push=False).open()  # the real clock
         try:
-            lid = coord.claim(AGENT, {"task": "api-auth", "attempt": 1, "holder": "w1", "host": "build-1"})["lease"]["id"]
+            lid = coord.claim(lead_ctx(), {"task": "api-auth", "attempt": 1, "holder": "w1", "host": "build-1"})["lease"]["id"]
             wd = Watchdog.from_config(coord, {"interval_s": 0.1, "nudge_s": 0.5, "stale_s": 0.5}).start()
             try:
                 deadline = time.monotonic() + 10

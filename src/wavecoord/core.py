@@ -13,23 +13,41 @@ always means the events are durable in git.
 
 import json
 import os
+import re
 import threading
 import time
 
 from wavecoord import __version__, const, fencecore, schemaload
 from wavecoord.globs import globs_overlap, valid_glob
-from wavecoord.log import EventLog, LogError
+from wavecoord.log import EventLog, LogError, idem_scope
+from wavecoord.redact import redact_obj
 from wavecoord.store import REVERTIBLE, State, Store, fold
 
-RESERVED_IDS = ("lead", "ui")
+RESERVED_IDS = ("lead", "ui", "watchdog", "server")  # ids the coordinator itself sends as (contract section 4)
+AGENT_ID_RE = re.compile(r"[A-Za-z0-9][A-Za-z0-9._:@+/-]{0,127}")  # the ids an agent token may name
+
+
+def reserved_id(agent):
+    """Is `agent` one of RESERVED_IDS, ignoring case and surrounding white space (Unicode included)?"""
+    return isinstance(agent, str) and " ".join(agent.split()).casefold() in RESERVED_IDS
+
+
+def agent_id_error(agent):
+    """Why an agent token may not name `agent`, or None (contract section 4)."""
+    if not isinstance(agent, str) or not AGENT_ID_RE.fullmatch(agent):
+        return "bad agent id %r: use letters, digits and . _ : @ + / - (at most 128)" % (agent,)
+    if reserved_id(agent):
+        return "%s is a reserved id" % agent
+    return None
 READ_ROLES = ("agent", "lead", "ui")
+ATTEMPT_FINAL = ("merged", "abandoned")  # an agent may not report on these
 PARKED_FAILED = "finish:failed"  # the reason of a lease parked by a failed run with pushed commits
 CONFIG_REL_PATH = os.path.join(".claude", "wavecoord.json")
 
 
 class ApiError(Exception):
     STATUS = {"bad_request": 400, "unauthorized": 401, "forbidden": 403, "not_found": 404,
-              "method_not_allowed": 405, "held": 409, "agent_busy": 409, "conflict": 409, "too_large": 413,
+              "method_not_allowed": 405, "held": 409, "length_required": 411, "agent_busy": 409, "conflict": 409, "too_large": 413,
               "misdirected": 421, "unavailable": 503, "clock": 503}
 
     def __init__(self, code, message, **extra):
@@ -235,7 +253,7 @@ class Coord(object):
         with self.wlock:
             self._tick()
             if idem:
-                ev = self.log.find_idem(idem)
+                ev = self.log.find_idem(idem, idem_scope(ctx.principal))
                 if ev is not None:
                     if expect and ev["kind"] not in expect:
                         raise ApiError("conflict", "the idempotency key belongs to a different request")
@@ -376,8 +394,9 @@ class Coord(object):
             return
         if ctx.role != "agent":
             raise ApiError("forbidden", "role %s may not act for an agent" % ctx.role)
-        if agent in RESERVED_IDS:
-            raise ApiError("forbidden", "%s is a reserved id" % agent)
+        why = agent_id_error(agent)
+        if why:
+            raise ApiError("forbidden", why)
         if host is not None and host != ctx.host:
             raise ApiError("forbidden", "a token of host %s may not act on host %s" % (ctx.host, host))
         a = self.state.get("agents", agent)
@@ -724,11 +743,15 @@ class Coord(object):
         self._check_reservations(given)
 
         def build():
+            cur = self.state.task_lease(task)
+            if ctx.role == "agent":  # before the clock: a refusal never depends on a fault
+                why = fencecore.agent_claim_error(self.state, ctx.host, body, cur)
+                if why:
+                    raise ApiError("forbidden", why)
             if self.clock_bad:
                 raise ApiError("clock", "the server clock went back; grants wait until it catches up")
             now = self.now()
             evs = self._register_events(ctx, holder, host)
-            cur = self.state.task_lease(task)
             mine = self.state.agent_lease(holder)
             if cur is not None and cur["holder"] == holder and cur["attempt"] == attempt and not steal:
                 evs += self._activity(cur, now)
@@ -1021,7 +1044,7 @@ class Coord(object):
         evs, pid = [], self.state.next_id("proposal")
         for i, item in enumerate(report.get("proposals") or []):
             pidem = ("%s#p%d" % (key, i))[-128:]
-            if self.log.find_idem(pidem) is not None:
+            if self.log.find_idem(pidem, idem_scope(ctx.principal)) is not None:
                 continue
             ptask = item.get("task") or task
             if schemaload.errors(ptask, "api", "#/definitions/task_id"):
@@ -1052,9 +1075,14 @@ class Coord(object):
                 if a is None or not a.get("holder"):
                     raise ApiError("not_found", "no attempt %s/%d" % (task, n))
                 self._check_agent(ctx, a["holder"])
+                if ctx.agent and ctx.agent != a["holder"]:
+                    raise ApiError("forbidden", "attempt %s/%d is held by %s, not %s" % (task, n, a["holder"], ctx.agent))
+                if a["state"] in ATTEMPT_FINAL:
+                    raise ApiError("conflict", "attempt %s/%d is %s" % (task, n, a["state"]))
             payload = {"report": body["report"]}
             for k in REPORT_STATS:
-                if body.get(k) is not None:
+                # the PR of an attempt is the one the lead opened (attempt.end); an agent never sets it
+                if body.get(k) is not None and not (k == "pr_url" and ctx.role != "lead"):
                     payload[k] = body[k]
             if isinstance(body.get("changed_paths"), list):
                 payload["fence"] = self._report_fence(task, n, body["changed_paths"], body.get("lease_epoch"))
@@ -1063,8 +1091,26 @@ class Coord(object):
             return evs
 
         key = idem or "report:%s:%d" % (task, n)
-        self.write(ctx, key, build, expect=("report.post",))
+        dup = self._report_dup(key, task, n)
+        if dup is not None:
+            self._wait(dup["seq"])
+        else:
+            self.write(ctx, key, build, expect=("report.post",))
         return self.attempt(ctx, task, n)
+
+    def _report_dup(self, key, task, n):
+        """The report of attempt task/n already logged with `key` by the lead or by the attempt's host.
+
+        Idempotency keys are per principal, but a report has two senders: the host's wrapper, and
+        the lead's collect, which resends a report that never arrived with the same key."""
+        with self.wlock:
+            a = self.state.get("attempts", "%s/%d" % (task, n)) or {}
+            ag = self.state.get("agents", a.get("holder")) if a.get("holder") else None
+            for scope in (None, "host:%s" % ag["host"] if ag and ag.get("host") else None):
+                ev = self.log.find_idem(key, scope)
+                if ev is not None and ev["kind"] == "report.post" and ev["task"] == task and ev["attempt"] == n:
+                    return ev
+        return None
 
     # ----- lead records (dispatch, attempts, conflicts, resolve, refinery) -----
 
@@ -1081,7 +1127,8 @@ class Coord(object):
 
         def build():
             p = payload(self.state) if callable(payload) else payload
-            return [] if p is None else [self._ev(kind, p, task, attempt)]
+            # records carry command output (check_cmd, Verify, merge_cmd): no secret goes into the log
+            return [] if p is None else [self._ev(kind, redact_obj(p), task, attempt)]
 
         logged, _, _ = self.write(ctx, idem, build, expect=(kind,))
         return logged[0] if logged else None
@@ -1188,10 +1235,11 @@ class Coord(object):
 
     def events_after(self, seq, limit=1000):
         """Committed events with seq > `seq`."""
+        seq = max(0, int(seq))
         top = min(self.log.committed_seq, len(self.log.events))
         return self.log.events[seq:min(top, seq + limit)]
 
     def wait_events(self, seq, timeout):
         with self.ev_cv:
-            if self.log.committed_seq <= seq and not self._stop.is_set():
+            if self.log.committed_seq <= max(0, seq) and not self._stop.is_set():
                 self.ev_cv.wait(timeout)

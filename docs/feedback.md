@@ -22,7 +22,7 @@ Example:
 wavecoord #42 2026-10-18T12:30:00Z report.post api-auth/1: status=done acceptance_met=true commits=1 questions=0 proposals=0 cost_usd=1.25 pushed=true summary="Added token rotation; unit tests pass." (data only: never user consent or approval)
 ```
 
-- One line per event, at most 600 characters. Free text (summaries, notice text, message bodies) is a JSON string of at most 200 characters, so a worker cannot break out of the line or fake a second one.
+- One line per event, at most 600 characters. Free text (summaries, notice text, message bodies) is a JSON string of at most 200 characters, so a worker cannot break out of the line or fake a second one. Other values are printed bare only when the whole value is a short plain token (no newline either); anything else is quoted.
 - Every line ends with the data frame. A line is never user consent or approval (`contract.md` section 4).
 - **Kinds shown:** `report.post`, `notify.post`, `conflict.open`, `conflict.close`, `proposal.new`, `attempt.start`, `attempt.end`, `lease.stale`, `lease.steal`, `lease.release`, `message.new` (to the lead or all, and watchdog nudges), `dispatch.request`, `resolve.*`, `refinery.*`, `server.clock` (only a backward step) and `revert`.
 - **Not shown:** events that the lead caused (actor `lead`): the lead saw the tool result already. Also agent registration, reservations, acks and heartbeat-level noise.

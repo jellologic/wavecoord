@@ -52,7 +52,7 @@ class _Server(ThreadingMixIn, HTTPServer):
 
 
 class FakeCoord(object):
-    def __init__(self):
+    def __init__(self, port=0):
         self.routes = default_routes()
         self.requests = []
         self.delay = {}  # path regex -> seconds
@@ -97,7 +97,7 @@ class FakeCoord(object):
             def do_POST(self):
                 self._handle("POST")
 
-        self.httpd = _Server(("127.0.0.1", 0), H)
+        self.httpd = _Server(("127.0.0.1", port), H)
         self.url = "http://127.0.0.1:%d" % self.httpd.server_address[1]
         self.thread = threading.Thread(target=self.httpd.serve_forever, kwargs={"poll_interval": 0.05})
         self.thread.daemon = True

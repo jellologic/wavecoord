@@ -36,7 +36,12 @@ class LauncherWithServer(LauncherTestCase):
         self.srv = Server(self.core, port=0, tokens=Tokens(data=tokens())).start()
         self.addCleanup(self.srv.stop)
         self.url = "http://127.0.0.1:%d" % self.srv.port
-        os.environ["CLAUDE_PLUGIN_OPTION_TOKEN"] = AGENT_TOKEN
+        # the launcher claims with the lead token; the wrapper and the worker use the host's agent token
+        os.environ["CLAUDE_PLUGIN_OPTION_TOKEN"] = LEAD_TOKEN
+        home = os.environ["WAVECOORD_HOME"]
+        os.makedirs(os.path.join(home, "hosts"), exist_ok=True)
+        with open(os.path.join(home, "hosts", "local.token"), "w") as f:
+            f.write(AGENT_TOKEN + "\n")
 
     def get(self, path):
         req = urllib.request.Request(self.url + path, headers={"Authorization": "Bearer " + LEAD_TOKEN})

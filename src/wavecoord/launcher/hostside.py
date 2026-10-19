@@ -226,8 +226,13 @@ def r_probe(payload, args):
     url = payload.get("coord_url")
     if url:
         try:
-            status, _ = coordmod.Coord(url).request("GET", "/api/health")
-            out["coord_reachable"] = status == 200
+            # no token to /api/health; on a remote host the server must prove it is the coordinator,
+            # since any local user can bind the loopback port first (security.md, "Remote hosts")
+            token = coordmod.read_token() if cfg.get("ssh") else None
+            reachable, verified = coordmod.verify_coordinator(url, cfg["name"], token)
+            out["coord_reachable"] = reachable and verified is not False
+            if cfg.get("ssh"):
+                out["coord_verified"] = verified
         except LauncherError:
             out["coord_reachable"] = False
     return out

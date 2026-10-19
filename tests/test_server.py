@@ -118,12 +118,18 @@ class RestTest(ServerCase):
         s, b = self.req("POST", "/api/leases", claim, token="h2-secret", headers=hdr)
         self.assertEqual((s, b["error"]["code"]), (403, "forbidden"))  # wrong host token
         s, b = self.req("POST", "/api/leases", claim, token="h1-secret", headers=hdr)
+        self.assertEqual((s, b["error"]["code"]), (403, "forbidden"))  # a new lease needs the lead
+        s, b = self.req("POST", "/api/leases", claim)
+        self.assertEqual(s, 200, b)
+        s, b = self.req("POST", "/api/leases", claim, token="h1-secret", headers=hdr)  # the holder renews it
         self.assertEqual(s, 200, b)
         self.assertValid(b, "claim_response")
         self.assertEqual(b["lease"]["epoch"], 1792324800000)
         lid = b["lease"]["id"]
-        s, b2 = self.req("POST", "/api/leases", dict(claim, holder="w-other"), token="h1-secret")
+        s, b2 = self.req("POST", "/api/leases", dict(claim, holder="w-other"))
         self.assertEqual((s, b2["error"]["code"]), (409, "held"))
+        s, b2 = self.req("POST", "/api/leases", dict(claim, holder="w-other"), token="h1-secret")
+        self.assertEqual((s, b2["error"]["code"]), (403, "forbidden"))  # no takeover by an agent token
         self.assertValid(b2, "error_body")
         hbody = fixture("hb-request.json")
         self.clock.advance(30)
@@ -152,7 +158,7 @@ class RestTest(ServerCase):
                         "reservations": [{"glob": "docs/**", "mode": "exclusive"}]}
                 s, b = self.req("POST", "/api/leases", body)
             elif i == 7:
-                s, b = self.req("POST", "/api/leases", fixture("claim-request.json"), token="h1-secret")
+                s, b = self.req("POST", "/api/leases", fixture("claim-request.json"))  # the lead grants it
                 self.assertEqual(b["conflicts"], fixture("claim-200.json")["conflicts"])
                 self.assertEqual(b["lease"], fixture("claim-200.json")["lease"])
             else:
@@ -335,7 +341,7 @@ class McpTest(ServerCase):
         fx = fixture("mcp-tools-call-inbox.json")
         holder = "worker-20261018-120000-ab12"
         hdr = {"X-Wavecoord-Agent": holder}
-        self.req("POST", "/api/leases", fixture("claim-request.json"), token="h1-secret", headers=hdr)
+        self.req("POST", "/api/leases", fixture("claim-request.json"))
         for i in range(11):  # message ids 1..11 go elsewhere
             self.req("POST", "/api/messages", {"to": {"kind": "agent", "id": "someone"}, "body": "x"})
         self.clock.advance(20)

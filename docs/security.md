@@ -10,16 +10,27 @@ wavecoord runs agents that edit code and push branches. The coordinator is a con
   - `allow_cidrs`: peer networks, for example `["192.0.2.0/24"]`. Loopback is always allowed. A peer outside gets 403.
   - `allow_hosts`: accepted `Host` header values, for example `["coord.example.internal:18741"]`. Others get 421. This blocks DNS rebinding.
 - No TLS in the server. Use loopback, an SSH tunnel, a VPN, or a TLS proxy. The plugin validator warns about `http://` to a non-loopback host; that warning is correct.
+- A connection must send its request within `REQ_TIMEOUT_S` (30 s), and the server serves at most `MAX_CONNS` (128) connections at a time; more get 503 and a close. The token is checked before the body is read, and a chunked body is refused (411).
 - Browser writes (`ui` role) also need an allowlisted `Origin` and the header `X-Wavecoord: 1`. The custom header forces a CORS preflight, which the server never approves, so another web page cannot write through a user's browser.
 
 ## Tokens
 
 - Each request except `GET /api/health` needs `Authorization: Bearer <token>`.
 - Roles: `agent` (one token per host), `lead`, `ui`, `gate` (`contract.md` section 4).
-- The server keeps only sha256 digests in `~/.wavecoord/tokens.json` (mode 600). `wavecoord tokens provision --role agent --host <name>` (alias `tokens issue`) prints a new token once; `--out <file>` writes it to a mode-600 file instead. `WAVECOORD_TOKENS_FILE` overrides the path of the tokens file.
+- The server keeps only sha256 digests in `~/.wavecoord/tokens.json` (mode 600). `wavecoord tokens provision --role agent --host <name>` (alias `tokens issue`) prints a new token once; `--out <file>` writes it to a mode-600 file instead (a new file renamed over the old one, so an existing file with a looser mode is replaced too). `WAVECOORD_TOKENS_FILE` overrides the path of the tokens file.
 - Clients read the token from the plugin option `token` (sensitive: stored in the OS credential store, never in `settings.json`), else `WAVECOORD_TOKEN_FILE`, else `~/.wavecoord/token`. Tokens never go in git, in `.claude/wavecoord.json`, in logs, or in `coord/log` events.
+- **Where a token goes (0.2.1).** The hooks and the CLI send such a user-level token only to a coordinator the user configured: `WAVECOORD_URL`, the plugin option `coord_url`, or a loopback URL. A `coord_url` that only a repo's `.claude/wavecoord.json` names, with a non-loopback host, gets no token: any checked-out repo or PR branch can set that key. For a remote coordinator, set the plugin option `coord_url` (or `WAVECOORD_URL`, also for `gate-check` in CI).
+- **Agent tokens act within the dispatch.** An agent token can renew or resume only the lease the lead granted, add only one-path hot marks, report only as the attempt's holder (never after the merge), and never set an attempt's PR. Its sender id is never `lead`, `ui`, `watchdog` or `server` in any case. Its idempotency keys are its own (`contract.md` sections 2 and 4).
 - The launcher copies an agent token to a host over SSH into a mode-600 file. It never passes a token on a command line.
-- On the lead machine, keep the lead token in `~/.wavecoord/token` and each host's agent token in `~/.wavecoord/hosts/<host>.token`. The launcher copies the file of an SSH host to that host's `~/.wavecoord/token`. Workers on a local host (no `ssh`) share the lead's `~/.wavecoord`, so they get `WAVECOORD_TOKEN_FILE=~/.wavecoord/hosts/<host>.token` instead, and the plugin option token is removed from their environment: a local worker never acts with the lead token. Without that file, local workers fall back to `~/.wavecoord/token`.
+- On the lead machine, keep the lead token in `~/.wavecoord/token` and each host's agent token in `~/.wavecoord/hosts/<host>.token`. The launcher copies the file of an SSH host to that host's `~/.wavecoord/token`. Workers on a local host (no `ssh`) share the lead's `~/.wavecoord`, so they get `WAVECOORD_TOKEN_FILE=~/.wavecoord/hosts/<host>.token` instead, and the plugin option token is removed from their environment: a local worker never acts with the lead token. When that file is missing and the tokens file is on this machine, the launcher provisions an agent token for the host and writes the file (mode 600). The wrapper uses the same file; without one it sends no token, never the lead's.
+
+## Remote hosts
+
+On a remote host the coordinator is a loopback port (the SSH tunnel). Any local user of that host could bind the port first and collect the agent token, reports and messages. So the launcher's probe sends no token to `/api/health` and asks the server to prove it is the coordinator: it sends a random challenge, and the server answers HMACs keyed by the digests of the host's agent tokens, which only the coordinator knows (`contract.md`, `GET /api/health`). A server that answers without the right proof fails the probe, and the launcher refuses to launch on that host. The check runs at each dispatch, not on every request, so prefer single-user worker hosts.
+
+## Secrets in the log
+
+The lead's records (`refinery.block`, `attempt.end`, ...) carry the tail of command output. `coord/log` is pushed to `origin` and streamed to every agent token, so the server redacts each record before it logs it: the values of environment variables whose names look secret (`TOKEN`, `SECRET`, `PASSWORD`, `KEY`, ...), the tokens in `~/.wavecoord/token` and `~/.wavecoord/hosts/*.token`, and common token formats (`redact.py`). Redaction is best effort: keep secrets out of `check_cmd` output.
 
 ## Content
 

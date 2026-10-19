@@ -119,8 +119,7 @@ class LeadFlowCase(ServerCase):
     def worker_activity(self):
         w = {"X-Wavecoord-Agent": "w1"}
         st, _ = self.req("POST", "/api/leases", {"task": "api-auth", "attempt": 1, "holder": "w1", "host": "build-1",
-                                                 "reservations": [{"glob": "src/auth/**", "mode": "exclusive"}]},
-                         token="h1-secret", headers=w)
+                                                 "reservations": [{"glob": "src/auth/**", "mode": "exclusive"}]})
         self.assertEqual(st, 200)
         self.req("POST", "/api/messages", {"to": {"kind": "lead"}, "body": "which token format?"},
                  token="h1-secret", headers=w)

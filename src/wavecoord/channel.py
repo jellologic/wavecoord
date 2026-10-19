@@ -109,10 +109,10 @@ class Channel(object):
     def _source(self):
         if self.events is not None:
             return iter(self.events)
-        from wavecoord.client import resolve_coord_url, resolve_token
+        from wavecoord.client import resolve_coord_url, resolve_token, url_trusted
         url = resolve_coord_url(self.env)
-        return feedback.sse_events(url, resolve_token(self.env), since=None, follow=True, stop=self.stop,
-                                   agent="lead")
+        token = resolve_token(self.env) if url_trusted(url, self.env) else None
+        return feedback.sse_events(url, token, since=None, follow=True, stop=self.stop, agent="lead")
 
     def _follow(self):
         try:

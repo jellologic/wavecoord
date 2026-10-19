@@ -54,7 +54,8 @@ def api(url, method, path, body=None, timeout=None, token=None):
     data = json.dumps(body).encode("utf-8") if body is not None else None
     req = urllib.request.Request(url.rstrip("/") + path, data=data, method=method)
     req.add_header("Content-Type", "application/json")
-    tok = token or client_token()
+    from wavecoord.client import url_trusted
+    tok = token or (client_token() if url_trusted(url) else None)  # never to a repo-named server
     if tok:
         req.add_header("Authorization", "Bearer " + tok)
     try:
@@ -313,7 +314,9 @@ def follow_lead(url, since=None, follow=True, out=None, token=None, state=None, 
         since = feedback.read_cursor(state)
     count = 0
     try:
-        for ev in feedback.sse_events(url, token or client_token(env), since=since, follow=follow, agent="lead"):
+        from wavecoord.client import url_trusted
+        tok = token or (client_token(env) if url_trusted(url, env) else None)
+        for ev in feedback.sse_events(url, tok, since=since, follow=follow, agent="lead"):
             line = feedback.lead_line(ev)
             if line is not None:
                 out.write((json.dumps(ev, sort_keys=True) if as_json else line) + "\n")
@@ -344,6 +347,25 @@ def cmd_events(args):
 
 
 # ----- tokens -----
+
+def write_secret(path, text):
+    """Write `text` to `path` with mode 600, also over an existing file with a looser mode:
+    a new file is written and renamed over the old one, never the old file reopened."""
+    d = os.path.dirname(os.path.abspath(path))
+    tmp = os.path.join(d, ".%s.%d.tmp" % (os.path.basename(path), os.getpid()))
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as f:
+            f.write(text)
+        os.chmod(tmp, 0o600)
+        os.replace(tmp, path)
+    except BaseException:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise
+
 
 def provision_token(path, role, principal):
     """Add a new token to the tokens file (digest only). Return the token."""
@@ -377,9 +399,7 @@ def cmd_tokens(args):
         os.makedirs(os.path.dirname(os.path.abspath(args.out)), mode=0o700, exist_ok=True)  # ~/.wavecoord/hosts/
     token = provision_token(args.tokens or default_tokens_file(), args.role, principal)
     if args.out:
-        fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "w") as f:
-            f.write(token + "\n")
+        write_secret(args.out, token + "\n")
         print("wrote a %s token for %s to %s" % (args.role, principal, args.out))
     else:
         print(token)

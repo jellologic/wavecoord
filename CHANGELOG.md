@@ -20,6 +20,16 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - The refinery's protected-path check lists both names of a rename (`--no-renames`), so moving a protected file out of its folder needs the approval; a git error there blocks instead of passing.
 - The pre-push guard refuses in enforce mode when git cannot compute the pushed paths, and reads the new commits when the remote head is not in the local repo (a forced push over a moved branch) (D37).
 - Schema patterns follow JSON Schema: `$` matches only at the end of the string, so `t1\n` is no longer a valid task id.
+- **An agent token acts only within what the lead dispatched** (`docs/design/edit-fence.md` 2.3, `contract.md` section 4). A claim may only renew the lease the lead granted to its holder, or resume a parked lease of the same attempt on the same host with the same grants (seeded defect D39): a worker can no longer claim `**` for a task the lead never dispatched, or widen a resumed lease and pass E5 through the resolver lineage. Hot marks are one path, no `*` or `?` (D38). A report must come from the attempt's holder and is refused for a `merged` or `abandoned` attempt; `merged` stays final in the fold. An agent's `pr_url` is ignored: the PR of an attempt is the one the lead opened.
+- Idempotency keys are scoped per principal, so a host can no longer take another host's report key (`report:<task>:<n>`) and drop its report. The lead's collect re-post still deduplicates against the host's report.
+- Agent ids are checked: `lead`, `ui`, `watchdog` and `server` are reserved in any case and with surrounding white space, and an id must be a plain token (`[A-Za-z0-9][A-Za-z0-9._:@+/-]*`, at most 128), so a worker cannot send as the watchdog or put a fake frame in its sender.
+- The hooks and the CLI send the user's token only to `WAVECOORD_URL`, the plugin option `coord_url` or a loopback URL, never to a `coord_url` that only a repo's `.claude/wavecoord.json` names.
+- The lead's records are redacted before they are logged: secret env values, the coordinator token files and common token formats in `check_cmd`, Verify and `merge_cmd` output no longer reach `coord/log` (`redact.py`).
+- A remote host's probe sends no token to `/api/health` and checks that the server proves it is the coordinator (a challenge answered with HMACs keyed by the host's token digests); the launcher refuses a host where another process holds the coordinator port.
+- Local workers without `~/.wavecoord/hosts/<host>.token` get an agent token provisioned; the wrapper never falls back to the lead's token.
+- `tokens provision --out` writes a mode-600 file also over an existing file with a looser mode.
+- The HTTP front: a socket timeout (`REQ_TIMEOUT_S`), at most `MAX_CONNS` connections, the token checked before the body is read, and chunked bodies refused (411), so idle connections can no longer exhaust threads and file descriptors, and a chunked body never runs a request with its defaults.
+- `tests/test_generic.py` also catches GitHub fine-grained, GitLab, Slack, OpenAI, Google and AWS STS keys.
 
 ### Fixed
 
@@ -69,7 +79,18 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - An offline-override journal of any size can be flushed: the batches are cut by size (half the server's body limit), not by count, so a large journal no longer gets a 413 forever and blocks every push on the host (D36). One reachable flush sends batches until the journal is empty.
 - The Stop hook reads the changed paths with `-z`, so a non-ASCII file name no longer makes the server refuse the batch and drop the other outside-lease warnings; a path that no glob can hold is reported as outside the lease without a server call.
 - `guard install` also writes a `pre-merge-commit` guard. The docs now say that git runs no commit hook for `cherry-pick`, `rebase`, `am` or a fast-forward merge; E3 and E5 check those commits.
-- Seeded defects D31-D37.
+- Seeded defects D31-D39.
+- A failed group commit of `coord/log` (a stale `index.lock`) is retried with a backoff instead of refusing writes until a restart.
+- A forked `coord/log` (two servers on clones of one `origin`) is refused at start and after a rejected push, with both heads, instead of pushing nothing forever with `ok: true` (`rollback.md`, "A forked log").
+- The hooks spool keeps entries the server answers with 5xx, 408 or 429, keeps their order when hooks spool during a replay, and is per coordinator (`spool-<hash>.jsonl`), so writes for one coordinator are never replayed into another. Entries in an old `spool.jsonl` are not replayed.
+- The watchdog's idempotency keys are unique per idle episode, so a lease revived without new activity is nudged and marked stale again.
+- `rebuild --at` keeps a revert marker only for an event after the rollback point, so a reverted message that comes back can be reverted again.
+- `GET /api/events` refuses a negative `since` or `Last-Event-ID` (it busy-looped).
+- `NaN` and `Infinity` in a body are 400, and the schema validator rejects them as numbers; a `$` at the end of a schema pattern no longer accepts a trailing newline.
+- A body that is not a JSON object, or a malformed lead request, is 400 instead of 503.
+- MCP `tools/call` checks the arguments against the tool's `inputSchema`; `conflicts` with `globs` as a string no longer answers "no conflicts".
+- With a wildcard bind and no `coord_url`, workers get the first `allow_hosts` name (or loopback), not `http://0.0.0.0:<port>`.
+- A lead line quotes a value with a trailing newline instead of breaking the line.
 
 ## 0.2.0
 
