@@ -55,6 +55,8 @@ Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the who
 ### Added
 
 - `wavecoord lease release <task|id>` and the lead tool `lease_release`: release a stale or parked lease so the task can be dispatched again (a lost worker's lease used to hold its task for good). The triage skill uses it.
+- `wavecoord spec import --from <speckit|kiro|openspec>`: reads GitHub Spec Kit, Amazon Kiro or OpenSpec files and writes them as draft records under one capability, through the op API, so the result passes `spec check`. Statements become EARS where the rewrite is mechanical; task items with file paths become tasks with `paths` and `needs`; each record names its source file, which is never changed. It reports what needs a person (statements that are not EARS, tasks without paths, unknown sections) and a Verify warning per requirement. `--dry-run` prints the diff, `--dry-run --json` the ops for `spec_edit`; a re-import changes nothing or is refused. `docs/import.md` has the mappings and their gaps.
+- The skill `/wavecoord:spec-import`: finds Spec Kit, Kiro, OpenSpec or free-form specs (PRDs, BMAD documents, ADRs) in the repo, shows the mapping, asks about granularity and scope, and opens one plan PR with `spec_edit`. `/wavecoord:spec` points to it when it finds such files.
 
 ### Fixed
 

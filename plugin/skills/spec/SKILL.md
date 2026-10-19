@@ -38,6 +38,7 @@ The result is **one plan PR** that adds or changes records of the spec tree (`do
 1. `config` (the `spec` and `plan` keys) and `spec_tree`: the capabilities and features that exist, their status and progress. When `plan.adapter` is set to anything but `specs` (`spec_tree` then answers with a `plan_note`), the lead does not plan from the tree: tell the user to remove `plan.adapter` or set it to `specs` before tasks are planned. When `plan.selected_by` says the lead plans from `plan/tasks` and that store has tasks, the first records you add switch the lead to the tree when they merge: the user runs `wavecoord spec migrate-plan` in the same PR (`spec_edit` warns with `switch:`).
 2. `spec_query` for the area, for example `under=auth kind=requirement`, and `spec_get` for the records you may change. `spec_trace` shows what depends on a requirement before you change it.
 3. Read the code the area touches (`Glob`, `Grep`, `Read`, `git log --oneline -20 -- <dir>`): the entry points, the interfaces other code calls, the tests and the test command.
+4. Look for specs of another tool (`Glob`): GitHub Spec Kit (`.specify/`, `specs/*/spec.md`), Amazon Kiro (`.kiro/specs/`), OpenSpec (`openspec/specs/`), or PRDs and ADRs. When the area is already specified there, tell the user and suggest `/wavecoord:spec-import` to move it into the tree first, instead of writing it again.
 
 ## 2. Ask, then decide the shape
 

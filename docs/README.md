@@ -14,6 +14,7 @@ Start with the [quickstart](quickstart.md) to get a coordinator running, then re
 | Page | What |
 |---|---|
 | [specs.md](specs.md) | The spec tree: capabilities, features, requirements and tasks as Markdown records; checks, waves and status commits |
+| [import.md](import.md) | Moving GitHub Spec Kit, Amazon Kiro or OpenSpec files into the spec tree |
 | [task-spec.md](task-spec.md) | The flat task format of `plan/tasks`, its fields, and the "ready" rules |
 | [adapters.md](adapters.md) | Every key of `.claude/wavecoord.json`; the plan adapters; `pr_cmd`, `pr_state_cmd`, `merge_cmd`, `prepare_cmd` |
 
