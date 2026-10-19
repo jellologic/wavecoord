@@ -22,9 +22,10 @@ REF_KEYS = ("needs", "conflicts_with", "supersedes")
 
 
 class Graph(object):
-    def __init__(self, tree, require_approved=True):
+    def __init__(self, tree, require_approved=True, status_override=None):
         self.t = tree
         self.require_approved = require_approved
+        self.override = dict(status_override or {})  # node -> status the coordinator knows better
         self.problems = []
         self.recs = {nid: n.rec for nid, n in tree.nodes.items() if n.rec is not None}
         self.tasks = sorted(nid for nid in self.recs if tree.nodes[nid].kind == "task")
@@ -42,7 +43,7 @@ class Graph(object):
         self.problems.append(Problem(level, rule, nid, n.path if n else None, msg))
 
     def status(self, nid):
-        return (self.recs.get(nid) or {}).get("status")
+        return self.override.get(nid) or (self.recs.get(nid) or {}).get("status")
 
     def expand(self, nid):
         """A node -> the tasks it stands for in `needs`: itself, or every task in its subtree."""

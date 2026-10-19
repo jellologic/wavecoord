@@ -101,6 +101,9 @@ def check_record(n):
                         " form (When/While/If ... then/Where/The ...)")
         if not rec["sections"].get("scenarios") and not rec["sections"].get("verify"):
             err("requirement", "an approved requirement has at least one Scenario or Verify command")
+    if n.kind == "task" and len(n.id.replace("/", ".")) > 64:
+        err("id", "the coordinator's task id %s is longer than 64 characters: use shorter names" % n.id.replace(
+            "/", "."))
     keys = [k for k in _frontmatter_keys(n.text)]
     if keys[:3] != list(FRAME) and not out:
         err("frame", "the frontmatter starts with status, kind and schema (rule M13)")

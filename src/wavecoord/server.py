@@ -189,6 +189,17 @@ def _routes():
             a, x, False, lambda L: L.plan_validate((b or {}).get("spec")))),
         ("POST", r"/api/plan/edit", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.plan_edit(
             (b or {}).get("edits"), (b or {}).get("branch"), (b or {}).get("title"), (b or {}).get("body")))),
+        ("GET", r"/api/spec/tree", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.spec_tree(
+            _q1(q, "node")))),
+        ("GET", r"/api/spec/get", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.spec_get(_q1(q, "id") or ""))),
+        ("GET", r"/api/spec/query", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.spec_query(_q1(q, "q")))),
+        ("GET", r"/api/spec/waves", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.spec_waves(
+            _q1(q, "node")))),
+        ("GET", r"/api/spec/trace", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.spec_trace(
+            _q1(q, "id") or ""))),
+        ("GET", r"/api/spec/check", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.spec_check())),
+        ("POST", r"/api/spec/edit", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.spec_edit(
+            (b or {}).get("ops"), (b or {}).get("branch"), (b or {}).get("title"), (b or {}).get("body")))),
         ("POST", r"/api/dispatch", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: _dispatch(L, b))),
         ("POST", r"/api/collect", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.collect(
             bool((b or {}).get("dry_run")), (b or {}).get("attempt")))),

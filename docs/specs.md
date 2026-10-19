@@ -1,6 +1,6 @@
 # Specs
 
-Status: in progress (P8). This page is the user guide; the design and the rollout are in `design/spec-layer.md`. Available now (S1, S2): every command below, `check` with all its rules, and `migrate-plan`. The coordinator (dispatch from the tree, status commits, the merge checks) and the skills arrive in S3 to S5.
+Status: in progress (P8). This page is the user guide; the design and the rollout are in `design/spec-layer.md`. Available now (S1 to S3): every command below, `check` with all its rules, `migrate-plan`, the lead's `spec_*` tools, and the tree as the plan: with no `plan` key in the config, or `"plan": {"adapter": "specs"}`, `plan_ready`, `dispatch` and `dispatch_wave` read tasks from the tree on the default branch. Status commits, the merge checks and the skills arrive in S4 and S5.
 
 The spec tree is your plan, from capability to task, as Markdown files in your repo. People read and review them like code; wavecoord treats them as a database: each file is one typed record, and `wavecoord spec check` proves that the tree is consistent.
 
@@ -124,3 +124,11 @@ wavecoord spec migrate-plan --dry-run            move plan/tasks into the tree
 ```
 
 Every read takes `--json`, and every write takes `--dry-run`. In the lead session, `/wavecoord:spec` builds the tree with you and opens one plan PR, and `/wavecoord:wave-plan` plans tasks under requirements.
+
+## In the lead session
+
+The lead's tools read the tree on the default branch: `spec_tree`, `spec_get`, `spec_query`, `spec_waves`, `spec_trace` and `spec_check`. `spec_edit` takes the same ops as `wavecoord spec apply`, writes them as one commit on a new `plan/<n>` branch (moves as `git mv`), and opens a PR; pass its `branch` to the next `spec_edit` to add to the same PR.
+
+The coordinator names a task by its path with `.` for `/`: `auth/sessions/token-rotation/rotate-impl` is task `auth.sessions.token-rotation.rotate-impl` in leases, attempts, branches (`wave/<task>-<n>`) and the PR's `Task:` line. `check` keeps that name within 64 characters.
+
+A worker's prompt holds its requirement's statement and scenarios, its inputs and outputs with their contracts, and the requirement's Verify commands under "Also run".

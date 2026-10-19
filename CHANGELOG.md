@@ -15,6 +15,11 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
   - Writes through one op API (`schemas/spec-ops.schema.json`): `new`, `set`, `status`, `section`, `add`, `rm`, `artifact`, `artifact-rm`, `scenario`, `mv` (rewrites references, keeps the old id as an alias), `rebase-basis`, `supersede`, `delete`, and `apply` for a JSON list of ops. A change that would add an error writes nothing; `--dry-run` prints the diff.
   - `migrate-plan` moves `plan/tasks` into the tree.
   - Tests: real `git merge` of random edits on two branches (no conflict, the result checks clean), sorted inserts, genuine conflicts, status against other keys, races; parallel safety of the computed waves; injected misalignments; seeded defects S01-S06 and S09-S11.
+- **Spec tree, phase S3**: the tree in the lead.
+  - The spec tree is the plan store when the config has no `plan` key and `spec.dir` has records on the default branch, or with `"plan": {"adapter": "specs"}`: `plan_ready`, `plan_get`, `dispatch`, `dispatch_wave` and the dispatcher loop read tasks from it. A task's coordinator id is its path with `.` for `/`. The coordinator's states (live attempts, parked leases, merges) count over the status in the files.
+  - The worker's prompt gets the requirement (statement, scenarios), the task's inputs and outputs with their contracts, and the requirement's Verify commands.
+  - MCP tools `spec_tree`, `spec_get`, `spec_query`, `spec_waves`, `spec_trace`, `spec_check` and `spec_edit` (ops on a `plan/<n>` branch, moves as `git mv`, one PR; several calls with one branch build one PR), and the REST routes under `/api/spec/`.
+  - `plan/edit.py` split into `plan_branch`, `commit_files` and `read_at`, shared by `plan_edit` and `spec_edit`.
 - **Block lists in the YAML subset**: `key:` followed by `- item` lines, in task specs too, and block lists of flat maps for the spec tree's inputs and outputs. Every file that parsed before parses to the same value.
 
 ## 0.1.6

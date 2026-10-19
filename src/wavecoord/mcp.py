@@ -90,6 +90,26 @@ TOOLS = [
      _obj({"branch": _STR, "edits": {"type": "array", "minItems": 1, "items": _EDIT}, "title": _STR, "body": _STR},
           ["edits"]),
      lambda c, ctx, a: _lead(c, ctx, True).plan_edit(a["edits"], a.get("branch"), a.get("title"), a.get("body"))),
+    ("spec_tree", "The spec tree (capability, feature, requirement, task) with status and progress; or one subtree.",
+     _obj({"node": _STR}), lambda c, ctx, a: _lead(c, ctx).spec_tree(a.get("node"))),
+    ("spec_get", "One record of the spec tree: its fields, sections, children and (for a requirement) fingerprint.",
+     _obj({"id": _STR}, ["id"]), lambda c, ctx, a: _lead(c, ctx).spec_get(a["id"])),
+    ("spec_query", "Records that match a query: key=value key!=value key~glob key !key under=<id> "
+                   "(for example `kind=task status=planned outputs~src/*`).",
+     _obj({"q": _STR}), lambda c, ctx, a: _lead(c, ctx).spec_query(a.get("q"))),
+    ("spec_waves", "What can run at the same time: waves of tasks, the critical path and the width.",
+     _obj({"node": _STR}), lambda c, ctx, a: _lead(c, ctx).spec_waves(a.get("node"))),
+    ("spec_trace", "A node's ancestors, children, needs, what waits for it, its artifacts' producers and consumers, "
+                   "and the decisions that affect it.",
+     _obj({"id": _STR}, ["id"]), lambda c, ctx, a: _lead(c, ctx).spec_trace(a["id"])),
+    ("spec_check", "Every rule of the spec tree (layout, records, references, blockers, alignment, parallel safety).",
+     _obj({}), lambda c, ctx, a: _lead(c, ctx).spec_check()),
+    ("spec_edit", "Change the spec tree with ops (schemas/spec-ops.schema.json): one commit on a plan/<n> branch "
+                  "(new, or the given one), then a PR. All ops apply, and the tree stays valid, or nothing is written. "
+                  "Never the default branch.",
+     _obj({"ops": {"type": "array", "minItems": 1, "items": {"type": "object"}}, "branch": _STR, "title": _STR,
+           "body": _STR}, ["ops"]),
+     lambda c, ctx, a: _lead(c, ctx, True).spec_edit(a["ops"], a.get("branch"), a.get("title"), a.get("body"))),
     ("dispatch", "Claim the lease and start one attempt of one task on a chosen or placed host.",
      _obj({"task": _STR, "host": _STR, "overrides": _OVERRIDES, "dry_run": _BOOL}, ["task"]),
      lambda c, ctx, a: _lead(c, ctx, True).dispatch(a["task"], a.get("host"), a.get("overrides"),
