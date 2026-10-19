@@ -23,6 +23,35 @@ specs/                                   another folder: "spec": {"dir": "..."} 
 - The folder is the parent. Names are lowercase letters, digits and `-`.
 - There is no index file. `wavecoord spec tree` is the index.
 
+```mermaid
+flowchart TD
+  cap["capability: auth"] --> feat["feature: auth/sessions"]
+  feat --> req["requirement: token-rotation<br/>Statement, Scenarios, Verify"]
+  req --> t1["task: rotate-impl<br/>paths, exec, Acceptance, Prompt"]
+  req --> t2["task: rotate-tests"]
+  t2 -.->|"needs"| t1
+```
+
+![wavecoord spec tree](img/spec-tree.svg)
+
+## From idea to merged code
+
+```mermaid
+flowchart TD
+  idea(["A feature to build"]) --> spec["/wavecoord:spec<br/>requirements with Statement, Scenarios, Verify"]
+  spec --> pr1["plan PR: you approve the requirements and merge"]
+  pr1 --> plan["/wavecoord:wave-plan<br/>tasks with paths, needs, exec, Acceptance"]
+  plan --> pr2["plan PR with the waves: you review and merge"]
+  pr2 --> run["/wavecoord:wave-run<br/>dispatch the ready wave"]
+  run --> triage["/wavecoord:triage<br/>collect, PRs, refinery"]
+  triage --> merged["merged; status commit sets the task done"]
+  merged -->|"dependents ready"| run
+  triage -->|"proposals, spec gaps"| revise["/wavecoord:revise<br/>plan PR"]
+  revise --> pr2
+```
+
+[guide.md](guide.md) walks through this loop with what you type and what you see at each step.
+
 ## What every node says
 
 ```markdown
@@ -76,7 +105,7 @@ A task adds what a worker needs: `paths` it may change, `exec` (model, budget, t
 
 ## What can run at the same time
 
-You never write it. `wavecoord spec waves` computes it: two tasks can run together when neither needs the other, their paths do not overlap, and they do not conflict. It prints the waves, the critical path and the widest wave. Wave 1 is the tasks that can run now (or are running); a task that cannot run yet for another reason (its status, an unapproved requirement) is listed as held, with the reason. If two tasks could run together but write the same file, `check` tells you to add a `needs` or split the file.
+You never write it. `wavecoord spec waves` computes it: two tasks can run together when neither needs the other, their paths do not overlap, and they do not conflict. It prints the waves, the critical path and the widest wave. Wave 1 is the tasks that can run now (or are running); a task that cannot run yet for another reason (its status, an unapproved requirement) is left out of the waves and listed under `held` with the reason by `--json` and the `spec_waves` tool (the text output does not show it; `wavecoord spec ready` gives the reason too). If two tasks could run together but write the same file, `check` tells you to add a `needs` or split the file.
 
 ## Status
 
@@ -87,11 +116,29 @@ You never write it. `wavecoord spec waves` computes it: two tasks can run togeth
 | task | `draft`, `planned`, `on_hold`, `dropped` | you, in a plan PR |
 | task | `in_progress`, `in_review`, `done` | wavecoord |
 
+```mermaid
+stateDiagram-v2
+  [*] --> draft: created
+  [*] --> planned: created as planned
+  draft --> planned: you, in a plan PR
+  planned --> in_progress: a worker starts
+  in_progress --> in_review: its PR is open
+  in_progress --> planned: the attempt ends without a PR
+  in_review --> planned: the PR is closed
+  in_review --> done: merged
+  planned --> on_hold: you
+  on_hold --> planned: you
+  planned --> dropped: you
+  in_progress --> dropped: you
+  in_review --> dropped: you
+  done --> [*]
+```
+
 wavecoord commits task status to your default branch as work moves: `in_progress` when a worker starts, `in_review` when its PR is open, `done` when it merges, and back to `planned` when an attempt ends without a merge. The coordinator reconciles: at each flush (every `spec.status_flush_s`, 60 s, and at once after a merge) it compares the files with what it knows and commits only the `status:` lines that differ, as `wavecoord: status (<n> tasks)` with one `Wavecoord-Status: <task> <from> <to>` line per change. It reads the files at one commit of the default branch and builds the status commit on that same commit, so it changes only `status:` lines. It writes only over `planned`, `in_progress` and `in_review`: it never changes `draft`, `on_hold` or `dropped`, and never undoes `done`. A plan change cannot set `in_progress`, `in_review` or `done`, cannot change a `done` task's status, and can only drop a task that is `in_progress` or `in_review`: the op API refuses it, and `wavecoord spec check --base origin/main` reports it for a hand edit. `in_review` needs an open PR; a finished attempt without one stays `in_progress`. `status` is always the first line of the frontmatter, so these commits do not conflict with your plan PRs. `ready`, `blocked` and progress are computed, never written.
 
 If you hold, drop or draft a task while its attempt runs, your status stays in the file and the task is not dispatched again. The attempt is not stopped; use `wavecoord steer <task> stop`. `status-sync` lists such tasks under `held`.
 
-If a merge is rolled back (`wavecoord rebuild --at`, or a revert of the merge commit), the file still says `done`. `wavecoord spec status-sync --reset <task>` (or `spec_status_sync` with `reset`) sets it back to `planned` when the coordinator has no merged attempt for it.
+If a merge is rolled back with `wavecoord rebuild --at`, the file still says `done`. `wavecoord spec status-sync --reset <task>` (or `spec_status_sync` with `reset`) sets it back to `planned` when the coordinator has no merged attempt for it. A revert of the merge commit leaves the merged attempt in the coordinator, so the task stays `done`: plan a new task to redo the work.
 
 A push that lost a race is retried after a fetch. When the default branch refuses the push (branch protection), the same commit goes to the branch `wavecoord/status`, one PR "wavecoord: status" carries it, and `merge_cmd` merges it with the same placeholders and `WAVECOORD_*` variables as a task PR. wavecoord force-pushes this branch (it is its own), and rebuilds it only when the changes or the default branch move, so its checks can finish. A closed status PR is replaced by a new one. After a restart the writer finds its open status PR again (by `pr_state_cmd` with the branch, or the answer of `pr_cmd`) instead of opening a second one. Any other push failure, or a status PR that cannot be merged, is logged as `spec.status_blocked`, once per reason, under the actor `status-writer` (so it reaches the lead's feed: `feedback.md`), and the status stays live in the coordinator. A status flush never fails `dispatch`, `collect` or a merge. `wavecoord spec status-sync` (or the `spec_status_sync` tool) flushes at once.
 
