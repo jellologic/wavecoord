@@ -151,7 +151,15 @@ class Attempt(object):
         self.wt = t["worktree"]
         self.branch = t["branch"]
         self.default = t["default_branch"]
-        self.coord = coordmod.Coord(t.get("coord_url"), agent=t["agent"])
+        # the wrapper's token is its host's agent token, never the lead's: a local host's token file,
+        # or on a remote host the installed token; a local host without one sends none
+        if tf and os.path.isfile(tf):
+            token = coordmod.read_token_file(tf)
+        elif (t.get("hostcfg") or {}).get("ssh"):
+            token = coordmod.read_token()
+        else:
+            token = ""
+        self.coord = coordmod.Coord(t.get("coord_url"), agent=t["agent"], token=token)
         self.hb_seq = 0
         self.last_notify = {}
         self.notify_seq = 0

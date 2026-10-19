@@ -59,6 +59,22 @@ def git(cwd, *args, check=True, input=None, timeout=60):
     return p.stdout.decode("utf-8", "replace")
 
 
+def idem_scope(principal):
+    """The namespace of the idempotency keys of a principal (contract section 2).
+
+    An agent token (`host:<name>`) and the ui have their own: a key one of them sends never matches
+    an event of another principal. The lead and the server share one, so a lead re-post (collect)
+    finds the lead's own earlier event.
+    """
+    if isinstance(principal, str) and (principal.startswith("host:") or principal == "ui"):
+        return principal
+    return None
+
+
+def idem_index(ev):
+    return (idem_scope((ev.get("actor") or {}).get("principal")), ev.get("idem"))
+
+
 def event_path(ev, digest):
     y, m, d = ev["ts"][0:4], ev["ts"][5:7], ev["ts"][8:10]
     return "events/%s/%s/%s/%012d-%s.json" % (y, m, d, ev["seq"], digest[:12])
@@ -80,12 +96,14 @@ class EventLog(object):
 
         self.events = []      # events[i] has seq i + 1
         self.hashes = []      # sha256 hex of the event file bytes
-        self.idem = {}        # idem -> seq
+        self.idem = {}        # (scope, idem) -> seq; scope: idem_scope(actor principal)
         self.snapshots = []   # sorted seqs with a snapshot
         self.committed_seq = 0
         self.pushed_seq = 0
         self.push_error = None
-        self.failed = None
+        self.failed = None    # the last commit error; cleared by the next commit that works
+        self.forked = None    # the remote branch diverged from ours: a hard stop (docs/rollback.md)
+        self.retry_s = 0.0    # the backoff of the commit retry
 
         self._lock = threading.Lock()
         self._cv = threading.Condition(self._lock)
@@ -102,6 +120,9 @@ class EventLog(object):
         self._ensure_worktree()
         git(self.log_dir, "reset", "-q", "--hard")
         git(self.log_dir, "clean", "-fdq")
+        fork = self.check_remote(merge=True)
+        if fork:
+            raise LogError(fork)
         self._load()
         self.committed_seq = len(self.events)
         if start_threads:
@@ -138,10 +159,31 @@ class EventLog(object):
             if os.path.isdir(self.log_dir):
                 os.rmdir(self.log_dir)
             git(self.repo, "worktree", "add", "-q", self.log_dir, self.branch)
-        elif self.has_remote():
-            # Catch up with a remote that is ahead (the server moved machines).
-            if git(self.log_dir, "fetch", "-q", self.remote, self.branch, check=False, timeout=30) is not None:
-                git(self.log_dir, "merge", "-q", "--ff-only", "FETCH_HEAD", check=False)
+
+    def check_remote(self, merge=False):
+        """Compare the branch with the remote's. Return None, or a message when the two have forked.
+
+        A remote that is ahead (the server moved machines) is merged fast-forward when `merge`.
+        Two servers that wrote on two clones of the same origin fork the branch: neither head
+        is an ancestor of the other. That is never merged; the caller stops (docs/rollback.md).
+        """
+        if not self.has_remote():
+            return None
+        if git(self.log_dir, "fetch", "-q", self.remote, self.branch, check=False, timeout=30) is None:
+            return None  # no remote branch yet, or the remote is unreachable
+        theirs = (git(self.log_dir, "rev-parse", "FETCH_HEAD", check=False) or "").strip()
+        ours = (git(self.log_dir, "rev-parse", "HEAD", check=False) or "").strip()
+        if not theirs or not ours or theirs == ours:
+            return None
+        if git(self.log_dir, "merge-base", "--is-ancestor", theirs, ours, check=False) is not None:
+            return None  # we are ahead: the next push sends the tail
+        if git(self.log_dir, "merge-base", "--is-ancestor", ours, theirs, check=False) is not None:
+            if merge:
+                git(self.log_dir, "merge", "-q", "--ff-only", theirs)
+            return None
+        return ("%s has forked: the local head %s and %s/%s %s have diverged (two servers wrote the log). "
+                "Stop one of them, keep one history and restore the other's events by hand (docs/rollback.md)"
+                % (self.branch, ours[:12], self.remote, self.branch, theirs[:12]))
 
     def _create_orphan(self):
         meta = json.dumps({"schema": const.SCHEMA_VERSION, "project": self.project}, sort_keys=True) + "\n"
@@ -181,7 +223,7 @@ class EventLog(object):
             self.events.append(ev)
             self.hashes.append(digest)
             if ev.get("idem"):
-                self.idem.setdefault(ev["idem"], seq)
+                self.idem.setdefault(idem_index(ev), seq)
             prev = digest
         sroot = os.path.join(self.log_dir, "snapshots")
         if os.path.isdir(sroot):
@@ -197,10 +239,10 @@ class EventLog(object):
     def last_hash(self):
         return self.hashes[-1] if self.hashes else None
 
-    def find_idem(self, idem):
-        """The event logged with `idem`, or None."""
+    def find_idem(self, idem, scope=None):
+        """The event logged with `idem` by a principal of `scope` (see idem_scope), or None."""
         with self._lock:
-            seq = self.idem.get(idem) if idem else None
+            seq = self.idem.get((scope, idem)) if idem else None
             return self.events[seq - 1] if seq else None
 
     def append(self, ev):
@@ -210,11 +252,16 @@ class EventLog(object):
         schema, seq and prev. The event is durable only after wait(seq).
         """
         with self._lock:
+            if self.forked:
+                raise LogError("the log is not writable: %s" % self.forked)
+            if self.failed and not self._threads:
+                self._commit_batch_locked()  # no committer thread: retry the failed batch here
             if self.failed:
-                raise LogError("the log is not writable: %s" % self.failed)
+                raise LogError("the log is not writable: %s (the commit is retried)" % self.failed)
             idem = ev.get("idem")
-            if idem and idem in self.idem:
-                return self.events[self.idem[idem] - 1], False
+            key = idem_index(ev)
+            if idem and key in self.idem:
+                return self.events[self.idem[key] - 1], False
             full = dict(ev)
             full["schema"] = const.SCHEMA_VERSION
             full["seq"] = len(self.events) + 1
@@ -229,7 +276,7 @@ class EventLog(object):
             self.events.append(full)
             self.hashes.append(digest)
             if idem:
-                self.idem[idem] = full["seq"]
+                self.idem[key] = full["seq"]
             self._queue(full["seq"], rel)
             return full, True
 
@@ -291,7 +338,7 @@ class EventLog(object):
                 if not self._pending:
                     self._cv.wait(1.0)
                     continue
-                left = self._pending_since + self.window_s - time.time()
+                left = self._pending_since + (self.retry_s if self.failed else self.window_s) - time.time()
                 if left > 0:
                     self._cv.wait(left)
                     continue
@@ -316,8 +363,15 @@ class EventLog(object):
         finally:
             self._lock.acquire()
         if err:
+            # Keep the batch (its files are written) and retry it with a backoff. Writes are refused
+            # while it fails; the events of the batch stay in the state and are committed by the retry.
             self.failed = err
+            self._pending = batch + self._pending
+            self._pending_since = time.time()
+            self.retry_s = min(max(self.retry_s * 2, 0.5), const.get("PUSH_RETRY_S"))
         else:
+            self.failed = None
+            self.retry_s = 0.0
             self.committed_seq = max(self.committed_seq, top)
             self._push_wake.set()
         self._cv.notify_all()
@@ -341,6 +395,12 @@ class EventLog(object):
         out = git(self.log_dir, "push", "-q", "--no-verify", self.remote,
                   "refs/heads/%s:refs/heads/%s" % (self.branch, self.branch), check=False, timeout=120)
         if out is None:
+            fork = self.check_remote()
+            if fork:
+                with self._lock:
+                    self.forked = fork
+                self.push_error = fork
+                return False
             self.push_error = "push to %s failed; retry in %ss" % (self.remote, self.push_retry_s)
             return False
         self.pushed_seq = max(self.pushed_seq, target)

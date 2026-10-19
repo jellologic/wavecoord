@@ -119,8 +119,40 @@ def writer_lease(st, agent):
 
 
 def agent_reservation_ok(item):
-    """An agent token may add only shared hot-file marks (decision D4)."""
-    return item.get("mode") == "shared" and (item.get("origin") or "hot") == "hot"
+    """An agent token may add only shared hot-file marks (decision D4), each one path, not a glob.
+
+    A wildcard mark (`**`) would be wider than any lease and would block the readiness of every
+    task whose paths it overlaps (design section 3.4)."""
+    g = item.get("glob")
+    return item.get("mode") == "shared" and (item.get("origin") or "hot") == "hot" \
+        and isinstance(g, str) and "*" not in g and "?" not in g
+
+
+def agent_claim_error(st, host, body, cur):
+    """Why an agent token may not make this claim, or None (design section 3.4).
+
+    An agent token acts only within what the lead dispatched: it renews the lease that the lead
+    granted to its holder, or (a --continue run, `resume`) takes over a parked lease of the same
+    attempt from a holder of its own host, with that lease's grant set. A new lease, a lease of
+    another attempt, a takeover across hosts and other grants need the lead.
+    """
+    task, attempt, holder = body["task"], body["attempt"], body["holder"]
+    if cur is None or cur["attempt"] != attempt:
+        return "a lease for %s/%s needs the lead: an agent token may only renew or resume a lease the lead " \
+               "granted" % (task, attempt)
+    if cur["holder"] == holder:
+        return None
+    if not body.get("resume") or cur["state"] != "parked":
+        return "lease %s of %s is held by %s; an agent token may take over only a parked lease of its attempt " \
+               "(resume)" % (cur["id"], task, cur["holder"])
+    old = st.get("agents", cur["holder"]) or {}
+    if old.get("host") != host:
+        return "lease %s of %s belongs to host %s" % (cur["id"], task, old.get("host"))
+    given = body.get("reservations") or []
+    have = sorted((r["glob"], r["mode"]) for r in grant_set(st, cur))
+    if given and sorted((it["glob"], it["mode"]) for it in given) != have:
+        return "a resumed lease keeps the grants of lease %s; other grants need the lead" % cur["id"]
+    return None
 
 
 def grant_conflicts(st, items, exclude_lease=None):

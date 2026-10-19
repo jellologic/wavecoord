@@ -13,6 +13,7 @@ import unittest
 import _paths
 from fakecoord import FakeCoord, api_fixture
 from wavecoord import jsonschema_lite as js
+from wavecoord.client import spool_file
 
 EVENTS = ("SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "PostToolBatch", "Stop",
           "SubagentStart", "SubagentStop", "StopFailure", "Notification", "PreCompact", "SessionEnd")
@@ -289,16 +290,20 @@ class StopTest(Base):
 
 class NoticeTest(Base):
     def test_unreachable_spools_then_replays(self):
-        url = "http://127.0.0.1:%d" % closed_port()
+        port = closed_port()
+        url = "http://127.0.0.1:%d" % port
         out = self.hook("Notification", self.fixture("Notification"), self.worker_env(url))
         self.assertIsNone(out)
-        spool = os.path.join(self.tmp, "state", "spool.jsonl")
+        spool = spool_file(os.path.join(self.tmp, "state"), url)  # one spool per coordinator
         with open(spool) as f:
             recs = [json.loads(x) for x in f]
         self.assertEqual([r["path"] for r in recs], ["/api/notify"])
         self.assertEqual(recs[0]["body"]["kind"], "waiting_on_you")
         self.assertEqual(js.validate(recs[0]["body"], API, "#/definitions/notify_request"), [])
-        with FakeCoord() as fc:
+        with FakeCoord() as other:  # another coordinator never gets this coordinator's writes
+            self.hook("UserPromptSubmit", self.fixture("UserPromptSubmit"), self.worker_env(other.url))
+            self.assertEqual(other.find("POST", "/api/notify"), [])
+        with FakeCoord(port) as fc:
             self.hook("UserPromptSubmit", self.fixture("UserPromptSubmit"), self.worker_env(fc.url))
             replayed = fc.find("POST", "/api/notify")
         self.assertEqual(len(replayed), 1)

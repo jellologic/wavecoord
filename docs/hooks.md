@@ -10,7 +10,7 @@ All hooks are command hooks that run `${CLAUDE_PLUGIN_ROOT}/bin/wavecoord hook <
 
 | Item | Source, in order |
 |---|---|
-| Coordinator URL | `WAVECOORD_URL`, then the plugin option `coord_url` (`CLAUDE_PLUGIN_OPTION_COORD_URL`), then `coord_url` in `.claude/wavecoord.json`, found from the hook's `cwd` upward |
+| Coordinator URL | `WAVECOORD_URL`, then the plugin option `coord_url` (`CLAUDE_PLUGIN_OPTION_COORD_URL`), then `coord_url` in `.claude/wavecoord.json`, found from the hook's `cwd` upward. The token goes only to the first two, or to a loopback URL (`security.md`, "Where a token goes") |
 | Token | The plugin option `token` (`CLAUDE_PLUGIN_OPTION_TOKEN`), then the file `WAVECOORD_TOKEN_FILE`, then `~/.wavecoord/token`. In a worker session (`WAVECOORD_TASK` or `WAVECOORD_AGENT_ID` set) only `WAVECOORD_TOKEN_FILE` (the host's agent token from the launcher); never the plugin option or `~/.wavecoord/token`, which can hold the lead's token |
 | Lead | `WAVECOORD_ROLE=lead`; or the plugin option `lead` (`CLAUDE_PLUGIN_OPTION_LEAD`) when `WAVECOORD_ROLE`, `WAVECOORD_TASK` and `WAVECOORD_AGENT_ID` are all unset (`feedback.md`) |
 | Agent id | `lead` when the session is the lead, else `WAVECOORD_AGENT_ID`, else `claude:<session_id>` |
@@ -22,7 +22,7 @@ Every request has `Authorization: Bearer <token>`, `X-Wavecoord-Agent: <agent id
 
 **State.** One small JSON file per agent keeps the heartbeat `seq`, the time of the last heartbeat, the last lease from a heartbeat, the ids of messages already shown, the hot files already marked and the running subagents.
 
-**Spool.** A write that cannot reach the coordinator (ack, reservation, notice, finish) goes to `spool.jsonl` in the state directory. Heartbeats and reads are not spooled. The next hook run that reaches the coordinator sends up to 20 spooled writes, oldest first, with their original agent and idempotency key. An entry leaves the spool when the server answers it with any status.
+**Spool.** A write that cannot reach the coordinator (ack, reservation, notice, finish) goes to the spool of that coordinator, `spool-<hash of the URL>.jsonl` in the state directory, so a write is never replayed into another coordinator (0.2.1; entries in an older `spool.jsonl` are not replayed). Heartbeats and reads are not spooled. The next hook run that reaches the coordinator sends up to 20 spooled writes, oldest first, with their original agent and idempotency key. An entry leaves the spool when the server answers it with a final status: 2xx, or a 4xx other than 408 and 429. A 5xx, 408, 429 or no answer keeps it and the ones after it, in order, for the next run. One hook run replays a spool at a time (a lock), and writes spooled meanwhile stay behind the kept ones.
 
 ## Events
 

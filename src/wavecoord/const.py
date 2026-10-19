@@ -26,6 +26,8 @@ DEFAULTS = {
     "REQ_MAX_BYTES": 65536,
     "INBOX_MAX": 20,
     "SSE_PING_S": 15,
+    "REQ_TIMEOUT_S": 30,
+    "MAX_CONNS": 128,
     "CLIENT_TIMEOUT_S": 3,
     "WATCHDOG_S": 60,
     "WATCHDOG_NUDGE_S": 1200,

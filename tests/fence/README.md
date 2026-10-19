@@ -18,7 +18,7 @@ Design: `docs/design/edit-fence.md`. These tests come first: the implementation 
 | push | the launcher's pre-push check on the net diff |
 | report, merge | E4, then `gate-check`; on pass, merge into the default branch of the test repo |
 | lead | steal, release, add a reservation, grant an overlapping exclusive (expect 409 in enforce mode), revert, `rebuild --at` |
-| agent | heartbeat, try to widen its own lease with `POST /api/reservations` (expect only `hot` to pass) |
+| agent | heartbeat, try to widen its own lease with `POST /api/reservations` (expect only a one-path `hot` mark to pass), claim a task the lead never dispatched or resume with `**` (expect 403) |
 | fault | kill the server; restart it; delay answers past the budget; answer 500, 503 or 421; return a truncated or wrong-schema body; step the clock back by more than `CLOCK_BACK_MS`; jump it forward by more than `GAP_S` |
 | override | the "human" creates or removes `fence-override.json`; the "agent" writes the file into the worktree or sets `WAVECOORD_FENCE_OFFLINE` (both must have no effect) |
 
@@ -78,6 +78,8 @@ Each defect is a small patch (a monkeypatch of one function or constant) on the 
 | D35 | Protected local folders compared case-sensitively: `~/.CLAUDE/settings.json` passes on a folding disk | the table test `protected_case_check` (0.2.1; design section 3.6; the fold probe is patched on a case-sensitive disk) |
 | D36 | The override journal sent in batches by count: a journal of long entries never fits one request (413), and E3 refuses forever | the table test `journal_size_check` (0.2.1; design section 4.4) |
 | D37 | The pre-push guard reads a git error as "no paths" and passes in enforce mode | the table test `push_git_error_check` (0.2.1; design section 3.2) |
+| D38 | An agent token can add a wildcard hot mark (`**`) | the agent step (`widen`) and the table test (0.2.1; design section 2.3) |
+| D39 | An agent token can claim a lease the lead never granted, or resume one with other grants | the agent step (`widen`) and the table test (0.2.1; design section 2.3) |
 
 ## 3. Table tests (`test_fence_points.py`)
 
@@ -117,7 +119,7 @@ These facts come from the Claude Code hooks reference. The fence depends on them
 | `tests/fenceworld.py` | the world: a real coordinator with a fake clock behind a fault proxy, the repo and worktrees, and the oracle (its own glob matcher `omatch`, its own log fold `OState`, and the inode-based `truth` of a target) |
 | `tests/fencesim.py` | the random operations and the six assertions |
 | `tests/test_fence_invariant.py` | 50 fixed seeds and one new random seed in parallel processes; on a case-sensitive file system 5 more seeds with a case-insensitive probe. `OracleCacheTest`: a cached oracle fold equals a fresh fold, also when a later event list gets the id of a freed one (seeded defect O1 of the oracle, seed 44 after seed 5 in one process) |
-| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 37 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
+| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 39 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
 | `tests/test_fence_points.py` | the failure table, the path table, the output shapes, the override, the modes, the server rules, gate-check, the launcher helpers and the fake-claude hook runs |
 
 `WAVECOORD_FENCE_SEED=<n>` reruns one seed, `WAVECOORD_FENCE_RUNS=<n>` adds n random seeds, and `WAVECOORD_FENCE_OPS=<n>` sets the maximum number of operations per seed (default 80; use 300 for a soak run).

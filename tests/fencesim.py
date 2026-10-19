@@ -438,10 +438,10 @@ class Sim(object):
         self.w.fail("overlap grant: %s on lease %s was granted over lease %s in enforce mode"
                     % (r["glob"], wk.lease_id, r["lease_id"]))
 
-    def agent_req(self, body, agent):
+    def agent_req(self, body, agent, path="/api/reservations"):
         c = http.client.HTTPConnection("127.0.0.1", self.w.server.port, timeout=10)
         data = json.dumps(body).encode()
-        c.putrequest("POST", "/api/reservations", skip_host=True)
+        c.putrequest("POST", path, skip_host=True)
         for k, v in (("Host", "127.0.0.1:%d" % self.w.server.port), ("Authorization", "Bearer agent-secret"),
                      ("X-Wavecoord-Agent", agent), ("Content-Type", "application/json"),
                      ("Content-Length", str(len(data)))):
@@ -455,7 +455,23 @@ class Sim(object):
     def op_widen(self, wk):
         if not self.live_lease(wk):
             return
-        choice = self.rng.randrange(3)
+        choice = self.rng.randrange(5)
+        if choice == 3:  # a wildcard hot mark is wider than any lease (design 3.4)
+            s = self.agent_req({"lease_id": wk.lease_id, "glob": self.rng.choice(["**", "a/*", "docs/?.md"]),
+                                "mode": "shared", "origin": "hot"}, wk.agent)
+            if s != 403:
+                self.w.fail("widen: an agent token added a wildcard hot mark (HTTP %s)" % s)
+            return
+        if choice == 4:  # a lease the lead never dispatched, or more grants on a resume (design 3.4)
+            body = self.rng.choice([
+                {"task": "rogue-%s" % wk.agent, "attempt": 1, "holder": wk.agent + "-r", "host": "local",
+                 "reservations": [{"glob": "**", "mode": "exclusive"}]},
+                {"task": wk.task, "attempt": wk.attempt, "holder": wk.agent + "-r", "host": "local", "resume": True,
+                 "reservations": [{"glob": "**", "mode": "exclusive"}]}])
+            s = self.agent_req(body, body["holder"], "/api/leases")
+            if s != 403:
+                self.w.fail("widen: an agent token claimed %s/%s with ** (HTTP %s)" % (body["task"], body["attempt"], s))
+            return
         if choice == 0:
             s = self.agent_req({"lease_id": wk.lease_id, "glob": "**", "mode": "exclusive"}, wk.agent)
             if s != 403:

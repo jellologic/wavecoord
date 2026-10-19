@@ -1,6 +1,6 @@
 """Seeded defects (tests/fence/README.md, section 2).
 
-For each of the 37 defects, the test applies its patch (tests/fencedefects.py)
+For each of the 39 defects, the test applies its patch (tests/fencedefects.py)
 and runs (1) the defect's named table check and (2) the randomized
 simulation on the first fixed seeds. At least one must fail, else the
 defect is not caught and the suite fails. Without a patch, every table
@@ -207,6 +207,18 @@ class Table(object):
         self.w.assign(self.a, [("a/**", "exclusive")])
         s = self.sim.agent_req({"lease_id": self.a.lease_id, "glob": "**", "mode": "exclusive"}, self.a.agent)
         return self.expect(s, 403, "an agent token adds an exclusive **")
+
+    def D38(self):
+        self.w.assign(self.a, [("a/**", "exclusive")])
+        s = self.sim.agent_req({"lease_id": self.a.lease_id, "glob": "**", "mode": "shared", "origin": "hot"},
+                               self.a.agent)
+        return self.expect(s, 403, "an agent token adds a wildcard hot mark **")
+
+    def D39(self):
+        self.w.assign(self.a, [("a/**", "exclusive")])
+        s = self.sim.agent_req({"task": "rogue", "attempt": 1, "holder": "rogue-1", "host": "local",
+                                "reservations": [{"glob": "**", "mode": "exclusive"}]}, "rogue-1", "/api/leases")
+        return self.expect(s, 403, "an agent token claims a task the lead never dispatched")
 
     def D22(self):
         self.w.assign(self.a, [("docs/**", "exclusive")])

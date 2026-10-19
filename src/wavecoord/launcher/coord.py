@@ -25,6 +25,14 @@ def token_path():
     return os.path.join(wc_home(), "token")
 
 
+def read_token_file(path):
+    try:
+        with open(os.path.expanduser(path), encoding="utf-8") as f:
+            return f.read().strip()
+    except OSError:
+        return ""
+
+
 def read_token():
     """The bearer token, or None. The plugin option wins, then the token file."""
     t = os.environ.get("CLAUDE_PLUGIN_OPTION_TOKEN", "").strip()
@@ -36,6 +44,32 @@ def read_token():
             return t or None
     except OSError:
         return None
+
+
+def verify_coordinator(url, host, token, timeout=None):
+    """Ask the server on `url` to prove it is the coordinator (security.md, "Remote hosts").
+
+    The host sends a random challenge without its token. The coordinator answers HMACs of it keyed
+    by the sha256 digests of the host's agent tokens; only it knows them. -> (reachable, verified):
+    verified is None when this host has no token to check with.
+    """
+    import hashlib
+    import hmac
+    import secrets
+    ch = secrets.token_hex(16)
+    try:
+        status, out = Coord(url, token="", timeout=timeout).request(
+            "GET", "/api/health?challenge=%s&host=%s" % (ch, host))
+    except Unreachable:
+        return False, None
+    if status != 200:
+        return False, None
+    if not token:
+        return True, None
+    digest = hashlib.sha256(token.encode("utf-8")).hexdigest()
+    want = hmac.new(digest.encode("ascii"), ch.encode("ascii"), hashlib.sha256).hexdigest()
+    proofs = out.get("proofs") if isinstance(out, dict) else None
+    return True, isinstance(proofs, list) and any(hmac.compare_digest(want, str(p)) for p in proofs)
 
 
 class Coord(object):

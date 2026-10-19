@@ -1,4 +1,4 @@
-"""The 37 seeded defects of tests/fence/README.md, section 2, as patches.
+"""The 39 seeded defects of tests/fence/README.md, section 2, as patches.
 
 Each defect is a small monkeypatch of one function or constant of the code
 under test. `patched(name)` applies one and undoes it on exit. The patches
@@ -158,6 +158,11 @@ DEFECTS = {
             [(fence, "journal_batch", lambda: _journal_batch_d36)]),
     "D37": ("the pre-push guard reads a git error as no paths and passes in enforce mode",
             [(guard, "push_paths", lambda: (lambda cwd, spec, stdin: _o(guard, "push_paths")(cwd, spec, stdin) or []))]),
+    "D38": ("an agent token can add a wildcard hot mark (**)",
+            [(fencecore, "agent_reservation_ok",
+              lambda: (lambda it: it.get("mode") == "shared" and (it.get("origin") or "hot") == "hot"))]),
+    "D39": ("an agent token can claim a lease the lead never granted, or resume one with other grants",
+            [(fencecore, "agent_claim_error", lambda: (lambda st, host, body, cur: None))]),
 }
 
 

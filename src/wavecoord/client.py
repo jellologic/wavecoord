@@ -9,6 +9,7 @@ next call that reaches the server replays the spool.
     status, body = c.request("POST", "/api/hb", {...})
 """
 
+import contextlib
 import hashlib
 import http.client
 import json
@@ -16,11 +17,16 @@ import os
 import socket
 import time
 import urllib.error
+import urllib.parse
 import urllib.request
+
+try:
+    import fcntl
+except ImportError:  # pragma: no cover - not POSIX: the spool works without locks
+    fcntl = None
 
 CONFIG_REL_PATH = os.path.join(".claude", "wavecoord.json")
 TOKEN_DEFAULT = os.path.join("~", ".wavecoord", "token")
-SPOOL_NAME = "spool.jsonl"
 SPOOL_MAX_LINES = 1000
 SPOOL_REPLAY_MAX = 20
 
@@ -94,6 +100,51 @@ def resolve_coord_url(env=None, cwd=None):
     if cfg and isinstance(cfg.get("coord_url"), str) and cfg["coord_url"].strip():
         return cfg["coord_url"].strip().rstrip("/")
     return None
+
+
+LOOPBACK_HOSTS = ("127.0.0.1", "localhost", "::1")
+
+
+def url_trusted(url, env=None):
+    """May a token from a user-level place (the plugin option, ~/.wavecoord/token) go to `url`?
+
+    Yes for the URL the user set (WAVECOORD_URL, the plugin option coord_url) and for a loopback
+    URL. A coord_url that only a repo's .claude/wavecoord.json names is not trusted: any checked-out
+    repo or PR branch can set it, and the lead token must not go to its server (security.md).
+    """
+    env = os.environ if env is None else env
+    if not url:
+        return False
+    u = url.strip().rstrip("/")
+    for key in ("WAVECOORD_URL", "CLAUDE_PLUGIN_OPTION_COORD_URL"):
+        if env.get(key, "").strip().rstrip("/") == u:
+            return True
+    try:
+        host = urllib.parse.urlsplit(u).hostname
+    except ValueError:
+        return False
+    return host in LOOPBACK_HOSTS
+
+
+def spool_file(spool_dir, url):
+    """The spool of one coordinator: writes spooled for one are never replayed into another."""
+    return os.path.join(spool_dir, "spool-%s.jsonl" % hashlib.sha256(url.rstrip("/").encode("utf-8")).hexdigest()[:16])
+
+
+@contextlib.contextmanager
+def _locked(path, blocking=True):
+    """An exclusive flock on `path` (created). Yields False when `blocking` is off and it is taken."""
+    fd = os.open(path, os.O_RDWR | os.O_CREAT, 0o600)
+    try:
+        if fcntl is not None:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | (0 if blocking else fcntl.LOCK_NB))
+            except OSError:
+                yield False
+                return
+        yield True
+    finally:
+        os.close(fd)
 
 
 def resolve_token(env=None):
@@ -172,7 +223,8 @@ class Client(object):
         url = resolve_coord_url(env, cwd)
         if not url:
             return None
-        return cls(url, resolve_token(env), agent, deadline, state_dir(env), const("CLIENT_TIMEOUT_S", env))
+        token = resolve_token(env) if url_trusted(url, env) else None
+        return cls(url, token, agent, deadline, state_dir(env), const("CLIENT_TIMEOUT_S", env))
 
     # -- transport --
 
@@ -233,70 +285,82 @@ class Client(object):
     # -- spool --
 
     def _spool_path(self):
-        return os.path.join(self.spool_dir, SPOOL_NAME) if self.spool_dir else None
+        return spool_file(self.spool_dir, self.url) if self.spool_dir else None
 
     def spool_append(self, method, path, body, idem, agent):
         p = self._spool_path()
         if not p:
             return
-        rec = {"ts": time.time(), "method": method, "path": path, "body": body, "idem": idem, "agent": agent}
+        rec = {"ts": time.time(), "url": self.url, "method": method, "path": path, "body": body, "idem": idem,
+               "agent": agent}
         try:
             os.makedirs(self.spool_dir, exist_ok=True)
             line = json.dumps(rec, separators=(",", ":")) + "\n"
-            # One small O_APPEND write: concurrent hooks do not interleave lines.
-            fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-            try:
-                os.write(fd, line.encode("utf-8"))
-            finally:
-                os.close(fd)
+            with _locked(p + ".lock"):  # a replay rewrites the file under the same lock
+                fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+                try:
+                    os.write(fd, line.encode("utf-8"))
+                finally:
+                    os.close(fd)
         except OSError:
             pass
 
-    def spool_replay(self, limit=SPOOL_REPLAY_MAX):
-        """Send spooled writes, oldest first. Returns the number sent.
+    @staticmethod
+    def _lines(p):
+        try:
+            with open(p, encoding="utf-8") as f:
+                return [ln for ln in f.read().splitlines() if ln.strip()]
+        except OSError:
+            return []
 
-        An entry leaves the spool when the server answers it (any status: a
-        4xx will not get better with a retry). Replay stops at the first
-        unreachable send, so the order of writes is kept.
+    def spool_replay(self, limit=SPOOL_REPLAY_MAX):
+        """Send spooled writes of this coordinator, oldest first. Returns the number answered.
+
+        An entry leaves the spool when the server answers it with a final status (2xx, or a 4xx
+        other than 408 and 429, which a retry will not change). An unreachable send, a 5xx, 408
+        or 429 keeps it and stops the replay, so the order of writes is kept. One replay runs at
+        a time per spool; writes spooled meanwhile stay behind the kept ones.
         """
         p = self._spool_path()
         if not p or not os.path.exists(p):
             return 0
-        work = p + ".%d.replay" % os.getpid()
         try:
-            os.rename(p, work)  # claim the current spool; new writes go to a fresh file
+            with _locked(p + ".replay", blocking=False) as mine:
+                if not mine:
+                    return 0  # another hook replays this spool now
+                with _locked(p + ".lock"):
+                    lines = self._lines(p)
+                sent, keep = 0, []
+                for i, ln in enumerate(lines):
+                    try:
+                        rec = json.loads(ln)
+                    except ValueError:
+                        continue
+                    if sent >= limit:
+                        keep.extend(lines[i:])
+                        break
+                    try:
+                        status, _ = self._send(rec.get("method", "POST"), rec["path"], rec.get("body"),
+                                               self._headers(rec.get("agent"), rec.get("idem")))
+                    except (Unreachable, KeyError):
+                        keep.extend(lines[i:])
+                        break
+                    if status >= 500 or status in (408, 429):
+                        keep.extend(lines[i:])  # the server could not take it now: retry later, in order
+                        break
+                    sent += 1
+                with _locked(p + ".lock"):
+                    cur = self._lines(p)
+                    rest = keep + cur[len(lines):]  # the kept entries first, then the ones spooled meanwhile
+                    rest = rest[-SPOOL_MAX_LINES:]
+                    if rest:
+                        tmp = p + ".%d.tmp" % os.getpid()
+                        fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+                        with os.fdopen(fd, "w", encoding="utf-8") as f:
+                            f.write("\n".join(rest) + "\n")
+                        os.replace(tmp, p)
+                    else:
+                        os.remove(p)
+                return sent
         except OSError:
             return 0
-        try:
-            with open(work, encoding="utf-8") as f:
-                lines = [ln for ln in f.read().splitlines() if ln.strip()]
-        except OSError:
-            lines = []
-        sent, keep = 0, []
-        for i, ln in enumerate(lines):
-            try:
-                rec = json.loads(ln)
-            except ValueError:
-                continue
-            if sent >= limit:
-                keep.append(ln)
-                continue
-            try:
-                self._send(rec.get("method", "POST"), rec["path"], rec.get("body"),
-                           self._headers(rec.get("agent"), rec.get("idem")))
-                sent += 1
-            except (Unreachable, KeyError):
-                keep.extend(lines[i:])
-                break
-        keep = keep[-SPOOL_MAX_LINES:]
-        try:
-            if keep:
-                fd = os.open(p, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
-                try:
-                    os.write(fd, ("\n".join(keep) + "\n").encode("utf-8"))
-                finally:
-                    os.close(fd)
-            os.remove(work)
-        except OSError:
-            pass
-        return sent

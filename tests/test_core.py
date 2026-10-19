@@ -58,14 +58,14 @@ class CoordCase(unittest.TestCase):
 class LeaseTest(CoordCase):
     def test_claim_held_busy_steal(self):
         a1, a2 = agent_ctx("h1", "w1"), agent_ctx("h2", "w2")
-        r = claim(self.c, a1, "api-auth", "w1", "h1", [("src/auth/**", "exclusive")])
+        r = claim(self.c, LEAD, "api-auth", "w1", "h1", [("src/auth/**", "exclusive")])
         lease = r["lease"]
         self.assertEqual((lease["state"], lease["epoch"]), ("active", int(_coord.T0 * 1000)))
         with self.assertRaises(ApiError) as e:
-            claim(self.c, a2, "api-auth", "w2", "h2")
+            claim(self.c, LEAD, "api-auth", "w2", "h2")
         self.assertEqual((e.exception.code, e.exception.extra["lease"]["id"]), ("held", lease["id"]))
         with self.assertRaises(ApiError) as e:
-            claim(self.c, a1, "other", "w1", "h1")
+            claim(self.c, LEAD, "other", "w1", "h1")
         self.assertEqual(e.exception.code, "agent_busy")
         with self.assertRaises(ApiError) as e:
             claim(self.c, a2, "api-auth", "w2", "h2", steal=True)
@@ -93,7 +93,7 @@ class LeaseTest(CoordCase):
 
     def test_stale_revive_park_and_drift(self):
         a = agent_ctx("h1", "w1")
-        lid = claim(self.c, a, "t1", "w1", "h1")["lease"]["id"]
+        lid = claim(self.c, LEAD, "t1", "w1", "h1")["lease"]["id"]
         advance(self.c, self.clock, const.get("LEASE_TTL_S") - 5)
         hb(self.c, a, "w1", "h1", 1)  # renews in memory, logs nothing new for the lease
         advance(self.c, self.clock, const.get("LEASE_TTL_S") - 5)
@@ -102,7 +102,7 @@ class LeaseTest(CoordCase):
         self.assertEqual(self.c.reap(), [lid])
         self.assertEqual(self.c.state.lease(lid)["state"], "stale")
         with self.assertRaises(ApiError) as e:  # stale is not free
-            claim(self.c, agent_ctx("h2", "w2"), "t1", "w2", "h2")
+            claim(self.c, LEAD, "t1", "w2", "h2")
         self.assertEqual(e.exception.code, "held")
         r = hb(self.c, a, "w1", "h1", 2)
         self.assertEqual(r["lease"]["state"], "active")
@@ -120,12 +120,12 @@ class LeaseTest(CoordCase):
         attempt takes it over with its paths; a newer attempt takes over a failed parked lease;
         a parked lease of a done run needs the lead (steal)."""
         a1, a2, a3 = agent_ctx("h1", "w1"), agent_ctx("h1", "w2"), agent_ctx("h1", "w3")
-        l1 = claim(self.c, a1, "t1", "w1", "h1", [("src/**", "exclusive"), ("docs/ci.md", "shared")])["lease"]
+        l1 = claim(self.c, LEAD, "t1", "w1", "h1", [("src/**", "exclusive"), ("docs/ci.md", "shared")])["lease"]
         f = self.c.finish(a1, "w1", {"state": "failed", "pushed": True, "source": "launcher", "seq": 1})
         self.assertEqual((f["lease"]["state"], f["lease"]["reason"]), ("parked", "finish:failed"))
         self.assertEqual(len([r for r in self.c.state.live_reservations() if r["lease_id"] == l1["id"]]), 2)
         with self.assertRaises(ApiError) as e:  # resume without the flag: held
-            claim(self.c, a2, "t1", "w2", "h1")
+            claim(self.c, LEAD, "t1", "w2", "h1")
         self.assertEqual(e.exception.code, "held")
         r = claim(self.c, a2, "t1", "w2", "h1", resume=True)
         l2 = r["lease"]
@@ -138,28 +138,28 @@ class LeaseTest(CoordCase):
                                            "epoch": l2["epoch"], "source": "guard"})["violations"], [])
         # failed again with commits: a newer attempt takes the parked lease over without a steal
         self.c.finish(a2, "w2", {"state": "failed", "pushed": True, "source": "launcher", "seq": 1})
-        l3 = claim(self.c, a3, "t1", "w3", "h1", [("src/**", "exclusive")], attempt=2)["lease"]
+        l3 = claim(self.c, LEAD, "t1", "w3", "h1", [("src/**", "exclusive")], attempt=2)["lease"]
         self.assertEqual((l3["attempt"], self.c.state.lease(l2["id"])["state"]), (2, "released"))
         # a done run's parked lease is review: no takeover by a newer attempt; resume of the same attempt is fine
         self.c.finish(a3, "w3", {"state": "done", "pushed": True, "source": "launcher", "seq": 1})
         self.assertIsNone(self.c.state.lease(l3["id"])["reason"])
         a4 = agent_ctx("h1", "w4")
         with self.assertRaises(ApiError) as e:
-            claim(self.c, a4, "t1", "w4", "h1", attempt=3)
+            claim(self.c, LEAD, "t1", "w4", "h1", attempt=3)
         self.assertEqual(e.exception.code, "held")
         with self.assertRaises(ApiError) as e:  # resume names the attempt of the parked lease
-            claim(self.c, a4, "t1", "w4", "h1", attempt=3, resume=True)
+            claim(self.c, LEAD, "t1", "w4", "h1", attempt=3, resume=True)
         self.assertEqual(e.exception.code, "held")
         l4 = claim(self.c, a4, "t1", "w4", "h1", attempt=2, resume=True)
         self.assertEqual([x["glob"] for x in l4["reservations"]], ["src/**"])
 
     def test_failed_without_push_releases_and_abandon_releases(self):
         a1 = agent_ctx("h1", "w1")
-        claim(self.c, a1, "t1", "w1", "h1", [("src/**", "exclusive")])
+        claim(self.c, LEAD, "t1", "w1", "h1", [("src/**", "exclusive")])
         f = self.c.finish(a1, "w1", {"state": "failed", "pushed": False, "source": "launcher", "seq": 1})
         self.assertEqual(f["lease"]["state"], "released")
         a2 = agent_ctx("h1", "w2")
-        l2 = claim(self.c, a2, "t2", "w2", "h1", [("lib/**", "exclusive")])["lease"]
+        l2 = claim(self.c, LEAD, "t2", "w2", "h1", [("lib/**", "exclusive")])["lease"]
         self.c.finish(a2, "w2", {"state": "failed", "pushed": True, "source": "launcher", "seq": 1})
         self.assertEqual(self.c.state.lease(l2["id"])["state"], "parked")
         self.c.attempt_end(LEAD, "t2", 1, {"state": "abandoned"})
@@ -178,7 +178,7 @@ class LeaseTest(CoordCase):
 
     def test_sleep_gap_shifts_expiry(self):
         a = agent_ctx("h1", "w1")
-        lid = claim(self.c, a, "t1", "w1", "h1")["lease"]["id"]
+        lid = claim(self.c, LEAD, "t1", "w1", "h1")["lease"]["id"]
         before = self.c.render_lease(self.c.state.lease(lid))["expires_at"]
         self.clock.advance(const.get("LEASE_TTL_S") * 3)  # the laptop slept
         self.assertEqual(self.c.reap(), [])
@@ -222,7 +222,7 @@ class LeaseTest(CoordCase):
 class MessageTest(CoordCase):
     def test_inbox_ack_and_limits(self):
         a = agent_ctx("h1", "w1")
-        claim(self.c, a, "api-auth", "w1", "h1")
+        claim(self.c, LEAD, "api-auth", "w1", "h1")
         m = self.c.send(LEAD, {"to": {"kind": "task", "id": "api-auth"}, "body": "hello"})["message"]
         self.c.send(LEAD, {"to": {"kind": "agent", "id": "w2"}, "body": "not yours"})
         self.c.send(LEAD, {"to": {"kind": "all"}, "body": "everyone"})

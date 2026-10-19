@@ -244,7 +244,23 @@ class Launcher(object):
         A local host shares ~/.wavecoord/token with the lead's own CLI, so its workers
         get their agent token by path instead of a copy (security.md, "Tokens")."""
         p = os.path.join(wc_home(), "hosts", name + ".token")
-        return p if os.path.isfile(p) else None
+        if os.path.isfile(p):
+            return p
+        # None yet: provision one in the tokens file of the coordinator on this machine (the quickstart
+        # provisions only the lead token), so local workers never run without a token or with the lead's
+        from wavecoord.corecli import default_tokens_file, provision_token, write_secret
+        tf = default_tokens_file()
+        if not os.path.isfile(tf):
+            return None
+        try:
+            tok = provision_token(tf, "agent", "host:" + name)
+            ensure_dir(os.path.dirname(p), 0o700)
+            write_secret(p, tok + "\n")
+        except (OSError, ValueError) as e:
+            warn("cannot provision an agent token for local host %s: %s" % (name, e))
+            return None
+        warn("provisioned an agent token for local host %s in %s" % (name, p))
+        return p
 
     def ensure_token(self, h, probe):
         """Copy this host's agent token (~/.wavecoord/hosts/<name>.token) when the host lacks it."""
@@ -265,7 +281,12 @@ class Launcher(object):
 
     def ensure_tunnel(self, h, probe):
         """A loopback coordinator is reached from a remote host through `ssh -R` (security.md)."""
-        if h.local or not self.coord_url or probe.get("coord_reachable"):
+        if h.local or not self.coord_url:
+            return
+        if probe.get("coord_verified") is False:
+            raise LauncherError("%s: the server on the coordinator port did not prove it is the coordinator (another "
+                                "user may hold the port; security.md, \"Remote hosts\"): no launch there" % h.name)
+        if probe.get("coord_reachable"):
             return
         u = urllib.parse.urlparse(self.coord_url)
         if u.hostname not in ("127.0.0.1", "localhost", "::1"):

@@ -27,7 +27,7 @@ LINE_MAX = 600
 TEXT_MAX = 200
 CURSOR_NAME = "lead-cursor.json"
 TRUE_WORDS = ("1", "true", "yes", "on")
-BARE = re.compile(r"^[A-Za-z0-9._:/@+-]{1,80}$")  # printed without quotes
+BARE = re.compile(r"[A-Za-z0-9._:/@+-]{1,80}")  # printed without quotes (fullmatch: no trailing newline)
 
 # Kinds the lead acts on. Everything else (agent.*, reservation.*, message.ack,
 # server.start, ...) is noise for the lead.
@@ -77,7 +77,7 @@ def _kv(pairs):
             out.append("%s=%s" % (k, "true" if v else "false"))
         elif isinstance(v, (int, float)):
             out.append("%s=%s" % (k, v))
-        elif isinstance(v, str) and BARE.match(v):
+        elif isinstance(v, str) and BARE.fullmatch(v):
             out.append("%s=%s" % (k, v))
         else:
             out.append("%s=%s" % (k, _text(v)))

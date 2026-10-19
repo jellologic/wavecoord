@@ -59,9 +59,14 @@ class LeadTestCase(LauncherTestCase):
         os.environ["PATH"] = FAKE_GH_DIR + os.pathsep + os.environ["PATH"]
         self.gh_state = os.path.join(self.tmp, "gh.json")
         for k, v in (("FAKE_GH_STATE", self.gh_state), ("WAVECOORD_PLAN_FETCH_S", "0"),
-                     ("CLAUDE_PLUGIN_OPTION_TOKEN", AGENT_TOKEN)):
+                     ("CLAUDE_PLUGIN_OPTION_TOKEN", LEAD_TOKEN)):
             self.addCleanup(self._restore, k, os.environ.get(k))
             os.environ[k] = v
+        # the launcher claims with the lead token; the wrapper and the worker use the host's agent token
+        hosts = os.path.join(os.environ["WAVECOORD_HOME"], "hosts")
+        os.makedirs(hosts, exist_ok=True)
+        with open(os.path.join(hosts, "local.token"), "w") as f:
+            f.write(AGENT_TOKEN + "\n")
         self.alt_env = os.path.join(self.tmp, "alt.env")
         with open(self.alt_env, "w") as f:
             f.write("ALT_PROVIDER=1\n")

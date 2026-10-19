@@ -135,10 +135,17 @@ class Watchdog(object):
         text = NUDGE % (l["task"], int((now - rec["since"]) // 60), max(1, int(self.stale_s // 60)))
         try:
             self.coord.send(self._ctx(), {"to": {"kind": "agent", "id": l["holder"]}, "body": text},
-                            idem="watchdog:nudge:%d:%d" % (l["id"], int(rec["since"])))
+                            idem=self._key("nudge", l, rec))
             return True
         except ApiError:
             return False
+
+    def _key(self, what, l, rec):
+        """The idempotency key of one nudge or stale of one idle episode of lease `l`.
+
+        The log position makes it unique per episode: a lease revived without new activity (a
+        re-claim, a rollback) is a new episode, and its key never matches an older event."""
+        return "watchdog:%s:%d:%d:%d" % (what, l["id"], int(rec["since"]), self.coord.log.last_seq)
 
     def mark_stale(self, l, now, rec):
         c = self.coord
@@ -157,11 +164,11 @@ class Watchdog(object):
                           cur["task"], cur["attempt"])]
 
         try:
-            logged, _, _ = c.write(self._ctx(), "watchdog:stale:%d:%d" % (l["id"], int(rec["since"])), build,
-                                   actor_agent=None, expect=("lease.stale",))
+            logged, _, dup = c.write(self._ctx(), self._key("stale", l, rec), build, actor_agent=None,
+                                     expect=("lease.stale",))
         except ApiError:
             return False
-        return bool(logged)
+        return bool(logged) and not dup
 
     # -- the thread
 
