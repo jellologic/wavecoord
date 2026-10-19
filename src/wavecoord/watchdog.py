@@ -35,7 +35,7 @@ SENDER = "watchdog"
 EXEMPT_KINDS = ("lead", "other")
 GIT_TIMEOUT_S = 10
 NUDGE = ("wavecoord watchdog: no tool activity and no new commit on task %s for %d min. If you are stuck, "
-         "commit and push what you have, then send a report or a message to the lead that says what blocks "
+         "commit what you have (push it too, unless the launcher runs you), then send a report or a message to the lead that says what blocks "
          "you. If you are still working, continue; any tool call resets this timer. Without activity, the "
          "lease becomes stale in %d min and the lead may give the task to another agent.")
 

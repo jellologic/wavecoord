@@ -387,7 +387,7 @@ class ForgeTest(TempDir):
             f.write("Task: a\n")
         rc, out, _ = self.gh("pr", "create", "--head", "feature/a", "--base", "main", "--title", "Add a",
                              "--body-file", body)
-        self.assertEqual((rc, out.strip()), (0, "https://example.invalid/repo/pull/1"))
+        self.assertEqual((rc, out.strip()), (0, "http://forge.localhost/repo/pull/1"))
         rc, _, err = self.gh("pr", "create", "--head", "feature/a", "--base", "main", "--title", "again")
         self.assertEqual(rc, 1)
         self.assertIn("already exists", err)
@@ -397,7 +397,7 @@ class ForgeTest(TempDir):
         self.assertIn("+a", self.gh("pr", "diff", "1")[1])
         with open(body, "w") as f:
             f.write("new body\n")
-        self.gh("pr", "edit", "https://example.invalid/repo/pull/1", "--body-file", body)
+        self.gh("pr", "edit", "http://forge.localhost/repo/pull/1", "--body-file", body)
         self.assertIn("#1", self.gh("pr", "list")[1])
         rc, _, err = self.gh("pr", "merge", "1", "--merge", "--match-head-commit", "0" * 40)
         self.assertEqual(rc, 1)

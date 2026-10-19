@@ -101,30 +101,15 @@
       "say": "Five tests pass. We want to add due dates. That is the only thing we specify."
     },
     {
-      "type": "/wavecoord:spec add due dates to to-do items: todo add --due YYYY-MM-DD, and todo list --overdue. Read the code first, and specify only this feature.",
+      "say": "Tell the skill the feature, who uses it, what done means and what is out of scope. Here the code already exists, so we also say which tests must keep passing."
+    },
+    {
+      "type": "/wavecoord:spec add due dates to to-do items: todo add --due YYYY-MM-DD, and todo list --overdue. Read the code first, and specify only this feature. Users: the same terminal users. Done when add --due saves the date with the item, and list --overdue prints only the open items due before today. Out of scope: reminders and times of day. The existing tests must keep passing. Each Verify should run a new test module with python3 -m unittest, such as tests.test_due_store. When the records are right, approve the requirements and activate the capability and feature in this PR.",
       "enter": true
     },
     {
-      "say": "The skill reads the code: the store, the command line and the tests.",
+      "say": "The skill reads the code: the store, the command line and the tests. Its records describe the app as it is, plus the new feature. If something is unclear, it asks. Claude Code asks before it runs some commands; in this video we answer yes.",
       "wait": false
-    },
-    {
-      "wait_for": "(?i)scope|question",
-      "timeout": 600,
-      "idle": 0.5,
-      "optional": true
-    },
-    {
-      "idle": 8,
-      "timeout": 900,
-      "cut": true
-    },
-    {
-      "say": "It asks what it could not learn from the code."
-    },
-    {
-      "type": "Users: the same terminal users. Done when add --due saves the date with the item, and list --overdue prints only the open items due before today. Out of scope: reminders and times of day. The existing tests must keep passing. Each Verify should run a new test module with python3 -m unittest, such as tests.test_due_store. When the records are right, approve the requirements and activate the capability and feature in this PR.",
-      "enter": true
     },
     {
       "wait_shell": "gh pr list --state all | grep -q '^#1 '",

@@ -88,37 +88,21 @@
       "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
     },
     {
-      "say": "We specify one small feature: saving and listing bookmarks. Not the whole app."
+      "say": "We specify one small feature: saving and listing bookmarks. Not the whole app. Tell the skill what the feature is, who uses it, what done means, and what is out of scope. If something is unclear, it asks."
     },
     {
-      "type": "/wavecoord:spec save and list bookmarks, as the README describes",
+      "type": "/wavecoord:spec save and list bookmarks, as the README describes. Users: one person in a terminal. Done when: python3 -m bookmarks add <url> --title <title> saves the bookmark in the JSON file, and python3 -m bookmarks list prints them, newest first. Out of scope: find, tags and any web page. No other work depends on an interface yet. When the records are right, you may set the requirements to approved and the capability and feature to active in this PR.",
       "enter": true
     },
     {
-      "say": "First the skill reads the spec tree, the config and the code.",
+      "say": "First the skill reads the spec tree, the config and the code. Then it drafts the records, and a reviewer subagent checks them.",
       "wait": false
     },
     {
-      "wait_for": "(?i)scope|question",
-      "timeout": 600,
-      "idle": 0.5,
-      "optional": true
+      "pause": 12
     },
     {
-      "idle": 8,
-      "timeout": 900,
-      "cut": true
-    },
-    {
-      "say": "It asks a few questions. Answer them in plain words. The shape of the tree depends on them."
-    },
-    {
-      "type": "Users: one person in a terminal. Done when: python3 -m bookmarks add <url> --title <title> saves the bookmark in the JSON file, and python3 -m bookmarks list prints them, newest first. Out of scope: find, tags and any web page. No other work depends on an interface yet. When the records are right, you may set the requirements to approved and the capability and feature to active in this PR.",
-      "enter": true
-    },
-    {
-      "say": "We also gave our approval in the answer. Only you can approve; the skill always asks.",
-      "wait": false
+      "say": "Claude Code asks before it runs a command it was not allowed in advance. In this video we answer yes to each prompt; on your machine, read each one first. We also gave our approval for the records in the request. Only you can approve; the skill always asks."
     },
     {
       "wait_shell": "gh pr list --state all | grep -q '^#1 '",
@@ -139,7 +123,7 @@
       "enter": true
     },
     {
-      "wait_for": "OPEN",
+      "wait_for": "(?i)into main|insertion",
       "timeout": 30,
       "idle": 2
     },

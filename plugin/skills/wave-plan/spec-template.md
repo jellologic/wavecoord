@@ -47,7 +47,7 @@ the worker must not change. Links to the design note when there is one.
 Imperative and self-contained. The goal in one sentence. The files to change
 and the files not to touch. The interface to keep. The tests to write first.
 The acceptance commands. When to stop and report `needs_decision` or propose a
-split (`split_if`). "Commit and push your branch before you end."
+split (`split_if`). "Commit your work before you end; the launcher pushes it."
 
 ## Notes
 For the lead only; not sent to the worker.

@@ -118,10 +118,10 @@
       "idle": 2
     },
     {
-      "say": "Step two: the tasks. We ask for small tasks on a cheap, fast model."
+      "say": "Step two: the tasks. We ask for small tasks on a cheap, fast model, and for a shape that runs in parallel: one foundation task, then one task per command, each in its own files."
     },
     {
-      "type": "/wavecoord:wave-plan bookmarks. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task, and keep each task to one module and its test.",
+      "type": "/wavecoord:wave-plan bookmarks. Make two waves. Wave 1 is one task: the store module and the entry point, which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test, needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task.",
       "enter": true
     },
     {
@@ -161,7 +161,7 @@
       "idle": 2
     },
     {
-      "say": "Wave one has the tasks that can start now. The others wait for what they need."
+      "say": "Wave one has the task that can start now. The three command tasks wait for it, and then run side by side."
     },
     {
       "say": "Step three: run the wave."
@@ -193,7 +193,7 @@
       "idle": 2
     },
     {
-      "say": "The workers run on their own. This takes a few minutes, so we skip ahead.",
+      "say": "The worker runs on its own. This takes a few minutes, so we skip ahead.",
       "wait": false
     },
     {
@@ -209,28 +209,21 @@
       "optional": true
     },
     {
-      "say": "The workers reported. Step four: triage."
+      "say": "The worker reported. Step four: triage."
     },
     {
       "type": "/wavecoord:triage",
       "enter": true
     },
     {
-      "say": "Triage collects the results, opens a pull request for each one, and merges them one at a time through the refinery.",
+      "say": "Triage collects the result, opens a pull request, and merges it through the refinery, which runs the checks again first.",
       "wait": false
-    },
-    {
-      "wait_for": "(?i)collect|refinery|merge",
-      "timeout": 600,
-      "idle": 0.5,
-      "optional": true
     },
     {
       "wait_shell": "${COURSE_WAIT} done --min 1",
       "timeout": 2400,
       "interval": 15,
-      "cut": true,
-      "optional": true
+      "cut": true
     },
     {
       "idle": 8,
@@ -238,10 +231,10 @@
       "cut": true
     },
     {
-      "say": "Merged. After each merge, wavecoord writes the task's status into the spec tree, and the tasks that needed it become ready."
+      "say": "Merged. After each merge, wavecoord writes the task's status into the spec tree on the default branch, so we pull first."
     },
     {
-      "type": "! wavecoord spec tree",
+      "type": "! git pull -q && wavecoord spec tree",
       "enter": true
     },
     {
@@ -250,16 +243,16 @@
       "idle": 2
     },
     {
-      "say": "Step five: the next wave. Same command."
+      "say": "Step five: the next wave. Same command. Now three workers start at once, each with a lease on its own files."
     },
     {
       "type": "/wavecoord:wave-run",
       "enter": true
     },
     {
-      "wait_for": "(?i)dispatch|ready",
-      "timeout": 600,
-      "idle": 0.5,
+      "wait_shell": "${COURSE_WAIT} running --min 2",
+      "timeout": 900,
+      "interval": 5,
       "optional": true
     },
     {
@@ -267,11 +260,23 @@
       "timeout": 900
     },
     {
-      "wait_shell": "${COURSE_WAIT} idle --min 2",
+      "type": "! wavecoord attempts ls --active",
+      "enter": true
+    },
+    {
+      "wait_for": "ATTEMPT",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Three workers, three worktrees, no shared file. We skip ahead again.",
+      "wait": false
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} idle --min 4",
       "timeout": 2700,
       "interval": 15,
-      "cut": true,
-      "optional": true
+      "cut": true
     },
     {
       "idle": 8,
@@ -284,10 +289,14 @@
       "enter": true
     },
     {
-      "wait_for": "(?i)collect|refinery|merge",
-      "timeout": 600,
-      "idle": 0.5,
-      "optional": true
+      "say": "Triage again. The refinery merges the three pull requests one at a time, and checks each against what is already merged.",
+      "wait": false
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} done --min 4",
+      "timeout": 2400,
+      "interval": 15,
+      "cut": true
     },
     {
       "idle": 8,
@@ -298,7 +307,7 @@
       "say": "The second wave is merged too."
     },
     {
-      "type": "! wavecoord spec tree",
+      "type": "! git pull -q && wavecoord spec tree",
       "enter": true
     },
     {
@@ -307,7 +316,7 @@
       "idle": 2
     },
     {
-      "type": "! git pull -q && git log --oneline -12",
+      "type": "! git log --oneline -14",
       "enter": true
     },
     {

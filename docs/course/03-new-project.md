@@ -56,17 +56,22 @@ Here the answers to the usual questions are in the request. What you see: a plan
 ### 2. Plan the tasks
 
 ```
-/wavecoord:wave-plan bookmarks. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min
-20 for every task, and keep each task to one module and its test.
+/wavecoord:wave-plan bookmarks. Make two waves. Wave 1 is one task: the store module and the entry point,
+which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a
+shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test,
+needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20
+for every task.
 ```
+
+You may leave the shape to the planner. Asking for it here shows the point of waves: a small foundation first, then tasks that never touch the same file, so they can run side by side.
 
 What you see: `planner` subagents draft tasks under the requirements, `reviewer` subagents critique them, and the skill fixes every `must` finding. It opens a second plan PR, with a table (id, size, model, budget, needs, paths) and the waves of the PR's commit:
 
 ```
-wave 1 (2):  <task>, <task>
-wave 2 (1):  <task>
+wave 1 (1):  <task>
+wave 2 (3):  <task>, <task>, <task>
 critical path: <task> -> <task> (2)
-max width: 2
+max width: 3
 ```
 
 The task names depend on what the planner writes; yours will differ.

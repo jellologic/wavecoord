@@ -20,4 +20,4 @@ Go through the list for each task. For each risk that applies, add a `## Risks` 
 | Tool or host gaps | A tool missing on a host (docker, a compiler) | `host_needs`; an acceptance command that checks the tool first |
 | Stale base | The task needs a change that another task in the wave makes | `needs`; or `shared_paths` and an order note in the prompt |
 | Merge conflicts | Two tasks edit the same file region | Disjoint `paths`; one owner for shared files; `needs` for order |
-| Lost work | Session ends before commit or push | Prompt: "commit after each green step; push before you end"; the Stop hook blocks once on unpushed work |
+| Lost work | Session ends before a commit | Prompt: "commit after each green step"; the launcher pushes what is committed when the session ends, also after a turn or budget cap |

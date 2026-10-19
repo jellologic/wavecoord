@@ -63,6 +63,9 @@ DEFAULTS = {
                   "5c6370,e06c75,98c379,e5c07b,61afef,c678dd,56b6c2,ffffff",
     "agg_font": "Menlo,SF Mono,Apple Symbols,Apple Color Emoji",
     "agg_line_height": 1.3,
+    # Answer Claude Code's permission prompts with their first option (Yes) once a prompt has been on screen
+    # this many seconds, so the viewer sees it. 0 turns it off.
+    "approve_after": 1.5,
 }
 
 KEYS = {
@@ -81,6 +84,9 @@ _OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 # answers a terminal sends back: cursor position (CSI r;c R), device attributes (CSI ?...c / CSI >...c),
 # kitty keyboard flags (CSI ?n u), XTVERSION (DCS > | ... ST) and OSC replies
 _REPLY = re.compile(r"\x1b\[\??\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\?\d*u|\x1bP>\|[^\x1b]*\x1b\\|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+# a Claude Code permission prompt, with its first option selected
+_PROMPT = re.compile(r"Do you want to [^\n]*\?")
+_YES = re.compile(r"^\s*❯\s*1\.\s*Yes", re.M)
 _ESC = re.compile(r"\x1b[()][A-Za-z0-9]|\x1b[@-Z\\-_=>78]")
 
 
@@ -453,6 +459,7 @@ class Driver:
         self.fd = None
         self.screen = None
         self.headless = bool(plan.get("headless"))
+        self.prompt_since, self.approved_at = None, 0.0
         self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self.cast = open(self.ctl + "/out.jsonl", "w") if self.headless else None
 
@@ -524,7 +531,27 @@ class Driver:
                 self.screen.feed(text)
             if self.headless:
                 self.answer_queries(text)
+            self.maybe_approve()
             self.last_out = time.time()
+
+    def maybe_approve(self):
+        after = self.plan.get("approve_after", 0)
+        if not after or self.screen is None or self.fd is None:
+            return
+        shown = self.screen.text()
+        if not (_PROMPT.search(shown) and _YES.search(shown)):
+            self.prompt_since = None
+            return
+        now = time.time()
+        if self.prompt_since is None:
+            self.prompt_since = now
+        elif now - self.prompt_since >= after and now - self.approved_at >= after:
+            os.write(self.fd, b"\r")
+            self.approved_at = now
+            self.prompt_since = None
+            last = [l.strip() for l in shown.splitlines() if _PROMPT.search(l)]
+            self.events.append({"i": -1, "kind": "approve", "t": now, "t_end": now,
+                                "step": {"approve": last[-1] if last else ""}})
 
     def answer_queries(self, text):
         """Headless: answer the terminal queries Claude Code sends, as a real terminal would."""
@@ -597,7 +624,8 @@ class Driver:
             self.log(i, step, "say", t0)
         elif "type" in step:
             self.mark = len(self.raw)
-            cps = step.get("cps", self.plan["type_cps"])
+            # a long prompt types faster, so it never takes more than about 6 seconds
+            cps = step.get("cps") or max(self.plan["type_cps"], len(step["type"]) / 6.0)
             for ch in step["type"]:
                 self.send(ch)
                 self.pump(1.0 / cps)
@@ -1073,7 +1101,7 @@ def run(args):
     plan = {"cwd": cwd, "command": command, "env": lesson.get("env", {}), "ctl": ctl,
             "setup": lesson.get("setup", []), "steps": steps,
             "say_gap": cfg["say_gap"], "type_cps": cfg["type_cps"], "rows_margin": cfg["rows_margin"],
-            "headless": headless, "size": cfg["size"]}
+            "headless": headless, "size": cfg["size"], "approve_after": cfg["approve_after"]}
     plan_path = os.path.join(ctl, "plan.json")
     json.dump(plan, open(plan_path, "w"), indent=1)
     if headless:
@@ -1132,7 +1160,7 @@ def finish(lesson, cfg, cwd, name, out, ctl, raw, t0, size, rect, t_start):
             if k in ev:
                 row[k] = ev[k]
         st = ev["step"]
-        row["what"] = st.get("say") or st.get("type") or st.get("key") or st.get("wait_for") or \
+        row["what"] = st.get("approve") or st.get("say") or st.get("type") or st.get("key") or st.get("wait_for") or \
             st.get("shell") or st.get("wait_shell") or ("idle %s" % st["idle"] if "idle" in st else "") or \
             ("pause %s" % st["pause"] if "pause" in st else "")
         timeline.append(row)

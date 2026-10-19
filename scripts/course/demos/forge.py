@@ -28,7 +28,7 @@ import tempfile
 import time
 
 VERSION = "gh version 2.0.0 (course forge: a local stand-in for GitHub)"
-URL = "https://example.invalid/%s/pull/%d"
+URL = "http://forge.localhost/%s/pull/%d"     # .localhost never leaves this machine
 
 
 class ForgeError(Exception):
