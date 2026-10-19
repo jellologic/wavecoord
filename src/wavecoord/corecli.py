@@ -138,6 +138,10 @@ def cmd_serve(args):
     wd = Watchdog.from_config(coord, cfg.get("watchdog"))
     if wd is not None:
         wd.start()
+    from wavecoord.lead import lead_for
+    from wavecoord.specs.status import StatusLoop
+    status_loop = StatusLoop(lead_for(coord), float(os.environ.get("WAVECOORD_STATUS_FLUSH_S", 60)))
+    status_loop.start()  # status commits of the spec tree; a no-op without one
     sys.stdout.write("wavecoord serve: %s project=%s log=%s\n" % (srv.url, coord.project, coord.log.log_dir))
     sys.stdout.flush()
 
@@ -153,6 +157,7 @@ def cmd_serve(args):
         srv.stopping.set()
         if wd is not None:
             wd.stop()
+        status_loop.stop()
         srv.httpd.server_close()
         coord.close()
         lock.close()

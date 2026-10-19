@@ -35,7 +35,7 @@ LEAD_KINDS = (
     "report.post", "notify.post", "conflict.open", "conflict.close", "proposal.new",
     "attempt.start", "attempt.end", "lease.stale", "lease.steal", "lease.release",
     "message.new", "dispatch.request", "resolve.start", "resolve.end",
-    "refinery.queue", "refinery.merge", "refinery.block", "server.clock", "revert",
+    "refinery.queue", "refinery.merge", "refinery.block", "server.clock", "revert", "spec.status_blocked",
 )
 
 

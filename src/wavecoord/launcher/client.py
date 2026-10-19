@@ -372,7 +372,7 @@ class Launcher(object):
             else:
                 warn("running %s without a lease: %s" % (aid, lease_note))
         spec = {k: opts.get(k) for k in ("model", "effort", "max_turns", "max_budget_usd", "max_tokens", "fallback_model",
-                                         "timeout_min", "claude_flags")}
+                                         "timeout_min", "claude_flags", "trailers")}
         spec.update({"task": task, "attempt": attempt, "attempt_id": aid, "branch": branch, "agent": agent,
                      "session_id": str(uuid.uuid4()), "prompt": opts["prompt"], "continue": bool(opts.get("continue")),
                      "lease_id": lease_id, "lease_epoch": epoch, "provider": provider, "provider_fallback": fallback,

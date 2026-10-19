@@ -173,7 +173,9 @@ class LeadBase(object):
     def spec_plan(self, files=None):
         from wavecoord.specs.plan import SpecTreePlan
         files = self.spec_files() if files is None else files
-        return SpecTreePlan(files, label=self.spec_dir())
+        sc = self.cfg().raw.get("spec") or {}
+        return SpecTreePlan(files, label=self.spec_dir(), require_approved=sc.get("require_approved", True) is not False,
+                            suspect=sc.get("suspect", "warn"))
 
     def plan(self):
         cfg = self.cfg()
@@ -300,6 +302,22 @@ class LeadBase(object):
         probs = check(tree)
         return {"ok": not [p for p in probs if p.level == "error"], "problems": [p.to_json() for p in probs],
                 "records": len(tree.nodes) + len(tree.decisions)}
+
+    def status_writer(self):
+        if getattr(self, "_status", None) is None:
+            from wavecoord.specs.status import StatusWriter
+            self._status = StatusWriter(self)
+        return self._status
+
+    def status_flush(self, force=False):
+        """Write task status into the spec tree (docs/specs.md, Status); a no-op without a spec tree."""
+        from wavecoord.specs.plan import SpecTreePlan
+        try:
+            if not isinstance(self.plan(), SpecTreePlan):
+                return {"skipped": "no spec tree"}
+            return self.status_writer().flush(force)
+        except ApiError as e:
+            return {"skipped": e.message}
 
     def spec_edit(self, ops, branch=None, title=None, body=None):
         """Spec tree ops on a plan/<n> branch, one commit, and a PR on a new branch (like plan_edit)."""
@@ -440,6 +458,9 @@ class LeadBase(object):
                 "prompt": prompt or overrides.get("prompt") or prompt_from_spec(spec),
                 "claude_flags": overrides.get("claude_flags"), "continue": cont, "attempt": attempt,
                 "record": record}
+        t = spec.get("tree")
+        if t:  # trailers of the PR body (and of a squash merge): `git log` alone can trace a merge to the tree
+            opts["trailers"] = [["Spec-Task", t["id"]]] + ([["Spec-Basis", t["basis"]]] if t.get("basis") else [])
         holder = {}
         opts["claim"] = self._claim(steal=cont, holder=holder)
         try:
@@ -492,7 +513,9 @@ class LeadBase(object):
             d = self.decide(spec, host, overrides, snap)
             if dry_run:
                 return dict(d, dry_run=True)
-            return self.launch(spec, d, overrides, host=host, request_id=self._open_request(task, snap))
+            res = self.launch(spec, d, overrides, host=host, request_id=self._open_request(task, snap))
+        self.status_flush()
+        return res
 
     def dispatch_wave(self, tasks=None, dry_run=False):
         """Start every ready, non-overlapping task up to wip_cap (dispatch_wave tool)."""
@@ -537,5 +560,7 @@ class LeadBase(object):
                     skipped.append({"task": s["id"], "why": e.message, "reason": e.reason})
                     if e.reason in ("hosts_full", "wip_cap"):
                         stop = e.reason
+            if done and not dry_run:
+                self.status_flush()
             return {"dispatched": done, "skipped": skipped, "dry_run": bool(dry_run),
                     "wip": {"in_flight": len(self.in_flight()), "cap": self.cfg().wip_cap}}

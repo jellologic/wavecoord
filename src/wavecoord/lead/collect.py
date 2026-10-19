@@ -83,6 +83,8 @@ class CollectMixin(object):
                     except ApiError as e:
                         out.append({"id": r["id"], "error": "%s: %s" % (e.code, e.message)})
             parked = self.reconcile_parked(dry_run=dry_run) if attempt is None else []
+            if out and not dry_run:
+                self.status_flush()
             return {"collected": out, "pending": pending, "dry_run": bool(dry_run), "parked": parked}
 
     # ----- PRs merged or closed outside the refinery -----

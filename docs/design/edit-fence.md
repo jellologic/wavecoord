@@ -278,7 +278,7 @@ Each point is `off`, `advisory` (check, warn, count "would deny"; today's P2 beh
 
 **A config change is a lead decision (0.1.4).** The fence modes and the other lead config change only in a plan or config PR that the lead makes. A task PR must not change them. A task PR is a PR from a worker attempt: its body has the `Task:`, `Attempt:` and `Lease:` lines. Plan PRs (`plan/<n>` branches from `plan_edit`) and lead PRs do not have these lines, so this rule does not apply to them. The branch name is not used, because it does not identify the author. The lead config is:
 
-- in `.claude/wavecoord.json`: `fence`, `merge_cmd`, `check_cmd`, `protected_paths_cmd`, `providers`, `auto_steer` (0.1.6), and `claude_flags` and `env` of each entry in `hosts` (by `name`);
+- in `.claude/wavecoord.json`: `fence`, `merge_cmd`, `check_cmd`, `protected_paths_cmd`, `providers`, `auto_steer` (0.1.6), `spec` and `plan` (P8), and `claude_flags` and `env` of each entry in `hosts` (by `name`);
 - in `.claude/settings.json` and `.claude/settings.local.json`: `hooks`, `disableAllHooks`, `enabledPlugins`, `extraKnownMarketplaces` and `env`;
 - each file `hooks/hooks.json` (the plugin hooks), at any depth.
 
@@ -291,6 +291,12 @@ Predicate: for a task PR with the net diff `D = merge-base(base, head)..head`, t
 | `off` | reports the change on stderr and in `--json` (`config_changes`), exit not changed | merges, with a `fence` note |
 
 The block holds in `advisory` mode too, unlike a path violation. Advisory mode is a way to measure the path fence before it denies. It is not a permission for a worker to change the fence. A worker that changes `fence` to `off` in a merged task PR turns the fence off for the next wave, and no stage of this rollout has that as a lead decision. The detail tells the lead to make the change in a plan or config PR. Seeded defect D24 and the table check `config_change_check` check the rule.
+
+### 8.1 The spec tree is a lead decision too (P8)
+
+The spec tree (`docs/specs.md`, `design/spec-layer.md`) holds the requirements, the plan and the task status. Requirements and plans change in plan PRs (`spec_edit`); status belongs to the coordinator's status commits. A task PR changes none of it.
+
+Predicate S: for a task PR with the net diff `D`, no path of `D` is under `spec.dir`, where `spec.dir` comes from the config on the base side (default `specs`), so a worker cannot move it. `gate-check` reports each such path as a violation of kind `spec_change` (`gatecheck.spec_changes`), with the `merge` mode table above: `enforce` and `advisory` block (refinery reason `spec_change`), `off` reports. A lease that covers `spec.dir` does not change this: the fence leases decide what a worker may write, predicate S decides what a task PR may merge. Plan PRs, lead PRs and the status PR have no `Task:` lines and are not checked. Seeded defect D25 (`spec_changes` returns nothing) and the table check `spec_change_check` check the rule.
 
 **Stages.** Each stage needs a lead decision and one config PR. Going back is one config PR, or a move of the plugin pin (`docs/rollback.md`).
 

@@ -1056,7 +1056,8 @@ class Coord(object):
     # ----- lead records (dispatch, attempts, conflicts, resolve, refinery) -----
 
     RECORD_KINDS = ("dispatch.decide", "attempt.start", "attempt.end", "conflict.open", "conflict.close",
-                    "resolve.start", "resolve.end", "refinery.queue", "refinery.merge", "refinery.block")
+                    "resolve.start", "resolve.end", "refinery.queue", "refinery.merge", "refinery.block",
+                    "spec.status", "spec.status_blocked")
 
     def record(self, ctx, kind, payload, task=None, attempt=None, idem=None):
         """Log one lead-side transition. `payload` is a dict, or a function(state) -> dict

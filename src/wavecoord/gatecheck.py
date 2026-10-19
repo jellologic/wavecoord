@@ -41,7 +41,7 @@ ATTEMPT_RE = re.compile(r"^Attempt:[ \t]*([0-9]+)[ \t]*$", re.M)
 
 # The lead's config: a change to these is a lead decision in a plan or config PR, never in a task PR.
 CONFIG_PATH = ".claude/wavecoord.json"
-CONFIG_KEYS = ("fence", "merge_cmd", "check_cmd", "protected_paths_cmd", "providers", "auto_steer")
+CONFIG_KEYS = ("fence", "merge_cmd", "check_cmd", "protected_paths_cmd", "providers", "auto_steer", "spec", "plan")
 HOST_KEYS = ("claude_flags", "env")
 SETTINGS_PATHS = (".claude/settings.json", ".claude/settings.local.json")
 SETTINGS_KEYS = ("hooks", "disableAllHooks", "enabledPlugins", "extraKnownMarketplaces", "env")
@@ -119,6 +119,21 @@ def config_changes(repo, base, head, paths):
     return out
 
 
+def spec_dir_at(repo, rev):
+    """The spec tree's folder in the config at `rev` (default specs)."""
+    cfg = _load(_show(repo, rev, CONFIG_PATH))
+    spec = cfg.get("spec") if isinstance(cfg, dict) else None
+    d = spec.get("dir") if isinstance(spec, dict) else None
+    return str(d or "specs").strip("/")
+
+
+def spec_changes(repo, base, head, paths):
+    """The spec tree files that a task PR changes (edit-fence.md, section 8.1): requirements and plans are lead
+    decisions, and status belongs to the coordinator. The folder comes from the config on the base side."""
+    d = spec_dir_at(repo, base) + "/"
+    return [{"kind": "spec_change", "path": p, "key": "the spec tree (%s)" % p} for p in paths if p.startswith(d)]
+
+
 def base_merge_mode(repo, base):
     """The fence `merge` mode of the config on the base side (the default branch): the authority (section 8)."""
     from wavecoord import fencecore
@@ -127,7 +142,8 @@ def base_merge_mode(repo, base):
 
 
 CONFIG_ADVICE = ("a task PR may not change the lead's config (fence modes, gate commands, providers, claude_flags,"
-                 " host env, hooks); the lead makes this change in a plan or config PR")
+                 " host env, hooks) or the spec tree; the lead makes this change in a plan or config PR"
+                 " (spec_edit for the spec tree)")
 
 
 def parse_body(text):
@@ -281,7 +297,8 @@ def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None
         res["paths"] = len(paths)
         nr = net_range(rng or "origin/HEAD...HEAD")
         base, head = nr.split("...", 1)
-        cfg = config_changes(repo, base, head or "HEAD", paths) if paths else []
+        cfg = (config_changes(repo, base, head or "HEAD", paths) + spec_changes(repo, base, head or "HEAD", paths)
+               if paths else [])
         if cfg and merge_mode is None:
             merge_mode = base_merge_mode(repo, base)
         res.update(config_changes=cfg, merge_mode=merge_mode)

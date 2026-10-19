@@ -1,6 +1,6 @@
 """Seeded defects (tests/fence/README.md, section 2).
 
-For each of the 24 defects, the test applies its patch (tests/fencedefects.py)
+For each of the 25 defects, the test applies its patch (tests/fencedefects.py)
 and runs (1) the defect's named table check and (2) the randomized
 simulation on the first fixed seeds. At least one must fail, else the
 defect is not caught and the suite fails. Without a patch, every table
@@ -224,6 +224,9 @@ class Table(object):
     def D24(self):
         return config_change_check(self.w)
 
+    def D25(self):
+        return spec_change_check(self.w)
+
 
 def config_change_check(w):
     """A task PR must not change the lead's config (edit-fence.md, section 8). The lease covers `.claude/**`, so
@@ -282,6 +285,44 @@ def config_change_check(w):
         ]
         for what, change, mode, want in cases:
             got = gate(change, mode)
+            if got != want:
+                return "%s: gate-check gave %s, want %s" % (what, got, want)
+        return None
+    finally:
+        git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, "origin/main")
+        git(wk.wt, "clean", "-fdq")
+
+
+def spec_change_check(w):
+    """A task PR must not change the spec tree (edit-fence.md, section 8.1), even when its lease covers it.
+    -> None or the failure."""
+    wk = w.workers[0]
+    w.assign(wk, [("specs/**", "exclusive"), ("specsx/**", "exclusive")])
+
+    def gate(rel, mode=None):
+        git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, "origin/main")
+        p = os.path.join(wk.wt, rel)
+        os.makedirs(os.path.dirname(p), exist_ok=True)
+        with open(p, "w") as f:
+            f.write("---\nstatus: done\n---\n")
+        git(wk.wt, "add", "-A")
+        git(wk.wt, "commit", "-q", "--no-verify", "-m", "c")
+        sha = git(wk.wt, "rev-parse", "HEAD").strip()
+        out = io.StringIO()
+        code = gatecheck.run(None, wk.task, 1, "origin/main..%s" % sha, None, "%s@%d" % (wk.task, wk.epoch), w.repo,
+                             env=w.base_env("gate"), out=out, err=io.StringIO(), as_json=True, merge_mode=mode)
+        d = json.loads(out.getvalue())
+        return code, sorted(v["key"] for v in d.get("config_changes") or [] if v["kind"] == "spec_change")
+
+    try:
+        cases = [
+            ("a status line", "specs/auth/s/r/tasks/t.md", None, (1, ["the spec tree (specs/auth/s/r/tasks/t.md)"])),
+            ("a new requirement", "specs/auth/_node.md", None, (1, ["the spec tree (specs/auth/_node.md)"])),
+            ("a neighbour folder", "specsx/notes.md", None, (0, [])),
+            ("merge mode off", "specs/auth/_node.md", "off", (0, ["the spec tree (specs/auth/_node.md)"])),
+        ]
+        for what, rel, mode, want in cases:
+            got = gate(rel, mode)
             if got != want:
                 return "%s: gate-check gave %s, want %s" % (what, got, want)
         return None

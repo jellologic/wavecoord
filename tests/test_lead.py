@@ -594,7 +594,7 @@ class McpToolsTest(LeadTestCase):
                                                  "inbox", "ack", "send", "conflicts", "resolve", "refinery_status",
                                                  "refinery_merge", "propose", "proposals", "proposal_decide",
                                                  "config", "spec_tree", "spec_get", "spec_query", "spec_waves",
-                                                 "spec_trace", "spec_check", "spec_edit"]))  # spec_*: test_spec_lead
+                                                 "spec_trace", "spec_check", "spec_edit", "spec_status_sync"]))  # spec_*: test_spec_lead
 
     def rpc_list(self):
         body = {"jsonrpc": "2.0", "id": 1, "method": "tools/list"}

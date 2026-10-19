@@ -302,7 +302,7 @@ The coordinator writes only its three values and the return to `planned`. The le
 
 The coordinator writes status into the task file on the default branch:
 
-- **Events:** `attempt.start` sets `in_progress`; the PR opening sets `in_review`; `refinery.merge` (or a merge outside the refinery seen by `collect`) sets `done`; a failed, timed-out, stopped or abandoned attempt sets `planned`.
+- **Events:** `attempt.start` sets `in_progress`; the PR opening sets `in_review`; `refinery.merge` (or a merge outside the refinery seen by `collect`) sets `done`; a failed, timed-out, stopped or abandoned attempt sets `planned`. The implementation reconciles instead of replaying events: at each flush it derives every task's status from the coordinator's state (a live attempt or lease, a parked lease, a merged attempt) and writes the differences, so a flush is idempotent and `status-sync` is the same flush. It never changes a lead status and never undoes `done`. Flushes run every `status_flush_s` in `wavecoord serve`, after dispatch and collect, and at once after a merge.
 - **Batching:** the coordinator collects changes and pushes one commit every `STATUS_FLUSH_S` (default 60 s), and at once after a merge. The commit message lists each task and its change, with the trailers `Wavecoord-Status: <task> <from> <to>`.
 - **Push:** fetch, rebase the status commit onto the remote default branch, push without force, retry with backoff (`PUSH_RETRY_S`). A rejected push never drops a change: the change stays queued and is retried; the event log stays the source of truth for status between flushes.
 - **Identity and rights:** the commits are made by the coordinator with `spec.status_author`.

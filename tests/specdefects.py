@@ -1,13 +1,12 @@
 """Seeded defects of the spec tree (docs/design/spec-layer.md, section 10). Each is a small patch of the code
 under test, and each must make at least one named test fail: a defect that no test catches fails the suite.
 
-S07 and S08 (status commits) arrive with the coordinator's status writes (phase S4).
 """
 
 import contextlib
 import re
 
-from wavecoord.specs import doc, fingerprint, graph, model, ops
+from wavecoord.specs import doc, fingerprint, graph, model, ops, status
 
 
 @contextlib.contextmanager
@@ -31,6 +30,21 @@ def _flow_render(orig):
         fm = re.sub(r"^(tags|needs|aliases|paths): *\n((?:  - [^\n]*\n?)+)", fold, fm + "\n", flags=re.M).rstrip("\n")
         return "---\n" + fm + sep + body
     return render
+
+
+def _status_after_title(orig):
+    def render(rec):
+        lines = orig(rec).split("\n")
+        st = lines.pop(1)  # "status: ..." is the first frontmatter line
+        lines.insert(lines.index(next(l for l in lines if l.startswith("title:"))) + 1, st)
+        return "\n".join(lines)
+    return render
+
+
+def _rerender_status(text, value):
+    rec = doc.parse(text)
+    rec["status"] = value
+    return doc.render(rec)
 
 
 def _canonical_with(extra=None, drop=None):
@@ -80,6 +94,10 @@ DEFECTS = {
             ["test_spec_ops.OpsTest.test_mv_rewrites_references_and_keeps_aliases"]),
     "S06": ("mv does not add an alias", lambda: patch(ops, "op_mv", _mv_no_alias(ops.op_mv)),
             ["test_spec_merge.CaseTest.test_p5_races"]),
+    "S07": ("render puts status after title", lambda: patch(doc, "render", _status_after_title(doc.render)),
+            ["test_spec_merge.CaseTest.test_p4_status_and_other_keys_merge"]),
+    "S08": ("a status commit re-renders the whole file", lambda: patch(status, "set_status_line", _rerender_status),
+            ["test_spec_status.UnitTest.test_set_status_line_changes_one_line"]),
     "S09": ("needs on a node does not expand to its subtree",
             lambda: patch(graph.Graph, "expand", lambda self, nid: [nid] if nid in self.tasks else []),
             ["test_spec_graph.RandomTreeTest.test_p8_waves_are_parallel_safe"]),

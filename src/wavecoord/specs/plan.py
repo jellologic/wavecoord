@@ -42,10 +42,11 @@ def tree_id(cid):
 class SpecTreePlan(object):
     kind = "specs"
 
-    def __init__(self, files, label="specs", require_approved=True):
+    def __init__(self, files, label="specs", require_approved=True, suspect="warn"):
         self.files = files
         self.label = label
         self.require_approved = require_approved
+        self.suspect = suspect
         self.tree = Tree(files)
 
     def _graph(self, states=None):
@@ -95,7 +96,7 @@ class SpecTreePlan(object):
 
     def ready(self, states, live):
         gr = self._graph(states)
-        r = gr.ready()
+        r = gr.ready(self.suspect)
         tasks, why = [], {coord_id(t): w for t, w in r["why_not"].items()}
         for t in r["tasks"]:
             spec = self.shape(t, gr)

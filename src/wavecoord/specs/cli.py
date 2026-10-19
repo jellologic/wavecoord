@@ -150,8 +150,11 @@ def r_waves(args):
 
 
 def r_ready(args):
-    _, _, files = load(args)
-    out = Graph(Tree(files)).ready()
+    root, _, files = load(args)
+    from wavecoord.core import load_consumer_config
+    sc = load_consumer_config(root).get("spec") or {}
+    out = Graph(Tree(files), require_approved=sc.get("require_approved", True) is not False).ready(
+        sc.get("suspect", "warn"))
     if args.json:
         _print(out)
     else:
@@ -338,6 +341,25 @@ def w_apply(args):
     return run_ops(args, ops)
 
 
+def r_status_sync(args):
+    from wavecoord.leadcli import _call
+    out = _call("POST", "/api/spec/status")
+    out.pop("now", None)
+    if args.json:
+        _print(out)
+    elif out.get("skipped"):
+        print("skipped: %s" % out["skipped"])
+    elif out.get("blocked"):
+        print("blocked: %s" % out.get("reason"))
+        return 1
+    else:
+        for c in out.get("changes") or []:
+            print("%s: %s -> %s" % (c["task"], c["from"], c["to"]))
+        print("%d change(s)%s" % (len(out.get("changes") or []), (" in %s (%s)" % (out["sha"][:10], out["via"]))
+                                  if out.get("sha") else ""))
+    return 0
+
+
 def w_migrate(args):
     from wavecoord.core import load_consumer_config
     from wavecoord.plan.adapters import builtin_from_tree, plan_dir
@@ -431,6 +453,7 @@ def register(sub):
     p.add_argument("steps", nargs="+")
     p = add("apply", w_apply, "apply ops from a JSON file (schemas/spec-ops.schema.json); - reads stdin", write=True)
     p.add_argument("file")
+    add("status-sync", r_status_sync, "ask the coordinator to write every task's status into the tree now")
     p = add("migrate-plan", w_migrate, "move plan/tasks into the spec tree", write=True)
     p.add_argument("--into", default="legacy", help="the capability to create (default legacy)")
     p.add_argument("--keep", action="store_true", help="keep the old plan/tasks files")

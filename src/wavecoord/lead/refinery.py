@@ -80,6 +80,8 @@ class RefineryMixin(object):
                 if not queue:
                     raise ApiError("not_found", "no PR %s in the refinery queue (reported, pushed, with a PR)" % pr)
             results = [self._merge_one(i, approved_protected) for i in queue]
+            if any(r["state"] == "merged" for r in results):
+                self.status_flush(force=True)
             return {"results": results, "merged": [r for r in results if r["state"] == "merged"],
                     "blocked": [r for r in results if r["state"] == "blocked"]}
         finally:
@@ -139,6 +141,11 @@ class RefineryMixin(object):
             ok, tail = self._check(check, it, sha, default)
             if not ok:
                 return self._block(it, "check_failed", sha=sha, detail=tail)
+        # 3b. a spec tree task: its Acceptance and its requirement's Verify, both from the default branch, so a
+        #     worker cannot weaken what it is checked by (docs/design/spec-layer.md, section 7.5)
+        verify = self._verify(it, sha, default)
+        if verify is not None and not verify["ok"]:
+            return self._block(it, "verify_failed", sha=sha, detail=verify["detail"])
         # 4. the fence merge check (E5, docs/design/edit-fence.md): enforce blocks, advisory only notes
         fence_note = self._fence_check(it, sha, default)
         if fence_note and fence_note.get("block"):
@@ -149,8 +156,11 @@ class RefineryMixin(object):
         ok, detail = self._merge_cmd(it, sha, default)
         if not ok:
             return self._block(it, "merge_failed", sha=sha, detail=detail)
-        self.coord.record(self.ctx, "refinery.merge", {"pr": it["pr"], "pr_url": it["pr_url"], "branch": branch,
-                                                       "sha": sha, "approved_protected": bool(hits)}, task, n)
+        merged = {"pr": it["pr"], "pr_url": it["pr_url"], "branch": branch, "sha": sha,
+                  "approved_protected": bool(hits)}
+        if verify is not None:
+            merged["spec"] = verify["spec"]
+        self.coord.record(self.ctx, "refinery.merge", merged, task, n)
         with self.coord.wlock:
             lease = self.coord.state.task_lease(task)
         if lease and lease["attempt"] == n:
@@ -192,11 +202,13 @@ class RefineryMixin(object):
                               % d.get("detail")}
         cfg = d.get("config_changes") or []
         if cfg:
-            # a task PR that changes the lead's config (edit-fence.md, section 8): refused unless the fence is off
+            # a task PR that changes the lead's config or the spec tree (edit-fence.md, sections 8 and 8.1):
+            # refused unless the fence is off
             keys = ", ".join(v.get("key") or "?" for v in cfg)
+            kind = "spec_change" if any(v.get("kind") == "spec_change" for v in cfg) else "config_change"
             if mode != "off":
-                return {"block": True, "reason": "config_change",
-                        "detail": "config_change: %s; %s" % (keys, gatecheck.CONFIG_ADVICE)}
+                return {"block": True, "reason": kind,
+                        "detail": "%s: %s; %s" % (kind, keys, gatecheck.CONFIG_ADVICE)}
             return {"block": False, "detail": "config_change (reported, fence merge mode off): %s" % keys}
         if mode == "off":
             return None
@@ -206,12 +218,44 @@ class RefineryMixin(object):
             return None
         return {"block": mode == "enforce", "detail": "; ".join(problems)}
 
-    def _env(self, it, sha, default):
+    def _env(self, it, sha, default, **extra):
         return dict(os.environ, WAVECOORD_PR=str(it["pr"]), WAVECOORD_PR_URL=it["pr_url"] or "",
                     WAVECOORD_SHA=sha, WAVECOORD_BRANCH=it["branch"], WAVECOORD_BASE=default,
-                    WAVECOORD_TASK=it["task"], WAVECOORD_ATTEMPT=str(it["attempt"]))
+                    WAVECOORD_TASK=it["task"], WAVECOORD_ATTEMPT=str(it["attempt"]), **extra)
 
-    def _check(self, cmd, it, sha, default):
+    def _verify(self, it, sha, default):
+        """None for a task that is not in a spec tree; else {ok, detail, spec}."""
+        from wavecoord.plan.adapters import PlanError
+        from wavecoord.specs.fingerprint import fingerprint
+        from wavecoord.specs.plan import SpecTreePlan
+        plan = self.plan()
+        if not isinstance(plan, SpecTreePlan):
+            return None
+        try:
+            spec = plan.get(it["task"])
+        except PlanError:
+            return None
+        t = spec["tree"]
+        req = plan.tree.nodes[t["requirement"]].rec
+        info = {"task": t["id"], "requirement": t["requirement"], "basis": t.get("basis"),
+                "requirement_fp": fingerprint(req) if req else None, "verified": None}
+        if (self.cfg().raw.get("spec") or {}).get("verify_at_merge", True) is False:
+            return {"ok": True, "detail": None, "spec": info}
+        cmds = []
+        for c in list(spec["sections"].get("acceptance") or []) + list(t.get("verify") or []):
+            if c not in cmds:
+                cmds.append(c)
+        if cmds:
+            ok, tail = self._check(" && ".join("(%s)" % c for c in cmds), it, sha, default,
+                                   WAVECOORD_REQS=t["requirement"])
+            if not ok:
+                return {"ok": False, "detail": "the task's Acceptance or the requirement's Verify failed (from %s):"
+                                               " %s" % (default, tail), "spec": info}
+        info["verified"] = True
+        info["commands"] = len(cmds)
+        return {"ok": True, "detail": None, "spec": info}
+
+    def _check(self, cmd, it, sha, default, **extra):
         root = os.path.join(self.launcher().index_dir(), "check-wt")
         os.makedirs(root, exist_ok=True)
         wt = tempfile.mkdtemp(prefix="check-", dir=root)
@@ -220,7 +264,7 @@ class RefineryMixin(object):
         if rc != 0:
             return False, "cannot check out %s: %s" % (sha, err[-300:])
         try:
-            rc, out, err = run_cmd(cmd, wt, env=self._env(it, sha, default), timeout=3600)
+            rc, out, err = run_cmd(cmd, wt, env=self._env(it, sha, default, **extra), timeout=3600)
         finally:
             git_run(["worktree", "remove", "--force", wt], self.repo)
             shutil.rmtree(wt, ignore_errors=True)

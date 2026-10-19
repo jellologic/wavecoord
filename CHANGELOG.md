@@ -20,6 +20,13 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
   - The worker's prompt gets the requirement (statement, scenarios), the task's inputs and outputs with their contracts, and the requirement's Verify commands.
   - MCP tools `spec_tree`, `spec_get`, `spec_query`, `spec_waves`, `spec_trace`, `spec_check` and `spec_edit` (ops on a `plan/<n>` branch, moves as `git mv`, one PR; several calls with one branch build one PR), and the REST routes under `/api/spec/`.
   - `plan/edit.py` split into `plan_branch`, `commit_files` and `read_at`, shared by `plan_edit` and `spec_edit`.
+- **Spec tree, phase S4**: status commits, the merge rule, verify at merge.
+  - The coordinator writes task status into the spec tree: `in_progress`, `in_review`, `done`, and back to `planned`, by reconciling the files with its state and committing only the `status:` lines that differ (`wavecoord: status (<n> tasks)`, `Wavecoord-Status:` lines), every `spec.status_flush_s` and at once after a merge. When the default branch refuses the push, the commit goes through a `wavecoord/status` PR merged with `merge_cmd`. Events `spec.status` and `spec.status_blocked`; `wavecoord spec status-sync` and the `spec_status_sync` tool.
+  - A task PR may not change the spec tree: gate-check reports `spec_change`, the refinery blocks (edit-fence.md section 8.1, predicate S, seeded defect D25). `spec` and `plan` joined the config keys that a task PR may not change.
+  - `spec.verify_at_merge` (on by default): the refinery runs the task's Acceptance and its requirement's Verify, from the default branch, after `check_cmd`; a failure blocks with `verify_failed`; `refinery.merge` records the requirement and its fingerprint.
+  - The PR body of a tree task ends with the trailers `Spec-Task:` and `Spec-Basis:`.
+  - Config keys `spec.require_approved`, `suspect`, `verify_at_merge`, `status_commits`, `status_flush_s`, `status_author`.
+  - Seeded defects S07 and S08.
 - **Block lists in the YAML subset**: `key:` followed by `- item` lines, in task specs too, and block lists of flat maps for the spec tree's inputs and outputs. Every file that parsed before parses to the same value.
 
 ## 0.1.6
