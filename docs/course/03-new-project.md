@@ -41,10 +41,13 @@ The demo starts from the `bookmarks` repo: a README with the idea and the waveco
 ### 1. Spec
 
 ```
-/wavecoord:spec the bookmarks CLI from the README: add and list first, then find. Users: one person in
-a terminal. Out of scope: tags and any web page. Verify with python3 -m unittest and a new test module per
-requirement. Set the requirements to approved and the capability and feature to active in this PR. Do not
-ask me anything else.
+/wavecoord:spec the bookmarks CLI from the README. Users: one person in a terminal. Out of scope: tags
+and any web page. Make four requirements. One for the store and the entry point: bookmarks live in a JSON
+file, and python3 -m bookmarks <command> runs bookmarks/cmd_<command>.py. Then one each for add, list and
+find, each a command module. Each Verify runs one new test module with python3 -m unittest, and the
+store's test calls the store directly, not the CLI. When the records are right, you may set the
+requirements to approved and the capability and feature to active in this PR. Do not ask me anything
+else.
 ```
 
 Here the answers to the usual questions are in the request. What you see: a plan PR with a capability, a feature and a few requirements. Review it as in lesson 2, then merge:
@@ -60,7 +63,8 @@ Here the answers to the usual questions are in the request. What you see: a plan
 which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a
 shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test,
 needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20
-for every task.
+for every task. Do not ask me anything; if the plan cannot take this shape, pick the closest one and say
+why.
 ```
 
 You may leave the shape to the planner. Asking for it here shows the point of waves: a small foundation first, then tasks that never touch the same file, so they can run side by side.

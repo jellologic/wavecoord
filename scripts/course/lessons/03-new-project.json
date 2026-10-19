@@ -84,10 +84,10 @@
       "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
     },
     {
-      "say": "Step one: the spec. This time we answer the usual questions in the request itself."
+      "say": "Step one: the spec. This time we answer the usual questions in the request itself, and we say how to split the requirements: the store first, then one per command. That split is what lets the work run in parallel later."
     },
     {
-      "type": "/wavecoord:spec the bookmarks CLI from the README: add and list first, then find. Users: one person in a terminal. Out of scope: tags and any web page. Verify with python3 -m unittest and a new test module per requirement. Set the requirements to approved and the capability and feature to active in this PR. Do not ask me anything else.",
+      "type": "/wavecoord:spec the bookmarks CLI from the README. Users: one person in a terminal. Out of scope: tags and any web page. Make four requirements. One for the store and the entry point: bookmarks live in a JSON file, and python3 -m bookmarks <command> runs bookmarks/cmd_<command>.py. Then one each for add, list and find, each a command module. Each Verify runs one new test module with python3 -m unittest, and the store's test calls the store directly, not the CLI. When the records are right, you may set the requirements to approved and the capability and feature to active in this PR. Do not ask me anything else.",
       "enter": true
     },
     {
@@ -121,7 +121,7 @@
       "say": "Step two: the tasks. We ask for small tasks on a cheap, fast model, and for a shape that runs in parallel: one foundation task, then one task per command, each in its own files."
     },
     {
-      "type": "/wavecoord:wave-plan bookmarks. Make two waves. Wave 1 is one task: the store module and the entry point, which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test, needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task.",
+      "type": "/wavecoord:wave-plan bookmarks. Make two waves. Wave 1 is one task: the store module and the entry point, which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test, needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task. Do not ask me anything; if the plan cannot take this shape, pick the closest one and say why.",
       "enter": true
     },
     {

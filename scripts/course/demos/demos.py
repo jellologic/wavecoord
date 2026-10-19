@@ -86,13 +86,13 @@ def commit(repo, files, message):
     git(repo, "commit", "-q", "-m", message)
 
 
-def config(project, port, **extra):
+def config(project, port, slots=2, **extra):
     cfg = {
         "coord_url": "http://127.0.0.1:%d" % port,
         "project": project,
-        "hosts": [{"name": "local", "slots": 2, "repo_path": ".",
+        "hosts": [{"name": "local", "slots": slots, "repo_path": ".",
                    "claude_flags": ["--permission-mode", "acceptEdits", "--allowedTools", WORKER_TOOLS]}],
-        "wip_cap": 2,
+        "wip_cap": slots,
         "fence": "advisory",
         "check_cmd": CHECK_CMD,
     }
@@ -164,7 +164,7 @@ def build_fresh(repo, port, state, with_config):
     files.update(GITIGNORE)
     commit(repo, files, "Describe the bookmarks idea")
     if with_config:
-        commit(repo, config("bookmarks", port), "Add the wavecoord config")
+        commit(repo, config("bookmarks", port, slots=3), "Add the wavecoord config")
 
 
 # ---------------------------------------------------------------- brownfield: todo
