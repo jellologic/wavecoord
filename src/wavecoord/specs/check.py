@@ -1,9 +1,10 @@
 """`wavecoord spec check` and `lint`: the rules of docs/design/spec-layer.md.
 
-S1 checks each record on its own: the layout (section 2), the record frame,
-keys, types and sections (section 3), the artifact keys (3.6), EARS for an
-approved requirement (3.4) and the canonical form (rule M8). The rules across
-records (references, alignment A1-A7, blockers, predicate P) come in S2.
+Each record on its own: the layout (section 2), the record frame, keys, types
+and sections (section 3), the artifact keys (3.6), EARS for an approved
+requirement (3.4) and the canonical form (rule M8). The rules across records
+(references, blockers, alignment A1-A7, predicate P, suspect tasks) are in
+graph.py; `check` runs both.
 
     problems = check(tree)     # [Problem]; level "error" or "warning"
 """
@@ -121,7 +122,8 @@ def _frontmatter_keys(text):
     return out
 
 
-def check(tree):
+def check(tree, graph=None):
+    """Every rule: each record on its own, then the rules across records (graph.py)."""
     out = []
     for path, msg in tree.layout_errors:
         out.append(Problem("error", "layout", None, path, msg))
@@ -131,6 +133,10 @@ def check(tree):
             out.append(Problem("error", "parse", nid, node.path, e))
     for n in list(tree.nodes.values()) + list(tree.decisions.values()):
         out.extend(check_record(n))
+    if graph is None:
+        from .graph import Graph
+        graph = Graph(tree)
+    out.extend(graph.problems)
     return sorted(out, key=lambda p: (p.path or "", p.rule, p.msg))
 
 

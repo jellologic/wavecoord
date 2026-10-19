@@ -10,6 +10,8 @@ outputs:
     contract: get(id) -> Session | None; put(Session); revoke(id)
   - id: src/auth/store.py
     kind: file
+  - id: tests/test_store.py
+    kind: file
 paths:
   - src/auth/store.py
   - tests/test_store.py

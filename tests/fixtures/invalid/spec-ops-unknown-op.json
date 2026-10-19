@@ -1,0 +1,4 @@
+{
+  "schema": "spec-ops",
+  "doc": {"ops": [{"op": "rename-everything", "id": "auth"}]}
+}

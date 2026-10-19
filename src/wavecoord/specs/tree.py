@@ -99,6 +99,16 @@ class Tree(object):
                 self.nodes[nid] = n
                 if parent:
                     self._children.setdefault(parent, []).append(nid)
+        self.aliases = {}  # old id -> node id
+        self.alias_errors = []  # (path, message)
+        for nid, n in sorted(self.nodes.items()):
+            for old in (n.rec or {}).get("aliases") or []:
+                if old in self.nodes:
+                    self.alias_errors.append((n.path, "alias %s is the id of a live node" % old))
+                elif old in self.aliases:
+                    self.alias_errors.append((n.path, "alias %s is also an alias of %s" % (old, self.aliases[old])))
+                else:
+                    self.aliases[old] = nid
         for nid, n in sorted(self.nodes.items()):
             if n.parent and n.parent not in self.nodes:
                 self.layout_errors.append((n.path, "the parent %s has no %s" % (n.parent, NODE_FILE)))
@@ -128,7 +138,16 @@ class Tree(object):
         """A node id, or an alias of one -> the node id, or None."""
         if nid in self.nodes:
             return nid
-        for n in self.nodes.values():
-            if nid in ((n.rec or {}).get("aliases") or []):
-                return n.id
-        return None
+        return self.aliases.get(nid)
+
+    def ancestors(self, nid):
+        """Ids from the parent up to the capability."""
+        out, cur = [], self.nodes[nid].parent if nid in self.nodes else None
+        while cur:
+            out.append(cur)
+            cur = self.nodes[cur].parent if cur in self.nodes else None
+        return out
+
+    def requirement_of(self, task_id):
+        n = self.nodes.get(task_id)
+        return n.parent if n is not None and n.kind == "task" else None
