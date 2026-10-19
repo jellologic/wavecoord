@@ -73,6 +73,7 @@ class StreamTest(unittest.TestCase):
             {"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 5, "retry_delay_ms": 10,
              "error_status": 529, "error": "overloaded"},
             {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}},
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning", "utilization": 0.53}},
             {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"}},
             {"type": "result", "subtype": "success", "is_error": False, "num_turns": 4, "total_cost_usd": 0.5,
              "session_id": "s1", "structured_output": {"status": "done"}},
@@ -90,6 +91,13 @@ class StreamTest(unittest.TestCase):
         self.assertFalse(s.is_error)
         self.assertEqual(s.structured_output, {"status": "done"})
         self.assertEqual(s.bad_lines, 1)
+
+    def test_a_usage_warning_is_not_throttling(self):
+        s = stream.StreamStats()
+        notable = s.feed(json.dumps({"type": "rate_limit_event", "rate_limit_info": {
+            "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": 0.53}}))
+        self.assertEqual(notable, [])
+        self.assertEqual(s.throttle(), [])
 
     def test_no_result_is_error(self):
         s = stream.StreamStats()
