@@ -1,0 +1,16 @@
+{
+  "schema": "spec-record",
+  "ref": "#/definitions/task",
+  "doc": {
+    "status": "planned",
+    "kind": "task",
+    "schema": 1,
+    "title": "A task",
+    "aliases": ["../old task"],
+    "paths": ["src/x.py"],
+    "class": "B",
+    "size": "S",
+    "exec": {},
+    "sections": {}
+  }
+}

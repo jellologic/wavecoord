@@ -188,10 +188,10 @@ class CliWriteTest(unittest.TestCase):
     def test_migrate_plan(self):
         shutil.rmtree(os.path.join(self.tmp, "specs"))
         shutil.copytree(os.path.join(_paths.FIXTURES, "plan", "tasks"), os.path.join(self.tmp, "plan", "tasks"))
-        out = run("migrate-plan", "--dry-run", cwd=self.tmp)
+        out = run("migrate-plan", "--dry-run", "--no-coord", cwd=self.tmp)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertTrue(os.path.exists(os.path.join(self.tmp, "plan", "tasks", "api-auth.md")))
-        out = run("migrate-plan", cwd=self.tmp)
+        out = run("migrate-plan", "--no-coord", cwd=self.tmp)
         self.assertEqual(out.returncode, 0, out.stderr)
         self.assertIn("api-auth -> legacy/unsorted/unsorted/api-auth", out.stdout)
         self.assertFalse(os.path.exists(os.path.join(self.tmp, "plan", "tasks", "api-auth.md")))

@@ -30,7 +30,7 @@ import re
 import threading
 import time
 
-from .plan import coord_id
+from .plan import coord_id, task_states
 from .tree import Tree
 
 STATUS_BRANCH = "wavecoord/status"
@@ -48,12 +48,13 @@ def wanted(tree, states, reset=()):
     coordinator has no merged attempt for them."""
     resets = set(coord_id(r) for r in reset or ())
     out = []
+    by_task = task_states(tree, states)  # through aliases: a moved task keeps its state
     for tid, n in sorted(tree.nodes.items()):
         if n.kind != "task" or n.rec is None:
             continue
         cid = coord_id(tid)
         cur = n.rec.get("status")
-        coord = states.get(cid)
+        coord = by_task.get(tid)
         live = FROM_COORD.get(coord)
         if cur == "done":
             if cid not in resets or coord == "done":
@@ -77,10 +78,11 @@ def held(tree, states):
     """-> [(task id, lead status, coordinator status)]: tasks the lead held, dropped or drafted that still have
     a live attempt, a PR or a merge in the coordinator."""
     out = []
+    by_task = task_states(tree, states)
     for tid, n in sorted(tree.nodes.items()):
         if n.kind != "task" or n.rec is None or n.rec.get("status") not in LEAD_STATUSES:
             continue
-        live = FROM_COORD.get(states.get(coord_id(tid)))
+        live = FROM_COORD.get(by_task.get(tid))
         if live:
             out.append((tid, n.rec["status"], live))
     return out

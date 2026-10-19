@@ -135,12 +135,28 @@ wavecoord spec mv <old id> <new id>
 wavecoord spec migrate-plan --dry-run            move plan/tasks into the tree
 ```
 
+## Moving a flat plan
+
+`wavecoord spec migrate-plan` writes each `plan/tasks/<id>.md` as `legacy/unsorted/unsorted/tasks/<name>` in the working tree:
+
+- It asks the coordinator for each task's state: merged becomes `done`, running `in_progress`, a PR in review `in_review`. Pass `--states FILE` instead, or `--no-coord` when no task ever ran; without one of them it stops when the coordinator is unreachable.
+- `blocked` becomes `on_hold`; `done` and `dropped` stay.
+- The old id stays in `aliases`, so the coordinator's state under it still applies.
+- Open tasks whose paths overlap get `conflicts_with`, so they still run one at a time.
+- The legacy requirement is `approved`, and its capability and feature `active`, so the tasks run as before. Review that in the plan PR.
+
+Then commit `specs/` with the removal of `plan/tasks`, open a plan PR and merge it. Move the tasks under real requirements with `wavecoord spec mv`.
+
 Every read takes `--json`, and every write takes `--dry-run`. In the lead session, `/wavecoord:spec` builds the tree with you and opens one plan PR, and `/wavecoord:wave-plan` plans tasks under requirements.
 
 ## In the lead session
 
+The lead plans from the spec tree when `plan.adapter` is `specs`, or when no adapter is set and `spec.dir` on the default branch holds at least one valid record. Stray files there (an `openapi.yaml`, a README) do not count, and the lead never reads the tree from its working tree: commit and merge the tree first. The `config` tool shows which store is in use.
+
 The lead's tools read the tree on the default branch: `spec_tree`, `spec_get`, `spec_query`, `spec_waves`, `spec_trace` and `spec_check`. `spec_edit` takes the same ops as `wavecoord spec apply`, writes them as one commit on a new `plan/<n>` branch (moves as `git mv`), and opens a PR; pass its `branch` to the next `spec_edit` to add to the same PR.
 
-The coordinator names a task by its path with `.` for `/`: `auth/sessions/token-rotation/rotate-impl` is task `auth.sessions.token-rotation.rotate-impl` in leases, attempts, branches (`wave/<task>-<n>`) and the PR's `Task:` line. `check` keeps that name within 64 characters.
+The coordinator names a task by its path with `.` for `/`: `auth/sessions/token-rotation/rotate-impl` is task `auth.sessions.token-rotation.rotate-impl` in leases, attempts, branches (`wave/<task>-<n>`) and the PR's `Task:` line. `check` keeps that name within 64 characters. After `mv`, the old id stays in `aliases`, and the coordinator's leases, attempts and merges under it still belong to the task: a moved task keeps its status and is not dispatched again. `plan_get` and `dispatch` take the tree id or an alias too.
+
+A task is not ready while a task it `conflicts_with` runs or is in review, and `dispatch_wave` never starts both. A task left `in_progress` or `in_review` in the files with no live attempt is ready again, even before the status commit that resets it lands.
 
 A worker's prompt holds its requirement's statement and scenarios, its inputs and outputs with their contracts, and the requirement's Verify commands under "Also run".

@@ -11,7 +11,7 @@ import unittest
 import _paths
 import specsim
 from launcher_env import sh
-from test_lead import LeadTestCase
+from test_lead import LeadTestCase, spec_md
 
 from wavecoord.core import ApiError
 from wavecoord.specs.graph import Graph
@@ -160,6 +160,131 @@ class SpecWaveLeaseTest(SpecLeadCase):
                  "reservations": [{"glob": plan.get(coord_id(wave[0]))["paths"][0], "mode": "exclusive"}]}
         with self.assertRaises(ApiError):
             self.core.claim(self.lead.ctx, clash)
+
+
+class SpecSelectionTest(LeadTestCase):
+    """Items 2, 16, 28 and 80: the spec tree is the plan only when the default branch has spec records."""
+
+    SPECS = {"alpha": spec_md("alpha", ["alpha/**"])}
+
+    def drop_plan_key(self, plan=None):
+        cfg_path = os.path.join(self.repo, ".claude", "wavecoord.json")
+        with open(cfg_path) as f:
+            cfg = json.load(f)
+        cfg.pop("plan", None)
+        if plan:
+            cfg["plan"] = plan
+        with open(cfg_path, "w") as f:
+            json.dump(cfg, f)
+        os.utime(cfg_path, (2, 2) if plan else (1, 1))
+
+    def origin_git(self, *args):
+        return subprocess.run(["git"] + list(args), cwd=self.origin, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                              universal_newlines=True, check=True).stdout
+
+    def test_stray_files_keep_the_flat_plan(self):
+        sh(["git", "pull", "-q", "origin", "main"], self.seed)
+        os.makedirs(os.path.join(self.seed, "specs"))
+        for name, text in (("openapi.yaml", "openapi: 3.0.0\n"), ("README.md", "# API specs\n")):
+            with open(os.path.join(self.seed, "specs", name), "w") as f:
+                f.write(text)
+        sh(["git", "add", "specs"], self.seed)
+        sh(["git", "commit", "-q", "-m", "api specs"], self.seed)
+        sh(["git", "push", "-q", "origin", "main"], self.seed)
+        self.drop_plan_key()
+        self.assertNotIsInstance(self.lead.plan(), SpecTreePlan)
+        self.assertEqual([t["id"] for t in self.lead.plan_ready()["tasks"]], ["alpha"])
+        err, cfg = self.mcp("config", {})
+        self.assertFalse(err, cfg)
+        self.assertEqual(cfg["plan"]["adapter"], "builtin")
+        self.assertIn("no spec records", cfg["plan"]["selected_by"])
+        self.assertEqual(cfg["spec"]["dir"], "specs")
+
+    def test_working_tree_specs_are_never_the_plan(self):
+        from wavecoord.specs import source
+        for rel, text in source.read_tree(_paths.FIXTURES, "specs").items():
+            p = os.path.join(self.repo, "specs", rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(text + "<!-- local draft -->\n")
+        self.drop_plan_key()
+        self.assertNotIsInstance(self.lead.plan(), SpecTreePlan)
+        self.assertEqual([t["id"] for t in self.lead.plan_ready()["tasks"]], ["alpha"])
+        self.drop_plan_key({"adapter": "specs"})
+        self.assertEqual(self.lead.plan_ready()["tasks"], [])
+        self.lead.status_flush(force=True)
+        self.assertNotIn("specs/", self.origin_git("ls-tree", "-r", "--name-only", "main"))
+
+
+class SpecIdsTest(SpecLeadCase):
+    """Items 56, 57, 80, 3 and 18: tree ids and aliases name the task's coordinator id; basis at the start."""
+
+    def test_config_reports_the_spec_tree(self):
+        cfg = self.tool("config")
+        self.assertEqual(cfg["plan"]["adapter"], "specs")
+        self.assertEqual(cfg["spec"]["require_approved"], True)
+
+    def test_tree_id_dispatch_and_get(self):
+        tid = IMPL.replace(".", "/")
+        out = self.lead.dispatch(tid)
+        self.assertEqual(out["task"], IMPL)
+        got = self.lead.plan_get(tid)
+        self.assertEqual(got["spec"]["id"], IMPL)
+        self.assertEqual(len(got["attempts"]), 1)
+        self.assertIn(got["state"], ("active", "review"))
+        start = [e for e in self.core.events_after(0) if e["kind"] == "attempt.start"][0]
+        self.assertEqual(start["payload"]["basis"], "75c3e429")
+        self.wait_host(out["id"])
+
+    def test_moved_task_keeps_its_attempt(self):
+        from wavecoord.specs import source
+        from wavecoord.specs.ops import apply_ops
+        out = self.lead.dispatch(IMPL)
+        self.lead.states = lambda snap=None: {IMPL: "active"}  # the attempt runs while the plan PR merges
+        sh(["git", "pull", "-q", "origin", "main"], self.seed)
+        fs = source.read_tree(self.seed, "specs")
+        changes, _, _ = apply_ops(fs, [{"op": "mv", "from": "auth/sessions/token-rotation/rotate-impl",
+                                        "to": "auth/sessions/token-rotation/rotate-core"}])
+        for rel, text in changes.items():
+            p = os.path.join(self.seed, "specs", rel)
+            if text is None:
+                os.remove(p)
+            else:
+                with open(p, "w") as f:
+                    f.write(text)
+        sh(["git", "add", "-A", "specs"], self.seed)
+        sh(["git", "commit", "-q", "-m", "mv"], self.seed)
+        sh(["git", "push", "-q", "origin", "main"], self.seed)
+        core = "auth.sessions.token-rotation.rotate-core"
+        got = self.lead.plan_get(core)
+        self.assertEqual([a["task"] for a in got["attempts"]], [IMPL])
+        self.assertIn(got["state"], ("active", "review"))
+        ready = self.lead.plan_ready()
+        self.assertNotIn(core, [t["id"] for t in ready["tasks"]])
+        self.assertTrue(ready["why_not"][core].startswith("status "), ready["why_not"])
+        self.wait_host(out["id"])
+
+    def test_tree_progress_uses_the_coordinator(self):
+        self.lead.states = lambda snap=None: {IMPL: "done"}
+        tree = self.tool("spec_tree")["tree"]
+        self.assertEqual(tree[0]["progress"]["done"], 2)
+        q = self.tool("spec_query", {"q": "kind=task status=done"})["records"]
+        self.assertEqual(sorted(r["id"] for r in q), ["auth/sessions/session-store/store-api",
+                                                       "auth/sessions/token-rotation/rotate-impl"])
+
+
+class SpecConflictWaveTest(SpecLeadCase):
+    """Items 1 and 19: dispatch_wave never starts two tasks that conflict."""
+
+    def setUp(self):
+        from test_spec_plan import DB_TASK, fixture
+        self.FILES = fixture([DB_TASK])
+        super().setUp()
+
+    def test_wave_keeps_conflicts_apart(self):
+        out = self.tool("dispatch_wave", {"dry_run": True})
+        self.assertEqual(len(out["dispatched"]), 1, out)
+        self.assertTrue(any("conflicts with" in s["why"] for s in out["skipped"]), out)
 
 
 if __name__ == "__main__":

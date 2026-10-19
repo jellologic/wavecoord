@@ -8,6 +8,10 @@ of which must hold:
 Keys are the frontmatter keys, plus id, path, depth and parent. For a list
 the term holds when any item holds; for inputs and outputs the items are the
 artifact ids. `~` is an fnmatch glob.
+
+`status` (node -> status), where given, is the status the coordinator knows
+better than the files (a running or merged task before its status commit
+lands); the lead passes it, the CLI reads the files alone.
 """
 
 import fnmatch
@@ -21,8 +25,10 @@ class QueryError(ValueError):
     pass
 
 
-def _values(n, key):
+def _values(n, key, status=None):
     rec = n.rec or {}
+    if key == "status" and status and n.id in status:
+        return [status[n.id]]
     if key == "id":
         return [n.id]
     if key == "path":
@@ -65,13 +71,13 @@ def parse_query(expr):
     return terms
 
 
-def match(n, terms):
+def match(n, terms, status=None):
     for op, k, v in terms:
         if op == "under":
             if not (n.id == v or n.id.startswith(v + "/")):
                 return False
             continue
-        vals = _values(n, k)
+        vals = _values(n, k, status)
         if op == "eq" and v not in vals:
             return False
         if op == "ne" and v in vals:
@@ -85,14 +91,14 @@ def match(n, terms):
     return True
 
 
-def query(tree, expr, decisions=True):
+def query(tree, expr, decisions=True, status=None):
     terms = parse_query(expr)
     nodes = list(tree.nodes.values()) + (list(tree.decisions.values()) if decisions else [])
-    return sorted((n for n in nodes if match(n, terms)), key=lambda n: n.id)
+    return sorted((n for n in nodes if match(n, terms, status)), key=lambda n: n.id)
 
 
-def summary(n):
-    out = {"id": n.id, "kind": n.kind, "path": n.path, "status": n.status, "title": n.title}
+def summary(n, status=None):
+    out = {"id": n.id, "kind": n.kind, "path": n.path, "status": (status or {}).get(n.id, n.status), "title": n.title}
     if n.kind == "requirement" and n.rec is not None:
         out["fingerprint"] = fingerprint(n.rec)
     return out
@@ -111,22 +117,21 @@ def record(tree, nid):
     return out
 
 
-def rollup(tree, nid):
-    """{done, open, dropped, total}: the tasks under a node, from the status in the files."""
-    tasks = [tree.nodes[t] for t in tree.tasks_under(nid)]
-    done = sum(1 for t in tasks if t.status in DONE)
-    dropped = sum(1 for t in tasks if t.status == "dropped")
-    return {"done": done, "dropped": dropped, "open": len([t for t in tasks if t.status not in CLOSED]),
-            "total": len(tasks)}
+def rollup(tree, nid, status=None):
+    """{done, open, dropped, total}: the tasks under a node, from the status in the files (or `status`)."""
+    st = [(status or {}).get(t, tree.nodes[t].status) for t in tree.tasks_under(nid)]
+    done = sum(1 for x in st if x in DONE)
+    dropped = sum(1 for x in st if x == "dropped")
+    return {"done": done, "dropped": dropped, "open": len([x for x in st if x not in CLOSED]), "total": len(st)}
 
 
-def tree_view(tree, root=None):
+def tree_view(tree, root=None, status=None):
     """Nested dicts for --json, and lines for a terminal."""
     def build(nid):
         n = tree.nodes[nid]
-        d = summary(n)
+        d = summary(n, status)
         if n.kind != "task":
-            d["progress"] = rollup(tree, nid)
+            d["progress"] = rollup(tree, nid, status)
             d["children"] = [build(c) for c in tree.children(nid)]
         return d
 
