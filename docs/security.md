@@ -38,6 +38,8 @@ The refinery runs code from a PR on the lead machine, as the lead user, before i
 
 A scrubbed environment is not a sandbox. The code can still read any file the lead user can read, such as `~/.wavecoord/token`, `~/.ssh` or the `gh` config, and it can use the network. So the refinery runs it only after the fence check (the `Lease:` line, config and spec changes) has passed. If you merge work from hosts you do not trust, run the lead as a user without those files, run the checks in your CI instead (`verify_at_merge: false` on the default branch), or put `check_cmd` in a container.
 
+A merged task PR also lands in the lead's checkout, where Claude Code reads its config. So a task PR may not change any Claude Code file: any key but `$schema` of `.claude/settings*.json`, any other file under a `.claude` or `.claude-plugin` folder at any depth, `.mcp.json`, `CLAUDE.local.md` or a `hooks/hooks.json`, in any case (`config_change`, `docs/design/edit-fence.md` section 8). `CLAUDE.md` files and the scripts that a hook command runs are not covered; list them in `protected_paths_cmd` if your lead loads them.
+
 ## Reporting
 
 Report a vulnerability privately through GitHub security advisories on `jellologic/wavecoord`, not in a public issue.

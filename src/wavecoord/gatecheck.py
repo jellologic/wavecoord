@@ -13,8 +13,9 @@ other than 0 as "do not merge".
 
 A task PR (it has `Task:`, `Attempt:` and `Lease:` lines: the work of a worker
 attempt) must not change the lead's config: the `.claude/wavecoord.json` keys
-in CONFIG_KEYS and HOST_KEYS, the hook keys of the `.claude` settings files, or
-a plugin `hooks/hooks.json`. Each such change is a violation of kind
+in CONFIG_KEYS and HOST_KEYS, any key of the `.claude` settings files, any other
+file that Claude Code reads (`lead_config_kind`), or a plugin `hooks/hooks.json`.
+Each such change is a violation of kind
 `config_change` (edit-fence.md, section 8): it fails the check in the merge
 modes advisory and enforce, and is only reported in mode off. Plan PRs and
 lead PRs have no such lines, so this check does not apply to them.
@@ -50,8 +51,15 @@ HOST_KEYS = ("claude_flags", "env", "ssh", "repo_path", "prepare_cmd", "provider
 WORKER_KEYS = ("$schema", "wip_cap")
 WORKER_HOST_KEYS = ("name", "slots")
 SETTINGS_PATHS = (".claude/settings.json", ".claude/settings.local.json")
-SETTINGS_KEYS = ("hooks", "disableAllHooks", "enabledPlugins", "extraKnownMarketplaces", "env")
+# Claude Code settings deny by default: a change of any key but these is a config_change. Settings run commands
+# (hooks, statusLine, apiKeyHelper, ...), widen trust (permissions, enableAllProjectMcpServers, ...) or steer the
+# session, and the list grows with each Claude Code release, so no list of the dangerous keys stays complete.
+SETTINGS_SAFE_KEYS = ("$schema",)
 HOOKS_FILE = "hooks/hooks.json"
+# Other files that Claude Code (or a plugin the lead loads) reads: a change to them is a config_change by itself,
+# at any depth and in any case. Every path with a `.claude` or `.claude-plugin` folder in it, and these names.
+LEAD_DIRS = (".claude", ".claude-plugin")
+LEAD_FILES = (".mcp.json", "claude.local.md")
 _BAD = object()
 
 
@@ -88,10 +96,13 @@ def _hosts(cfg):
     return out
 
 
-def _key_changes(path, old, new, keys, hosts=False):
+def _key_changes(path, old, new, keys, hosts=False, safe=None):
+    """The keys whose JSON value differs. `keys` lists the keys to compare, or with `safe` every key but those."""
     if new is _BAD:
         return [{"kind": "config_change", "path": path, "key": "%s (the new file does not parse)" % path}]
     old = {} if old is _BAD else old
+    if safe is not None:
+        keys = sorted(k for k in set(old) | set(new) if k not in safe)
     out = [{"kind": "config_change", "path": path, "key": k} for k in keys if old.get(k) != new.get(k)]
     if hosts:
         oh, nh = _hosts(old), _hosts(new)
@@ -103,7 +114,28 @@ def _key_changes(path, old, new, keys, hosts=False):
 
 
 def is_hooks_file(path):
-    return path == HOOKS_FILE or path.endswith("/" + HOOKS_FILE)
+    """A plugin `hooks/hooks.json` at any depth, in any case (a case-insensitive checkout opens it as the file)."""
+    p = path.lower()
+    return p == HOOKS_FILE or p.endswith("/" + HOOKS_FILE)
+
+
+def lead_config_kind(path):
+    """How the config check treats a diff path: "config" (the root .claude/wavecoord.json: its lead keys),
+    "settings" (a root .claude settings file: every key but SETTINGS_SAFE_KEYS), "hooks" (a plugin hooks file),
+    "file" (any other file that Claude Code reads: any change) or None (not lead config).
+
+    Only the exact root names get a key compare. A case variant (`.claude/Settings.json`, `.CLAUDE/x`) or a
+    nested copy (`pkg/.claude/settings.json`, which a session started in `pkg` loads) is a change by itself."""
+    if path == CONFIG_PATH:
+        return "config"
+    if path in SETTINGS_PATHS:
+        return "settings"
+    if is_hooks_file(path):
+        return "hooks"
+    segs = path.lower().split("/")
+    if any(s in LEAD_DIRS for s in segs) or segs[-1] in LEAD_FILES:
+        return "file"
+    return None
 
 
 def merge_base(repo, base, head):
@@ -118,14 +150,17 @@ def config_changes(repo, base, head, paths):
     """The lead-config changes of the net diff base...head (`paths` is that diff). -> [violation]."""
     mb = merge_base(repo, base, head)
     out = []
-    if CONFIG_PATH in paths:
-        out += _key_changes(CONFIG_PATH, _load(_show(repo, mb, CONFIG_PATH)), _load(_show(repo, head, CONFIG_PATH)),
-                            CONFIG_KEYS, hosts=True)
-    for sp in SETTINGS_PATHS:
-        if sp in paths:
-            out += _key_changes(sp, _load(_show(repo, mb, sp)), _load(_show(repo, head, sp)), SETTINGS_KEYS)
-    out += [{"kind": "config_change", "path": p, "key": "the plugin hooks (%s)" % p}
-            for p in paths if is_hooks_file(p)]
+    for p in paths:
+        kind = lead_config_kind(p)
+        if kind == "config":
+            out += _key_changes(p, _load(_show(repo, mb, p)), _load(_show(repo, head, p)), CONFIG_KEYS, hosts=True)
+        elif kind == "settings":
+            out += _key_changes(p, _load(_show(repo, mb, p)), _load(_show(repo, head, p)), None,
+                                safe=SETTINGS_SAFE_KEYS)
+        elif kind == "hooks":
+            out.append({"kind": "config_change", "path": p, "key": "the plugin hooks (%s)" % p})
+        elif kind == "file":
+            out.append({"kind": "config_change", "path": p, "key": "the Claude Code config (%s)" % p})
     return out
 
 
@@ -138,9 +173,10 @@ def spec_dir_at(repo, rev):
 
 
 def spec_tree_used(repo, rev, d):
-    """Does the repo at `rev` use the spec tree in folder `d`? As the lead picks its plan (lead/base.py, plan):
-    plan.adapter "specs", or no plan adapter and a file under `d`. When in doubt (git fails, the config does
-    not parse) yes."""
+    """Does the repo at `rev` use the spec tree in folder `d`? The lead's rule (lead/base.py, plan_store):
+    plan.adapter "specs", or no plan adapter and at least one spec record under `d` (a stray file such as
+    specs/openapi.yaml keeps the flat plan). When in doubt (git fails, the config or the tree does not parse)
+    yes."""
     cfg = _load(_show(repo, rev, CONFIG_PATH))
     if cfg is _BAD:
         return True
@@ -148,18 +184,13 @@ def spec_tree_used(repo, rev, d):
     adapter = plan.get("adapter") if isinstance(plan, dict) else None
     if adapter is not None:
         return adapter == "specs"
+    from wavecoord.lead.base import LeadBase
+    from wavecoord.specs import source
     try:
-        p = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, "--", d + "/"], cwd=repo,
-                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=120)
-    except (OSError, subprocess.SubprocessError):
+        files = source.read_ref(repo, rev, d)
+        return LeadBase.has_records(files)
+    except Exception:  # noqa: BLE001 - a git error or a tree that does not parse: fail closed
         return True
-    if p.returncode != 0:
-        return True
-    for path in p.stdout.decode("utf-8", "replace").split("\0"):
-        rel = path[len(d) + 1:] if path.startswith(d + "/") else ""
-        if rel and not any(seg.startswith(".") for seg in rel.split("/")):
-            return True
-    return False
 
 
 def spec_dirs(repo, revs):
@@ -179,7 +210,8 @@ def spec_changes(repo, base, head, paths):
     there. Paths compare case-insensitively (false hits are fine here, misses are not)."""
     if not paths:
         return []
-    dirs = spec_dirs(repo, [base, merge_base(repo, base, head)])
+    # the head too: a task PR that adds the first spec records would switch the repo to the spec tree
+    dirs = spec_dirs(repo, [base, merge_base(repo, base, head), head])
     return [{"kind": "spec_change", "path": p, "key": "the spec tree (%s)" % p} for p in paths
             if any(under_dir(p, d) for d in dirs)]
 
@@ -197,7 +229,8 @@ def base_merge_mode(repo, base):
 
 
 CONFIG_ADVICE = ("a task PR may not change the lead's config (fence modes, gate commands, providers, claude_flags,"
-                 " host env, hooks) or the spec tree; the lead makes this change in a plan or config PR"
+                 " host env, Claude Code settings, hooks, MCP servers, .claude files) or the spec tree; the lead"
+                 " makes this change in a plan or config PR"
                  " (spec_edit for the spec tree)")
 
 

@@ -12,6 +12,14 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - `gate-check` runs the config and spec checks before it reads the `Lease:` line, so a PR body with no `Lease:` line, or with two, can no longer skip them (D26). The refinery refuses a missing or doubled `Lease:` line like a stale one (a PR body that `gh pr view` cannot read is an E5 problem instead: `enforce` blocks, `advisory` notes).
 - The refinery takes the fence merge mode and `spec.verify_at_merge` from the config on the default branch, never from the lead's working tree.
 - Predicate S (a task PR may not change the spec tree) normalizes `spec.dir` (D28), also uses the spec dir at the merge base, so a tree that moved meanwhile is still covered (D29), and compares paths without case (D30).
+- **Claude Code config in task PRs** (`config_change`, design section 8): the settings files deny by default, so a change to any key but `$schema` (`permissions`, `statusLine`, `apiKeyHelper`, `enableAllProjectMcpServers` and every other) is refused, not only the five hook keys (D32). Any other file under a `.claude` or `.claude-plugin` folder at any depth (agents, commands, skills, a nested `pkg/.claude/settings.json`), every `.mcp.json` and `CLAUDE.local.md` are lead config too. Paths compare without case, so `.claude/Settings.json` or `plugin/Hooks/hooks.json` no longer pass on a case-insensitive checkout (D31).
+- The lead's repo config lookup reads `.claude/wavecoord.json` only at the repo's top level: a nested `pkg/.claude/wavecoord.json` no longer becomes the config (and the `coord_url`) of a session started in `pkg`.
+- Submodule (gitlink) changes are paths at E2, E3, E5, the Stop hook and the refinery: every fence diff uses `--ignore-submodules=none` and `-c diff.ignoreSubmodules=none`, so `ignore = all` in `.gitmodules` no longer hides them (D33). A lease must cover the gitlink path (`vendor/sub` or `vendor/**`).
+- E1 checks a file in a nested repo of another repo (a submodule checkout, a vendored clone) by its path in the worker's worktree, not by the nested repo's own path (D34).
+- E1 compares the protected local folders (`~/.claude`, `$WAVECOORD_HOME`, the plugin root) without case on a disk that folds case, and a `.GIT` segment is git internals (D35).
+- The refinery's protected-path check lists both names of a rename (`--no-renames`), so moving a protected file out of its folder needs the approval; a git error there blocks instead of passing.
+- The pre-push guard refuses in enforce mode when git cannot compute the pushed paths, and reads the new commits when the remote head is not in the local repo (a forced push over a moved branch) (D37).
+- Schema patterns follow JSON Schema: `$` matches only at the end of the string, so `t1\n` is no longer a valid task id.
 
 ### Fixed
 
@@ -57,6 +65,11 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - A symlink under the spec directory is a layout error in the working tree and in a git ref; no tool reads or writes through it.
 - Skills: wave-plan and the planner no longer copy the requirement's Verify into every task's Acceptance (the refinery runs it with the last task); wave-plan reports the waves of the plan branch with `wavecoord spec waves --ref <commit>`; wave-run maps tree ids to coordinator ids; triage sends spec changes through `/wavecoord:revise` (`spec_edit`); revise reads a requirement's change from its history. docs/specs.md names only commands that exist. The worker prompt says the requirement's Verify may fail until the last task merges.
 - Seeded defects S12-S15.
+- Predicate S uses the lead's rule for the spec tree: with no `plan.adapter`, only a `spec.dir` that holds a spec record is the tree, so a task PR may change a stray `specs/api.yaml` in a flat-plan repo. A task PR that adds the first spec records is refused.
+- An offline-override journal of any size can be flushed: the batches are cut by size (half the server's body limit), not by count, so a large journal no longer gets a 413 forever and blocks every push on the host (D36). One reachable flush sends batches until the journal is empty.
+- The Stop hook reads the changed paths with `-z`, so a non-ASCII file name no longer makes the server refuse the batch and drop the other outside-lease warnings; a path that no glob can hold is reported as outside the lease without a server call.
+- `guard install` also writes a `pre-merge-commit` guard. The docs now say that git runs no commit hook for `cherry-pick`, `rebase`, `am` or a fast-forward merge; E3 and E5 check those commits.
+- Seeded defects D31-D37.
 
 ## 0.2.0
 

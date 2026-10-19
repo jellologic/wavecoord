@@ -1,4 +1,4 @@
-"""The 30 seeded defects of tests/fence/README.md, section 2, as patches.
+"""The 37 seeded defects of tests/fence/README.md, section 2, as patches.
 
 Each defect is a small monkeypatch of one function or constant of the code
 under test. `patched(name)` applies one and undoes it on exit. The patches
@@ -143,7 +143,44 @@ DEFECTS = {
                 _o(gatecheck, "spec_dirs")))]),
     "D30": ("spec paths compared case-sensitively: SPECS/x passes",
             [(gatecheck, "under_dir", lambda: (lambda path, d: path.startswith(d + "/")))]),
+    "D31": ("lead-config paths matched by exact case at the root only: .claude/Settings.json and a nested"
+            " pkg/.claude/settings.json pass",
+            [(gatecheck, "lead_config_kind", lambda: _lead_kind_d31)]),
+    "D32": ("a denylist of five settings keys: statusLine, apiKeyHelper, permissions, .mcp.json and"
+            " .claude/agents pass", [(gatecheck, "config_changes", lambda: _config_changes_d32)]),
+    "D33": ("diffs that honor submodule.<name>.ignore and diff.ignoreSubmodules: a gitlink change is no path",
+            [(fence, "DIFF_RENAME_FLAGS", lambda: ["--no-renames"]), (fence, "DIFF_GIT_CONFIG", lambda: [])]),
+    "D34": ("E1 checks a file in a nested repo (a submodule) by the nested repo's own path",
+            [(fence, "outer_top", lambda: (lambda top, own: top))]),
+    "D35": ("protected local folders compared case-sensitively: ~/.CLAUDE/settings.json passes on a folding disk",
+            [(fence, "under_local", lambda: fence._under)]),
+    "D36": ("the override journal sent in batches by count: a large journal never fits one request (413)",
+            [(fence, "journal_batch", lambda: _journal_batch_d36)]),
+    "D37": ("the pre-push guard reads a git error as no paths and passes in enforce mode",
+            [(guard, "push_paths", lambda: (lambda cwd, spec, stdin: _o(guard, "push_paths")(cwd, spec, stdin) or []))]),
 }
+
+
+def _lead_kind_d31(path):
+    """D31: the 0.2.0 match: exact case, and `.claude` files only at the repo root."""
+    if path != path.lower() and path not in (gatecheck.CONFIG_PATH,) + gatecheck.SETTINGS_PATHS:
+        return None
+    if "/.claude/" in path or path.startswith(".claude-plugin/") or "/" in path and path.endswith(".mcp.json"):
+        return None
+    return _o(gatecheck, "lead_config_kind")(path)
+
+
+def _config_changes_d32(repo, base, head, paths):
+    """D32: the 0.2.0 settings rule (five keys) and no other Claude Code file."""
+    old = ("hooks", "disableAllHooks", "enabledPlugins", "extraKnownMarketplaces", "env")
+    out = _o(gatecheck, "config_changes")(repo, base, head, paths)
+    return [v for v in out if not (v["path"] in gatecheck.SETTINGS_PATHS and v["key"] not in old)
+            and not v["key"].startswith("the Claude Code config")]
+
+
+def _journal_batch_d36(entries, agent, limit=None):
+    batch = entries[:fence.JOURNAL_SEND_MAX]
+    return batch, fence._journal_body(entries, batch, agent)
 
 
 def _parse_body_d26(text):

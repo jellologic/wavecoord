@@ -327,7 +327,9 @@ class Sim(object):
             w.fail("integration: " + what + " bad=%s" % [p for p, o in zip(paths, oks) if not o])
         if code == 0 and faulted and paths:
             w.fail("fail-closed: " + what)
-        if code != 0 and not faulted and all(oks):
+        # a task PR that changes a Claude Code file (.claude/notes.md is one) is a config_change (design section 8)
+        lead_cfg = any(gatecheck.lead_config_kind(p) in ("file", "hooks") for p in paths)
+        if code != 0 and not faulted and all(oks) and not lead_cfg:
             w.fail("liveness: " + what)
         if code == 0:
             p = git(w.repo, "merge", "-q", "--no-ff", "-m", "merge %s" % wk.task, sha, check=False)
