@@ -305,7 +305,8 @@ The coordinator writes status into the task file on the default branch:
 - **Events:** `attempt.start` sets `in_progress`; the PR opening sets `in_review`; `refinery.merge` (or a merge outside the refinery seen by `collect`) sets `done`; a failed, timed-out, stopped or abandoned attempt sets `planned`.
 - **Batching:** the coordinator collects changes and pushes one commit every `STATUS_FLUSH_S` (default 60 s), and at once after a merge. The commit message lists each task and its change, with the trailers `Wavecoord-Status: <task> <from> <to>`.
 - **Push:** fetch, rebase the status commit onto the remote default branch, push without force, retry with backoff (`PUSH_RETRY_S`). A rejected push never drops a change: the change stays queued and is retried; the event log stays the source of truth for status between flushes.
-- **Identity and rights:** the commits are made by the coordinator with `spec.status_author`; the default branch must let it push (on a protected branch, a bypass for that identity). Without push rights the coordinator logs `spec.status_blocked` and keeps the status in the event log only.
+- **Identity and rights:** the commits are made by the coordinator with `spec.status_author`.
+- **Protected default branch:** when the push is rejected, the coordinator puts the batched changes on the branch `wavecoord/status` instead, keeps one open PR "wavecoord: status" for it, and merges it with `merge_cmd` at each flush. The PR has no `Task:` lines, so the merge check does not apply to it; it is validated like a plan PR and may change only `status:` lines (must). The files then lag by up to one flush; the event log stays the live truth, and `spec tree` without `--offline` shows the live status. If the status PR cannot be merged either, the coordinator logs `spec.status_blocked` and keeps the status in the event log.
 - **Only the `status:` line** of the task file changes in a status commit (must, tested). Rule M13 then keeps it from conflicting with a plan PR that edits the same task.
 - **Recovery:** `wavecoord spec status-sync` rewrites every task's `status` from the event log (after a rollback, or a long time without push rights), as one commit.
 
@@ -411,16 +412,17 @@ Every read takes `--json`; the JSON shapes are in `spec-ops.schema.json`. **Quer
 - **Worker prompt.** It gets, after Context: the requirement's Statement and Scenarios, the task's inputs (with their contracts and producers) and outputs (with their contracts), and "Also run" with the requirement's Verify. Only the task's own requirement goes in.
 - **Leases.** A dispatched task claims its `paths` (exclusive) and `shared_paths` (shared), as today.
 - **Gate-check.** `spec_change` (7.3): predicate S, kind `spec_change`, blocks in `advisory` and `enforce` like `config_change`, reported in `off`; `spec.dir` from the base-side config. A fence change: section 8.1 of `edit-fence.md`, seeded defect D25 and a table check. `spec` joins `gatecheck.CONFIG_KEYS`.
-- **Merge.** With `spec.verify_at_merge`, the refinery runs the task's Acceptance and its requirement's Verify, both from the default branch, after `check_cmd`; a failure blocks with `verify_failed`. A merge commit gets the trailer `Task: <task id>` (and `Spec-Basis: <fp>`), so `trace` works from `git log` alone.
+- **Worker proposals.** Workers never edit `spec.dir`. The report's `proposals` get the kinds `requirement_gap` (missing behavior) and `spec_change` (a statement or contract is wrong), each with `node` and optional suggested `ops` (the op API's shape, as data). `/wavecoord:revise` turns the accepted ones into one plan PR through `spec_edit`; the lead decides. Suggested ops are never applied without the lead.
+- **Merge.** With `spec.verify_at_merge` (on by default), the refinery runs the task's Acceptance and its requirement's Verify, both from the default branch, after `check_cmd`; a failure blocks with `verify_failed`. A merge commit gets the trailer `Task: <task id>` (and `Spec-Basis: <fp>`), so `trace` works from `git log` alone.
 - **Events.** `attempt.start` and `refinery.merge` carry `basis`; new kinds `spec.status` (a flushed status commit: sha and changes) and `spec.status_blocked`.
 - **Config.**
 
   ```json
-  "spec": {"dir": "specs", "require_approved": false, "suspect": "warn", "verify_at_merge": false,
+  "spec": {"dir": "specs", "require_approved": true, "suspect": "warn", "verify_at_merge": true,
            "status_flush_s": 60, "status_author": "wavecoord <wavecoord@localhost>"}
   ```
 
-  `require_approved`: a task is ready only when its requirement is `approved`. `suspect`: `warn` or `refuse` (a suspect task is not ready).
+  `require_approved` (default on): a task is ready only when its requirement is `approved` and every ancestor is `active`; tasks may still be planned under a draft. `suspect`: `warn` or `refuse` (a suspect task is not ready). `verify_at_merge` (default on): section 9.4, Merge.
 
 ### 9.5 Skills and agents
 
@@ -495,19 +497,21 @@ Branches `p8/spec-*`. Each PR ships its schemas, fixtures, `docs/contract.md` ch
 | S1 | YAML additions; `specs/` model, doc, fingerprint, source, tree; kind schemas; read CLI (`tree`, `show`, `check` for sections 3 and 8, `fmt`, `lint`, `fp`, `query`) | P0, P7 pass; perf target met |
 | S2 | Full `check` (alignment, blockers, P), `waves`, `ready`, `trace`, `artifacts`, `suspect`; `ops.py` and the write CLI; `migrate-plan` | P1, P2, P3, P5, P6, P8, P9 pass; S01-S06, S09-S11 caught |
 | S3 | `spec_edit` and the read tools over MCP and REST; the tree as the plan store (`plan_ready`, `dispatch`, `dispatch_wave`); the worker prompt | e2e wave runs from a spec tree; one PR from several `spec_edit` calls; a move commits as a rename |
-| S4 | Status commits; `spec_change` (edit-fence 8.1, D25); `verify_at_merge`; merge trailers; events | P4, P10 pass; S07, S08 caught; status appears on the default branch in an e2e wave |
+| S4 | Status commits (direct and the status-PR fallback); `spec_change` (edit-fence 8.1, D25); `verify_at_merge`; merge trailers; events | P4, P10 pass; S07, S08 caught; status appears on the default branch in an e2e wave |
 | S5 | `/wavecoord:spec`, wave-plan, revise, planner, reviewer, triage, wave-run; docs; version 0.2.0 | `claude plugin validate --strict`; `test_skills`; a live dogfood run |
 
-## 12. Open decisions
+## 12. Decisions
 
-| ID | Question | Proposed default |
+Decided by the lead (S0 review):
+
+| ID | Question | Decision |
 |---|---|---|
-| Q1 | `verify_at_merge` on by default? | Off in 0.2.0, on later |
-| Q2 | May a task be planned under a `draft` requirement? | Yes; with `require_approved` it is not ready |
+| Q1 | `verify_at_merge` on by default? | Yes, from 0.2.0 |
+| Q2 | May a task run under a `draft` requirement? | It may be planned, not run: `require_approved` is on by default |
 | Q3 | External trackers (Jira, Linear) | Later, as a command adapter for the tree |
-| Q4 | Status commits on a protected default branch | Document the bypass for the coordinator identity; otherwise status stays in the event log (`spec.status_blocked`) |
-| Q5 | Workers proposing spec changes | Report proposals `requirement_gap` and `spec_change`, turned into plan PRs by `revise`; never by editing `spec.dir` |
-| Q6 | More than one requirement per task | No: a task has one parent. Shared work becomes its own task that both requirements' tasks `need` |
+| Q4 | Status commits on a protected default branch | Fall back to the `wavecoord/status` PR (section 7.2) |
+| Q5 | Workers proposing spec changes | Report proposals only (`requirement_gap`, `spec_change`), turned into plan PRs by `revise` (section 9.4) |
+| Q6 | More than one requirement per task | No: one parent. Shared work becomes its own requirement that the others `need`; its output is their input |
 
 ## Prior art
 

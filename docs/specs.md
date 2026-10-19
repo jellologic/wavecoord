@@ -88,6 +88,14 @@ wavecoord commits task status to your default branch as work moves, batched ever
 
 Each task records `basis`, a fingerprint of its requirement. When the requirement's statement, scenarios, checks or contracts change, the task becomes suspect. `wavecoord spec suspect` lists such tasks; after review, `wavecoord spec rebase-basis <task>` clears it.
 
+## What wavecoord enforces
+
+- A task runs only when its requirement is approved and its parents are active. Turn this off with `"require_approved": false`.
+- The worker's prompt holds its requirement, its inputs and outputs with their contracts, and the Verify commands.
+- A worker's PR may not change `specs/`. Workers propose spec changes in their report, and `/wavecoord:revise` turns the ones you accept into a plan PR.
+- The merge re-runs the task's Acceptance and its requirement's Verify, both taken from your default branch, and blocks on a failure. Turn this off with `"verify_at_merge": false`.
+- When your default branch is protected, status commits go through one `wavecoord: status` PR instead.
+
 ## Keeping merges clean
 
 Two branches that change different nodes never conflict. To keep it that way:
