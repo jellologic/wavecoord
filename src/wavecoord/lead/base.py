@@ -17,6 +17,7 @@ from wavecoord.plan import graph as g
 from wavecoord.plan.adapters import BuiltinPlan, CommandPlan, DirSource, GitSource, PlanError, plan_dir
 from wavecoord.plan.edit import EditError
 from wavecoord.plan.edit import plan_edit as git_plan_edit
+from wavecoord.plan.edit import spec_edit as git_spec_edit
 
 IN_FLIGHT = ("dispatched", "running")
 DEFAULTS = {"PROVIDER_BACKOFF_S": 900, "PLAN_FETCH_S": 15, "MAX_RESOLVES": 2}
@@ -152,11 +153,39 @@ class LeadBase(object):
 
     # ----- the plan -----
 
+    def spec_dir(self):
+        return str((self.cfg().raw.get("spec") or {}).get("dir") or "specs").strip("/")
+
+    def spec_files(self):
+        """The spec tree's files on the default branch as fetched, else in the working tree."""
+        from wavecoord.launcher.worktrees import REMOTE
+        from wavecoord.specs import source
+        self.fetch()
+        d = self.spec_dir()
+        try:
+            files = source.read_ref(self.repo, "refs/remotes/%s/%s" % (REMOTE, self.default_branch()), d)
+            if files:
+                return files
+        except (source.SourceError, ApiError):
+            pass
+        return source.read_tree(self.root(), d)
+
+    def spec_plan(self, files=None):
+        from wavecoord.specs.plan import SpecTreePlan
+        files = self.spec_files() if files is None else files
+        return SpecTreePlan(files, label=self.spec_dir())
+
     def plan(self):
         cfg = self.cfg()
         p = cfg.raw.get("plan") or {}
         if p.get("adapter") == "commands":
             return CommandPlan(p.get("commands"), self.root())
+        if p.get("adapter") == "specs":
+            return self.spec_plan()
+        if p.get("adapter") is None:  # no adapter named: the spec tree when there is one (docs/specs.md)
+            files = self.spec_files()
+            if files:
+                return self.spec_plan(files)
         d = plan_dir(p)
         self.fetch()
         from wavecoord.launcher.worktrees import REMOTE
@@ -214,6 +243,75 @@ class LeadBase(object):
 
         try:
             out = git_plan_edit(self.repo, plan_dir(p), edits, branch=branch, pr=pr, title=title, body=body,
+                                wt_root=os.path.join(L.index_dir(), "plan-wt"))
+        except EditError as e:
+            raise ApiError("bad_request", str(e))
+        except LauncherError as e:
+            raise ApiError("unavailable", str(e))
+        self._fetched = 0.0
+        return out
+
+    # ----- the spec tree (docs/specs.md) -----
+
+    def _tree(self):
+        from wavecoord.specs.tree import Tree
+        return Tree(self.spec_files())
+
+    def _graph(self):
+        """The tree's graph, with the coordinator's states over the status in the files."""
+        from wavecoord.specs.graph import Graph
+        from wavecoord.specs.plan import COORD_STATE, tree_id
+        override = {tree_id(c): COORD_STATE[s] for c, s in self.states().items() if s in COORD_STATE}
+        return Graph(self._tree(), status_override=override)
+
+    def spec_tree(self, node=None):
+        from wavecoord.specs import query
+        tree = self._tree()
+        if node and node not in tree.nodes:
+            raise ApiError("not_found", "no node %s" % node)
+        return {"tree": query.tree_view(tree, node)[0]}
+
+    def spec_get(self, node):
+        from wavecoord.specs import query
+        out = query.record(self._tree(), node)
+        if out is None:
+            raise ApiError("not_found", "no record %s" % node)
+        return out
+
+    def spec_query(self, expr):
+        from wavecoord.specs import query
+        try:
+            return {"records": [query.summary(n) for n in query.query(self._tree(), expr or "")]}
+        except query.QueryError as e:
+            raise ApiError("bad_request", str(e))
+
+    def spec_waves(self, node=None):
+        return self._graph().waves(node)
+
+    def spec_trace(self, node):
+        out = self._graph().trace(node)
+        if out is None:
+            raise ApiError("not_found", "no node %s" % node)
+        return out
+
+    def spec_check(self):
+        from wavecoord.specs.check import check
+        tree = self._tree()
+        probs = check(tree)
+        return {"ok": not [p for p in probs if p.level == "error"], "problems": [p.to_json() for p in probs],
+                "records": len(tree.nodes) + len(tree.decisions)}
+
+    def spec_edit(self, ops, branch=None, title=None, body=None):
+        """Spec tree ops on a plan/<n> branch, one commit, and a PR on a new branch (like plan_edit)."""
+        from wavecoord.launcher.client import run_pr_cmd
+        cfg = self.cfg()
+        L = self.launcher()
+
+        def pr(br, base, t, b):
+            return run_pr_cmd(cfg, br, base, t, b, os.path.join(L.index_dir(), br.replace("/", "-") + ".pr-body.md"))
+
+        try:
+            out = git_spec_edit(self.repo, self.spec_dir(), ops, branch=branch, pr=pr, title=title, body=body,
                                 wt_root=os.path.join(L.index_dir(), "plan-wt"))
         except EditError as e:
             raise ApiError("bad_request", str(e))

@@ -16,7 +16,7 @@
       "additionalProperties": false,
       "required": ["adapter"],
       "properties": {
-        "adapter": {"enum": ["builtin", "commands"]},
+        "adapter": {"enum": ["builtin", "commands", "specs"], "description": "builtin: plan/tasks; commands: your own tooling; specs: the spec tree (docs/specs.md). Without a plan key, the spec tree is used when spec.dir has records on the default branch"},
         "dir": {"type": "string", "minLength": 1},
         "commands": {
           "type": "object",

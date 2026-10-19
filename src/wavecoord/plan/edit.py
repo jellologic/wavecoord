@@ -120,11 +120,8 @@ def next_plan_branch(repo, git_run):
     return "plan/%d" % ((max(nums) + 1) if nums else 1)
 
 
-def plan_edit(repo, plan_dir, edits, branch=None, pr=None, title=None, body=None, wt_root=None):
-    """Apply anchored edits on a plan branch, commit, push, and open a PR on a new branch.
-
-    `pr(branch, base, title, body)` opens the PR on the client side and returns
-    (url, error). -> {branch, commit, pr, pr_error, files, base}."""
+def plan_branch(repo, branch=None):
+    """-> (branch, new?, base sha, default branch): a new plan/<n> from the default branch, or an existing one."""
     from wavecoord.launcher.common import git, git_run
     from wavecoord.launcher.worktrees import REMOTE, default_branch, fetch, ref_exists
 
@@ -142,32 +139,40 @@ def plan_edit(repo, plan_dir, edits, branch=None, pr=None, title=None, body=None
             raise EditError("branch %s is not on %s" % (branch, REMOTE))
     if branch in (default, "main", "master") or not PLAN_BRANCH_RE.match(branch):
         raise EditError("refusing to write branch %r" % branch)
-    base_sha = git(["rev-parse", "--verify", base_ref + "^{commit}"], repo)
+    return branch, new, git(["rev-parse", "--verify", base_ref + "^{commit}"], repo), default
 
-    def read(path):
-        p = subprocess.run(["git", "cat-file", "-p", "%s:%s" % (base_sha, path)], cwd=repo,
-                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
-        return p.stdout.decode("utf-8") if p.returncode == 0 else None
 
-    files = apply_edits(read, edits, plan_dir)
+def commit_files(repo, base_sha, branch, files, msg, body, wt_root=None, moves=()):
+    """Write `files` ({path: text, or None to delete}) on top of base_sha in a fresh worktree, `git mv` each
+    (old, new) of `moves` first, commit once and push refs/heads/<branch>. -> the commit sha."""
+    from wavecoord.launcher.common import git, git_run
+    from wavecoord.launcher.worktrees import REMOTE
+
     root = wt_root or tempfile.gettempdir()
     os.makedirs(root, exist_ok=True)
     wt = tempfile.mkdtemp(prefix="wavecoord-plan-", dir=root)
     os.rmdir(wt)
     git(["worktree", "add", "--quiet", "--detach", wt, base_sha], repo)
     try:
-        for path, text in files.items():
+        moved_from = set()
+        for old, new in moves:
+            os.makedirs(os.path.dirname(os.path.join(wt, new)), exist_ok=True)
+            git(["mv", "--", old, new], wt)
+            moved_from.add(old)
+        for path, text in sorted(files.items()):
             full = os.path.join(wt, path)
+            if text is None:
+                if path not in moved_from and os.path.exists(full):
+                    git(["rm", "--quiet", "--", path], wt)
+                continue
             os.makedirs(os.path.dirname(full), exist_ok=True)
-            with open(full, "w", encoding="utf-8") as f:
+            with open(full, "w", encoding="utf-8", newline="\n") as f:
                 f.write(text)
-        git(["add", "--"] + sorted(files), wt)
+            git(["add", "--", path], wt)
         rc, out, _ = git_run(["diff", "--cached", "--quiet"], wt)
         if rc == 0:
             raise EditError("the edits change nothing")
-        ids = sorted(set(os.path.basename(p)[:-3] for p in files))
-        msg = title or "plan: edit %s" % ", ".join(ids)
-        git(["commit", "--quiet", "-m", msg, "-m", body or "Anchored plan edit by wavecoord plan_edit."], wt)
+        git(["commit", "--quiet", "-m", msg, "-m", body], wt)
         commit = git(["rev-parse", "HEAD"], wt)
         rc, _, err = git_run(["push", "--quiet", REMOTE, "HEAD:refs/heads/" + branch], wt, timeout=600)
         if rc != 0:
@@ -176,11 +181,64 @@ def plan_edit(repo, plan_dir, edits, branch=None, pr=None, title=None, body=None
         git_run(["worktree", "remove", "--force", wt], repo)
         shutil.rmtree(wt, ignore_errors=True)
         git_run(["worktree", "prune"], repo)
+    return commit
+
+
+def read_at(repo, sha):
+    def read(path):
+        p = subprocess.run(["git", "cat-file", "-p", "%s:%s" % (sha, path)], cwd=repo,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+        return p.stdout.decode("utf-8") if p.returncode == 0 else None
+    return read
+
+
+def plan_edit(repo, plan_dir, edits, branch=None, pr=None, title=None, body=None, wt_root=None):
+    """Apply anchored edits on a plan branch, commit, push, and open a PR on a new branch.
+
+    `pr(branch, base, title, body)` opens the PR on the client side and returns
+    (url, error). -> {branch, commit, pr, pr_error, files, base}."""
+    branch, new, base_sha, default = plan_branch(repo, branch)
+    files = apply_edits(read_at(repo, base_sha), edits, plan_dir)
+    ids = sorted(set(os.path.basename(p)[:-3] for p in files))
+    msg = title or "plan: edit %s" % ", ".join(ids)
+    commit = commit_files(repo, base_sha, branch, files, msg, body or "Anchored plan edit by wavecoord plan_edit.",
+                          wt_root)
     url, perr = None, None
     if new and pr is not None:
-        pr_title = (title or "plan: edit %s" % ", ".join(ids))[:100]
         pr_body = (body or "Anchored plan edit by wavecoord plan_edit.") + \
             "\n\nFiles:\n" + "\n".join("- `%s`" % p for p in sorted(files)) + "\n"
-        url, perr = pr(branch, default, pr_title, pr_body)
+        url, perr = pr(branch, default, msg[:100], pr_body)
     return {"branch": branch, "commit": commit, "pr": url, "pr_error": perr, "files": sorted(files),
             "base": default, "new_branch": new}
+
+
+def spec_edit(repo, spec_dir, ops, branch=None, pr=None, title=None, body=None, wt_root=None):
+    """Apply spec tree ops (specs/ops.py) on a plan branch, commit (moves as `git mv`), push, and open a PR on a
+    new branch. The ops read the tree as it is on that branch, so several calls with one branch build one PR."""
+    from wavecoord.specs import source
+    from wavecoord.specs.ops import OpsError, apply_ops
+
+    branch, new, base_sha, default = plan_branch(repo, branch)
+    d = spec_dir.strip("/")
+    try:
+        changes, moves, problems = apply_ops(source.read_ref(repo, base_sha, d), ops)
+    except OpsError as e:
+        raise EditError("; ".join(e.errors[:8]))
+    files = {"%s/%s" % (d, p): t for p, t in changes.items()}
+    mv = [("%s/%s" % (d, a), "%s/%s" % (d, b)) for a, b in moves]
+    msg = title or "spec: %s" % ", ".join(sorted({op.get("id") or op.get("from") or op.get("task") or op.get("new")
+                                                  for op in ops}))[:90]
+    warnings = ["%s %s: %s" % (p.rule, p.path, p.msg) for p in problems if p.level == "warning"]
+    text = body or "Spec tree change by wavecoord spec_edit."
+    commit = commit_files(repo, base_sha, branch, files, msg, text, wt_root, moves=mv)
+    url, perr = None, None
+    if new and pr is not None:
+        pr_body = text + "\n\nFiles:\n" + "\n".join("- `%s`%s" % (p, " (deleted)" if t is None else "")
+                                                    for p, t in sorted(files.items()))
+        if mv:
+            pr_body += "\n\nMoves:\n" + "\n".join("- `%s` -> `%s`" % m for m in mv)
+        pr_body += "\n\n`wavecoord spec check`: no errors%s\n" % (
+            "; warnings:\n" + "\n".join("- " + w for w in warnings[:30]) if warnings else "")
+        url, perr = pr(branch, default, msg[:100], pr_body)
+    return {"branch": branch, "commit": commit, "pr": url, "pr_error": perr, "files": sorted(files),
+            "moves": mv, "warnings": warnings, "base": default, "new_branch": new}

@@ -7,7 +7,7 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `coord_url` | `http://127.0.0.1:18741` | Server URL. `WAVECOORD_URL` and the plugin option `coord_url` take priority |
 | `project` | required | Project name on the server |
 | `log_branch` | `coord/log` | Orphan branch for events |
-| `plan` | `{"adapter": "builtin", "dir": "plan/tasks"}` | Plan store (below) |
+| `plan` | the spec tree when `spec.dir` has records on the default branch, else `{"adapter": "builtin", "dir": "plan/tasks"}` | Plan store (below). `{"adapter": "specs"}` names the spec tree (`specs.md`) |
 | `hosts[]` | one `local` host, 2 slots, `repo_path` `.` | `name`, `ssh` (destination or alias; absent = local), `slots`, `repo_path`, `env`, `prepare_cmd`, `claude_flags`, `providers`, `labels`, `dispatch`. See `launcher.md` |
 | `merge_cmd` | `gh pr merge {pr} --merge --match-head-commit {sha}` | How the refinery merges a PR (below) |
 | `pr_cmd` | `gh pr create --head {branch} --base {base} --title {title} --body-file {body_file}` | How the lead machine opens a PR for a pushed attempt branch or a plan branch (below) |

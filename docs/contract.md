@@ -138,6 +138,8 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `POST /api/messages`, `GET /api/inbox?agent=`, `POST /api/messages/<id>/ack` | see section 4 | Messages |
 | `GET /api/plan/ready`, `GET /api/plan/tasks/<id>`, `GET /api/plan/graph`, `POST /api/plan/validate` | read | Through the plan adapter (`adapters.md`); the same answers as the tools of section 8 |
 | `POST /api/plan/edit` | lead | `{edits, branch?, title?, body?}`: the `plan_edit` tool |
+| `GET /api/spec/tree?node=`, `GET /api/spec/get?id=`, `GET /api/spec/query?q=`, `GET /api/spec/waves?node=`, `GET /api/spec/trace?id=`, `GET /api/spec/check` | read | The spec tree on the default branch (`specs.md`); the same answers as the `spec_*` tools of section 8 |
+| `POST /api/spec/edit` | lead | `{ops, branch?, title?, body?}`: the `spec_edit` tool |
 | `POST /api/dispatch` | lead | `{task, host?, overrides?, dry_run?}` (one task) or `{wave: true, tasks?, dry_run?}` |
 | `POST /api/collect` | lead | `{dry_run?, attempt?}`: the `collect` tool |
 | `POST /api/attempts/<task>/<n>/end` | lead | `{state, pr_url?, pr_error?, conflicts?, ...}`: the client's final view of an attempt, logged as `attempt.end` |
@@ -167,6 +169,13 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `plan_get` | `id` | `{spec, state, lease, attempts, proposals}`: the spec, its effective state, and the open proposals of the task |
 | `plan_graph` | | `{nodes, edges, critical_path, critical_weight, funnel_heads, cycles, missing}`; each node has `unblocks` |
 | `plan_validate` | `spec?` | `{ok, errors}` for the whole plan (schema, ids, unknown needs, cycles) or one spec |
+| `spec_tree` | `node?` | The spec tree with status and progress (`specs.md`) |
+| `spec_get` | `id` | One record: fields, sections, children; a requirement's fingerprint |
+| `spec_query` | `q?` | Records that match `key=value key!=value key~glob key !key under=<id>` |
+| `spec_waves` | `node?` | Waves of tasks that can run at the same time, the critical path, the width |
+| `spec_trace` | `id` | Ancestors, children, needs, what waits for it, producers and consumers of its artifacts, decisions |
+| `spec_check` | | Every rule of the spec tree: `{ok, problems, records}` |
+| `spec_edit` | `ops[]`, `branch?`, `title?`, `body?` | Spec tree ops (`schemas/spec-ops.schema.json`) in one commit on a new `plan/<n>` branch (or the given one), moves as `git mv`, pushed, then one PR. The ops read the tree on that branch, so several calls build one PR. All apply, and the tree stays valid, or nothing is written. `{branch, commit, pr, files, moves, warnings}` |
 | `plan_edit` | `edits[]`, `branch?`, `title?`, `body?` | Anchored edits of one or more spec files (also `create` of a new spec) in one commit on a new `plan/<n>` branch (or the given `plan/<name>`), pushed, then one PR opened on the lead machine. All edits apply or none. Never the default branch. `{branch, commit, pr, files}` |
 | `dispatch` | `task`, `host?`, `overrides?`, `dry_run?` | Claim the lease (paths `exclusive`, shared_paths `shared`), then start one attempt with the launcher. Refusals have `reason`: `not_ready`, `wip_cap`, `host_needs`, `rate_limited`, `no_provider`, `hosts_full`, `launch_failed` |
 | `dispatch_wave` | `tasks?`, `dry_run?` | Start every ready, non-overlapping task (or the listed ones) up to `wip_cap`; tasks with an open dispatch request first |

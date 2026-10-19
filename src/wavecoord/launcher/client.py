@@ -523,12 +523,32 @@ def prompt_from_spec(spec):
     parts = ["# Task %s%s" % (spec["id"], (": " + spec["title"]) if spec.get("title") else "")]
     if s.get("context"):
         parts += ["## Context", s["context"].strip()]
+    t = spec.get("tree")
+    if t:  # a task of the spec tree: its requirement and its contracts (docs/specs.md)
+        req = ["Requirement `%s`%s." % (t["requirement"], (": " + t["requirement_title"]) if t.get(
+            "requirement_title") else "")]
+        if t.get("statement"):
+            req += ["", t["statement"].strip()]
+        for sc in t.get("scenarios") or []:
+            req += ["", "Scenario: %s" % sc["name"]] + ["- %s %s" % (w, x) for w, x in sc["steps"]]
+        parts += ["## Requirement", "\n".join(req)]
+        if t.get("inputs"):
+            parts += ["## Inputs (use them; do not change them)", "\n".join(_artifact_line(a) for a in t["inputs"])]
+        if t.get("outputs"):
+            parts += ["## Outputs (hand these over, as promised)", "\n".join(_artifact_line(a) for a in t["outputs"])]
+        if t.get("verify"):
+            parts += ["## Also run (the requirement's checks)", "\n".join("- `%s`" % c for c in t["verify"])]
     if s.get("acceptance"):
         parts += ["## Acceptance", "\n".join("- `%s`" % a for a in s["acceptance"])]
     if spec.get("paths"):
         parts += ["## Paths you may change", "\n".join("- `%s`" % p for p in spec["paths"])]
     parts += ["## Prompt", (s.get("prompt") or "").strip()]
     return "\n\n".join(parts) + "\n"
+
+
+def _artifact_line(a):
+    src = (" from `%s`" % a["from"]) if a.get("from") else (" (external)" if a.get("external") else "")
+    return "- `%s` (%s)%s%s" % (a["id"], a["kind"], src, (": " + a["contract"]) if a.get("contract") else "")
 
 
 def load_spec(path):

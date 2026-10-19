@@ -408,6 +408,7 @@ Every read takes `--json`; the JSON shapes are in `spec-ops.schema.json`. **Quer
 
 ### 9.4 The rest of wavecoord
 
+- **Coordinator ids.** The coordinator's task id is the tree id with `.` for `/` (names have no dots, so the mapping goes both ways); leases, attempts, branches and the `Task:` line keep their format. `check` reports a task whose coordinator id is longer than 64 characters.
 - **Plan store.** The tree replaces the flat `plan/tasks` store: `plan_ready`, `plan_get`, `plan_graph`, `dispatch` and `dispatch_wave` read tasks from the tree; `ready` uses section 5; `dispatch_wave` takes a set of ready tasks that predicate P allows, up to `wip_cap`. The `commands` plan adapter stays for consumers with their own tracker.
 - **Worker prompt.** It gets, after Context: the requirement's Statement and Scenarios, the task's inputs (with their contracts and producers) and outputs (with their contracts), and "Also run" with the requirement's Verify. Only the task's own requirement goes in.
 - **Leases.** A dispatched task claims its `paths` (exclusive) and `shared_paths` (shared), as today.
