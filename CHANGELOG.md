@@ -2,7 +2,23 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
-## Unreleased
+## 0.3.0
+
+Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the whole plugin (#32-#36). The trust boundary between workers and the lead is tighter, the refinery merges only work that should land, and the launcher, steering and hooks survive restarts, retries and stops. Some changes need action on upgrade.
+
+### Upgrading
+
+- Set the plugin option `coord_url` (it has no default now). A remote coordinator gets the token only through `coord_url` or `WAVECOORD_URL`, never from a repo's `.claude/wavecoord.json`; set one of them for `gate-check` in CI too.
+- The fence mode and `spec.verify_at_merge` count only on the default branch's `.claude/wavecoord.json`, not in the lead's working copy.
+- Task PRs may no longer change Claude Code config (any settings key, anything under `.claude/` or `.claude-plugin/`, `.mcp.json`, `CLAUDE.local.md`), in advisory mode too. Make these changes in a lead or plan PR.
+- A submodule change is a changed path: its lease must cover the submodule path itself (`vendor/sub` or `vendor/**`).
+- Agent tokens can no longer create leases, and their hot marks are literal paths. `watchdog` and `server` are reserved sender ids.
+- The spool and the lead cursor are kept per coordinator. An old `spool.jsonl` is not replayed, and a lead session starts at the head of the log.
+- `migrate-plan` needs the coordinator, `--states FILE` or `--no-coord`.
+- Requirements whose inputs have `from` change fingerprint, so their tasks are suspect once (`wavecoord spec rebase-basis`).
+- Plan changes can no longer set `in_progress`, `in_review` or `done`. In CI, `spec check --base` accepts the status writer's commits by their `Wavecoord-Status:` lines; give the `wavecoord/status` branch the same review rules as other bot branches.
+- Skills pre-approve only read-only `wavecoord` commands; the others ask each time.
+- The plugin option `project` is gone. Workers get the new `pre-merge-commit` guard in each new worktree.
 
 ### Security
 

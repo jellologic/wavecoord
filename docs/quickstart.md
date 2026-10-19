@@ -15,7 +15,7 @@ Put the same program on your PATH for the terminal steps below:
 
 ```bash
 curl -fsSL -o ~/.local/bin/wavecoord \
-  https://raw.githubusercontent.com/jellologic/wavecoord/v0.2.0/plugin/bin/wavecoord
+  https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.0/plugin/bin/wavecoord
 chmod +x ~/.local/bin/wavecoord
 ```
 
@@ -56,7 +56,7 @@ The server keeps only digests, in `~/.wavecoord/tokens.json`. The lead token is 
 cd ~/src/myapp
 wavecoord install-server --dry-run   # shows the unit and the commands
 wavecoord install-server
-wavecoord status                     # ok: http://127.0.0.1:18741 version=0.2.0 api=1
+wavecoord status                     # ok: http://127.0.0.1:18741 version=0.3.0 api=1
 ```
 
 `install-server` copies the zipapp to `~/.wavecoord/bin/wavecoord-<hash>` and writes a user service that runs `wavecoord serve --repo <repo>` from that copy: a launchd agent (`~/Library/LaunchAgents/io.github.wavecoord.<project>.plist`) on macOS, a `systemd --user` unit (`~/.config/systemd/user/wavecoord-<project>.service`) on Linux. The unit keeps your current `PATH`, so the server finds `claude`, `git` and `gh`. It also keeps the `WAVECOORD_*` variables of the shell where you run `install-server` (for example `WAVECOORD_SSH`, an ssh wrapper with the host key, and `WAVECOORD_HOME`), except worker variables and names that look like a secret (`TOKEN`, `KEY`, `SECRET`, `PASSWORD`; a `*_FILE` path is kept). Add more with `--env KEY=VALUE` (repeatable; it wins over a carried value; `HOME` cannot be set); `--no-carry-env` keeps only `PATH`, `HOME` and `--env`. The unit file is not a secret store: point to a file (`WAVECOORD_TOKEN_FILE`) and do not put a secret in `--env`. Without `WAVECOORD_SSH` in the unit, the server's launcher reaches an ssh host only if plain `ssh <dest>` works for the service user. The log is `~/.wavecoord/<project>/serve.log`. A plugin update does not change the running server; run `install-server` again to move the pin. `--uninstall` removes the unit. `wavecoord serve` in a terminal works too.
