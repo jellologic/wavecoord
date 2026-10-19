@@ -8,6 +8,10 @@ No runtime dependencies: the coordinator, launcher, hooks and CLI are one stdlib
 
 <sub>Real output of a demo repo (fake workers, no model). Also as a [GIF](docs/img/wave.gif); narrated videos are under [Videos](#videos).</sub>
 
+## Course
+
+New to spec-driven development? The [wavecoord course](docs/course/README.md) teaches it from the start, in eleven short lessons with narrated videos of real Claude Code sessions and exercises: what SDD is, installing, your first spec, a new project, an existing project, importing Spec Kit, Kiro or OpenSpec files, writing good specs, running, steering and merging waves, and recovery. Pick your path on the course page.
+
 ## How it fits together
 
 ```mermaid
@@ -147,6 +151,7 @@ Short narrated videos with subtitles (`.srt` next to each), attached to the v0.3
 
 | Page | What |
 |---|---|
+| [course/](docs/course/README.md) | The course: eleven lessons with videos and exercises, from zero to running waves |
 | [guide.md](docs/guide.md) | **Start here.** Using wavecoord well: the model, a full walkthrough, good specs, safe waves, triage, recovery, FAQ |
 | [quickstart.md](docs/quickstart.md) | From install to the first merged wave, copy and paste |
 | [specs.md](docs/specs.md) | The spec tree: capabilities, features, requirements and tasks as Markdown records |

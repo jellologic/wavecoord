@@ -183,7 +183,7 @@ wavecoord spec waves [node]                      what can run together
 wavecoord spec query 'kind=task status=planned paths~src/auth/*'
 wavecoord spec show <id> [--json]
 wavecoord spec trace <id>                        parents, children, needs, producers, consumers, decisions
-wavecoord spec new auth/sessions/token-rotation --kind requirement --title ...
+wavecoord spec new auth/sessions/token-rotation --kind requirement --title ... --section Statement=...
 wavecoord spec status <task> on_hold
 wavecoord spec status-sync [--reset <task>]      write status now; --reset undoes a rolled-back done
 wavecoord spec mv <old id> <new id>                (moving back to the old id is allowed)

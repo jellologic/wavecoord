@@ -1,0 +1,218 @@
+{
+  "title": "Lesson 10: Recovery and more hosts",
+  "slug": "10-recovery-hosts",
+  "demo": {
+    "name": "brownfield",
+    "state": "planned"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 4,
+    "real_min": 15,
+    "lead": "none (terminal), one haiku worker",
+    "cost": "$0.01 to $0.10 (one short worker)"
+  },
+  "command": [
+    "bash",
+    "--noprofile",
+    "--norc",
+    "-i"
+  ],
+  "timeout": 1800,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "Recovery and more hosts",
+        "subtitle": "Lesson 10",
+        "say": "Things go wrong. A worker hangs, a coordinator stops, a merge has to be undone. In this last lesson you learn the recovery commands, and how to add more machines."
+      }
+    ],
+    "outro": [
+      {
+        "title": "An SSH host",
+        "code": "{\"name\": \"build-1\", \"ssh\": \"builder@build-1.example.internal\",\n \"slots\": 4, \"repo_path\": \"~/src/myapp\"}\n\nwavecoord tokens provision --role agent --host build-1 \\\n  --out ~/.wavecoord/hosts/build-1.token\nwavecoord hosts",
+        "say": "To add a machine, add a host with an ssh destination to the config, in a config pull request. Give it its own token. wavecoord hosts then probes it. The launcher uploads the program and the plugin, and tunnels back to the coordinator. Other model providers are set per host; see the providers page."
+      },
+      {
+        "title": "You finished the course",
+        "bullets": [
+          "Spec small, verify for real, plan disjoint paths.",
+          "Run waves, watch them, triage until merged.",
+          "Everything is in git, so everything can be undone."
+        ],
+        "say": "That's the course. Specify small. Make Verify real. Give tasks disjoint paths. Run, watch, and triage. And remember that everything is in git, so everything can be undone. Happy building."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 20,
+      "idle": 1
+    }
+  ],
+  "steps": [
+    {
+      "say": "This lesson is all in the terminal. The demo is the to-do app with its plan, and a running coordinator."
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "type": "wavecoord log -n 4",
+      "enter": true
+    },
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "say": "wavecoord log reads the event log from git. Every lease, report and merge is there."
+    },
+    {
+      "say": "Let's start one worker by hand, and then stop it."
+    },
+    {
+      "type": "wavecoord dispatch todo.due-dates.overdue.dates",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)dispatched|wavecoord dispatch: ",
+      "timeout": 120,
+      "idle": 2
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} running --min 1",
+      "timeout": 300,
+      "interval": 5,
+      "optional": true
+    },
+    {
+      "type": "wavecoord attempts ls --active",
+      "enter": true
+    },
+    {
+      "wait_for": "ATTEMPT",
+      "timeout": 60,
+      "idle": 1.5
+    },
+    {
+      "type": "wavecoord steer todo.due-dates.overdue.dates stop",
+      "enter": true
+    },
+    {
+      "wait_for": "#\\d+ to task|wavecoord steer: ",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Stop ends the attempt. Nothing is pushed, and the lease is released, so the task is ready again."
+    },
+    {
+      "type": "wavecoord lease release todo.due-dates.overdue.dates --reason 'worker lost'",
+      "enter": true
+    },
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 60,
+      "idle": 1.5
+    },
+    {
+      "say": "Lease release is for a lease that nobody holds any more: stale, or parked. Here stop already released it. Use release when a worker's machine died."
+    },
+    {
+      "say": "Next, the cache. The coordinator's database is only a cache of the log. Rebuild replays the log and changes nothing."
+    },
+    {
+      "type": "wavecoord rebuild",
+      "enter": true
+    },
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 120,
+      "idle": 1.5
+    },
+    {
+      "say": "To undo one event, such as a message sent by mistake, use wavecoord revert with its number from the log. To roll everything back to a commit of the log, use rebuild with dash dash at. If a rolled-back task still says done in the spec tree, status sync dash dash reset puts it back to planned."
+    },
+    {
+      "type": "wavecoord spec status-sync",
+      "enter": true
+    },
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 120,
+      "idle": 1.5
+    },
+    {
+      "say": "Now the fence's emergency switch. When the fence is in enforce mode and the coordinator is down, workers cannot write. Only you can let them go on, from your own terminal."
+    },
+    {
+      "type": "wavecoord fence offline --for 10m --reason 'coordinator maintenance'",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)refused|override",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "say": "Refused: the coordinator answers, and the override is only for an outage. Let's stop the coordinator and try again."
+    },
+    {
+      "shell": "${COURSE_BUILD} --stop-server"
+    },
+    {
+      "type": "wavecoord fence offline --for 10m --reason 'coordinator maintenance'",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)override until",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "say": "The override lasts at most four hours, and every write in that time is logged. When the coordinator is back, end it."
+    },
+    {
+      "shell": "${COURSE_BUILD} --start-server"
+    },
+    {
+      "type": "wavecoord fence online",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)override",
+      "timeout": 60,
+      "idle": 1.5
+    },
+    {
+      "say": "Last, the hosts. wavecoord hosts probes each machine in the config."
+    },
+    {
+      "type": "wavecoord hosts",
+      "enter": true
+    },
+    {
+      "wait_for": "local",
+      "timeout": 120,
+      "idle": 2
+    },
+    {
+      "say": "One local host here, with its slots, its Claude Code version and its login. More hosts are one config change away."
+    },
+    {
+      "type": "exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 10
+    }
+  ]
+}

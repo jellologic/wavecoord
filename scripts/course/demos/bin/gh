@@ -1,0 +1,3 @@
+#!/bin/sh
+# The course forge as `gh`: a local stand-in for GitHub (scripts/course/demos/forge.py).
+exec python3 "$(dirname "$0")/../forge.py" "$@"

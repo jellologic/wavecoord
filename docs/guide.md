@@ -2,7 +2,7 @@
 
 This page teaches you to run wavecoord day to day: the model behind it, one feature from idea to merged code, how to write specs that parallelize, how to run waves safely, how to steer workers, and what to do when something goes wrong. It assumes you finished the [quickstart](quickstart.md). The reference pages (`specs.md`, `adapters.md`, `launcher.md`, `contract.md`) have every detail; this page links to them.
 
-To watch first, see the [videos](#videos) (about a minute each).
+To watch first, see the [videos](#videos) (about a minute each). New to spec-driven development? The [course](course/README.md) teaches this page step by step, with a video and an exercise per lesson.
 
 ## 1. The mental model
 
@@ -387,6 +387,8 @@ Use the coordinator task id (dots, not slashes). Never use a hint to widen a tas
 | Hold `config_change` | The task PR changes lead config: `.claude/wavecoord.json` keys, any `.claude/` or `.claude-plugin/` file, `.mcp.json`, `CLAUDE.local.md`, `hooks/hooks.json` | Never merge it. Continue the attempt to drop the change; if the change is wanted, make it yourself in a config PR |
 | Hold `fence` or `stale_lease` | The PR writes outside its lease (enforce), or its `Lease:` line is not the attempt's lease | Check the paths with `wavecoord gate-check <pr>`. Widen the task in a plan PR if the lease was too small; else close the PR, `collect`, and dispatch again |
 | Hold `unavailable` | A check could not run (git, a command, the plan) | Read the detail; the next `refinery_merge` tries again |
+| Hold `branch_missing` | The attempt's branch is not on `origin` | Close the PR and `collect`, then dispatch the task again |
+| Hold `merge_failed` | `merge_cmd` failed after every check passed (branch protection, required checks) | Read the detail, fix it on the forge, then merge again |
 | Report `failed` with `continue_suggested` | The worker ran out of turns or tokens after it pushed commits | Continue the same attempt with a short prompt that lists the Acceptance commands; add `--max-turns` if the cap was too low |
 | Report `blocked` or `needs_decision` | The worker has a question or a design choice | Answer from the spec with `send`, or decide yourself; record the decision in the spec with `/wavecoord:revise` |
 | `notify.post` `rate_limit`, attempt with `next_provider` | The provider throttled the worker | `collect` starts the next provider of `exec.provider_fallback` when the task is still ready; the throttled provider is skipped for 15 minutes |
@@ -488,7 +490,7 @@ The full list is in [CHANGELOG.md](../CHANGELOG.md).
 
 ## Videos
 
-Narrated, with subtitles (`.srt`), from the v0.3.0 release:
+Narrated, with subtitles (`.srt`), from the v0.3.0 release. The [course](course/README.md) has eleven longer ones, one per lesson.
 
 | Video | What you see |
 |---|---|

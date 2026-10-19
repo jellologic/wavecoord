@@ -1,0 +1,194 @@
+{
+  "title": "Lesson 6: Writing good specs and tasks",
+  "slug": "06-good-specs",
+  "demo": {
+    "name": "brownfield",
+    "state": "flawed"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 5,
+    "real_min": 30,
+    "lead": "sonnet",
+    "cost": "$1.50 to $4"
+  },
+  "command": [
+    "claude",
+    "--model",
+    "sonnet",
+    "--permission-mode",
+    "default",
+    "--plugin-dir",
+    "${COURSE_PLUGIN}",
+    "--disallowedTools",
+    "AskUserQuestion",
+    "--allowedTools",
+    "mcp__plugin_wavecoord_wavecoord,Bash(wavecoord *),Bash(git *),Bash(gh *),Bash(python3 -m unittest *),Read,Grep,Glob"
+  ],
+  "timeout": 3600,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "Writing good specs and tasks",
+        "subtitle": "Lesson 6",
+        "say": "The quality of a wave is decided when you write the specs. Workers do what the spec says, in parallel, without talking to each other. This lesson shows what good looks like, and how to fix what is not."
+      },
+      {
+        "title": "Requirements",
+        "bullets": [
+          "One testable rule each: split every 'and'.",
+          "A measurable response: a value, a status code, a file.",
+          "Verify that fails without the work.",
+          "A one-line contract on every interface others use."
+        ],
+        "say": "A requirement is one testable rule. If it says and, it is probably two. Its response is measurable. Its Verify fails without the work. And any interface that other work builds on gets a one-line contract, so nobody guesses it."
+      },
+      {
+        "title": "Tasks",
+        "bullets": [
+          "One worker session: sizes XS to L. Split an XL.",
+          "paths: the module and its test. Never src/**.",
+          "needs: only for a real order. Each one makes the critical path longer.",
+          "conflicts_with: for what the tree cannot see, like a shared database.",
+          "Acceptance that fails without the work, and a self-contained prompt."
+        ],
+        "say": "A task fits one worker session. Its paths list the module and its test, never a whole folder. Needs are only for a real order, because each one makes the wave longer. Conflicts with is for things the tree cannot see, like a shared database. And the acceptance must fail without the work."
+      },
+      {
+        "title": "Good and bad",
+        "code": "good: paths: [todo/dates.py, tests/test_dates.py]\nbad:  paths: [todo/**]\n\ngood: python3 -m unittest tests.test_dates\nbad:  python3 -c \"print('ok')\"\n\ngood: When ..., the CLI shall print only the open items due before today.\nbad:  Reminders should be quick and friendly.",
+        "say": "Here are the three most common mistakes, side by side. A wide glob instead of real paths. An acceptance command that always passes. And a statement nobody can test. Our demo plan has all three."
+      }
+    ],
+    "outro": [
+      {
+        "title": "Recap",
+        "bullets": [
+          "spec check: errors block the plan; read every warning.",
+          "The reviewer agent: a second opinion before you merge.",
+          "Suspect tasks: the requirement changed; review, then rebase-basis.",
+          "Fix everything through /wavecoord:revise: one plan PR."
+        ],
+        "say": "Run spec check on every plan. Ask the reviewer for a second opinion. Review suspect tasks when a requirement changes. And fix it all through revise, in one plan pull request."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    }
+  ],
+  "steps": [
+    {
+      "say": "This to-do app has a plan for due dates. But the plan has mistakes. Let's find them."
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "type": "! wavecoord spec check",
+      "enter": true
+    },
+    {
+      "wait_for": "records, \\d+ errors",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "spec check finds an error. Two tasks may run at the same time, but both write to the todo folder: the dates task claims todo slash star star. The fix is to narrow the paths, or to add a needs. There is also a warning: a suspect task."
+    },
+    {
+      "type": "! wavecoord spec suspect",
+      "enter": true
+    },
+    {
+      "wait_for": "changed",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Someone changed the store requirement after its task was planned. The task may no longer fit. Before we fix anything, let's get a second opinion from the reviewer agent."
+    },
+    {
+      "type": "Use the wavecoord:reviewer agent in spec mode to review the requirements and tasks under todo/due-dates on main. Show me its findings. Do not change anything yet.",
+      "enter": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "The reviewer marks each finding must or should. Look for the wide glob, the acceptance command that always passes, and the vague reminders draft. A check script cannot judge a vague sentence; a reviewer can."
+    },
+    {
+      "say": "Now fix it, through the revise skill. All fixes go into one plan pull request."
+    },
+    {
+      "type": "/wavecoord:revise fix the plan under todo/due-dates: narrow the paths of the dates task to todo/dates.py and tests/test_dates.py, make its Acceptance python3 -m unittest tests.test_dates, review the suspect store task against the changed requirement and rebase its basis, and leave the reminders draft as it is.",
+      "enter": true
+    },
+    {
+      "wait_shell": "gh pr list --state all | grep -q '^#1 '",
+      "timeout": 1500,
+      "interval": 10,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "One plan pull request with every fix. We merge it and check again."
+    },
+    {
+      "type": "! gh pr merge 1 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request #1",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "type": "! wavecoord spec check && wavecoord spec waves",
+      "enter": true
+    },
+    {
+      "wait_for": "wave 1",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "No errors, and the two tasks can run side by side again in wave one. The vague reminders draft stays a draft: it never runs until someone rewrites it and approves it."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 20
+    }
+  ]
+}

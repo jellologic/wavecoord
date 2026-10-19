@@ -1,11 +1,12 @@
 # wavecoord docs
 
-Start with the [quickstart](quickstart.md) to get a coordinator running, then read the [guide](guide.md) to learn the workflow. The other pages are reference.
+Start with the [quickstart](quickstart.md) to get a coordinator running, then read the [guide](guide.md) to learn the workflow. New to spec-driven development? Take the [course](course/README.md) first. The other pages are reference.
 
 ## Learn
 
 | Page | What |
 |---|---|
+| [course/](course/README.md) | The course: lessons 0 to 10 with narrated videos and exercises, with a path for a new project, existing code, or another SDD tool |
 | [quickstart.md](quickstart.md) | Install, set up with `wavecoord init` and `/wavecoord:setup`, and merge a first wave on one machine |
 | [guide.md](guide.md) | Using wavecoord well: the model, one feature from idea to merged code, good specs, safe waves, steering, triage, recovery, FAQ and upgrade notes |
 

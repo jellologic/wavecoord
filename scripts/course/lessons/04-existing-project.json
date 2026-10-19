@@ -1,0 +1,223 @@
+{
+  "title": "Lesson 4: An existing project with no specs",
+  "slug": "04-existing-project",
+  "demo": {
+    "name": "brownfield",
+    "state": "plain"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 5,
+    "real_min": 35,
+    "lead": "sonnet",
+    "cost": "$2 to $5"
+  },
+  "command": [
+    "claude",
+    "--model",
+    "sonnet",
+    "--permission-mode",
+    "default",
+    "--plugin-dir",
+    "${COURSE_PLUGIN}",
+    "--disallowedTools",
+    "AskUserQuestion",
+    "--allowedTools",
+    "mcp__plugin_wavecoord_wavecoord,Bash(wavecoord *),Bash(git *),Bash(gh *),Bash(python3 -m unittest *),Read,Grep,Glob"
+  ],
+  "timeout": 4200,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "An existing project with no specs",
+        "subtitle": "Lesson 4: specify the next feature only",
+        "say": "Most projects already have code and no specs. In this lesson, the spec skill reads the code, and we specify only the next feature."
+      },
+      {
+        "title": "Don't spec the world",
+        "bullets": [
+          "Specify the feature you are about to build, nothing more.",
+          "Let the skill read the code: entry points, tests, the test command.",
+          "Verify runs new tests that fail today. The old suite goes in check_cmd.",
+          "Each task owns one module and its test."
+        ],
+        "say": "Do not try to write specs for all the code you already have. Specify the feature you are about to build. The skill reads the code for you. Verify runs new tests that fail today, and your existing test suite runs as the check command before each merge."
+      }
+    ],
+    "outro": [
+      {
+        "title": "Recap",
+        "bullets": [
+          "One feature at a time; the tree grows with the work.",
+          "Verify names new test modules; existing tests stay in check_cmd.",
+          "Paths: the module and its test, never a whole folder."
+        ],
+        "say": "One feature at a time. Verify names new tests. Each task owns its module and its test. Next, lesson six shows how to write specs and tasks that run well in parallel."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    }
+  ],
+  "steps": [
+    {
+      "say": "This is a small to-do app. It has code, tests and a README, but no specs."
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "type": "! ls todo tests && python3 -m unittest discover -s tests 2>&1 | tail -3",
+      "enter": true
+    },
+    {
+      "wait_for": "OK",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Five tests pass. We want to add due dates. That is the only thing we specify."
+    },
+    {
+      "type": "/wavecoord:spec add due dates to to-do items: todo add --due YYYY-MM-DD, and todo list --overdue. Read the code first, and specify only this feature.",
+      "enter": true
+    },
+    {
+      "say": "The skill reads the code: the store, the command line and the tests.",
+      "wait": false
+    },
+    {
+      "wait_for": "(?i)scope|question",
+      "timeout": 600,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "It asks what it could not learn from the code."
+    },
+    {
+      "type": "Users: the same terminal users. Done when add --due saves the date with the item, and list --overdue prints only the open items due before today. Out of scope: reminders and times of day. The existing tests must keep passing. Each Verify should run a new test module with python3 -m unittest, such as tests.test_due_store. When the records are right, approve the requirements and activate the capability and feature in this PR.",
+      "enter": true
+    },
+    {
+      "wait_shell": "gh pr list --state all | grep -q '^#1 '",
+      "timeout": 1500,
+      "interval": 10,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "Let's look at the Verify commands it wrote."
+    },
+    {
+      "type": "! gh pr diff 1 | grep -A3 '^+## Verify'",
+      "enter": true
+    },
+    {
+      "wait_for": "unittest",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "Each Verify runs a new test module that does not exist yet, so it fails today. The five old tests are not in Verify: they pass already, so they would prove nothing. They run as the check command instead."
+    },
+    {
+      "type": "! gh pr merge 1 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request #1",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Now the tasks. This is where the paths are chosen."
+    },
+    {
+      "type": "/wavecoord:wave-plan todo. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task, and keep each task to one module and its test.",
+      "enter": true
+    },
+    {
+      "wait_shell": "gh pr list --state all | grep -q '^#2 '",
+      "timeout": 2400,
+      "interval": 10,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "type": "! gh pr diff 2 | grep -A3 '^+paths:'",
+      "enter": true
+    },
+    {
+      "wait_for": "\\+  - ",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "Each task owns a module and its test: the store task owns the store and a new test file. Tasks in the same wave never share a file. That is what lets them run at the same time."
+    },
+    {
+      "type": "! gh pr merge 2 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request #2",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "type": "! wavecoord spec waves",
+      "enter": true
+    },
+    {
+      "wait_for": "wave 1",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "The plan is merged and ready to run. Running it is lesson seven."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 20
+    }
+  ]
+}

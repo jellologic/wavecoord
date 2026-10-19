@@ -2,6 +2,7 @@
 """Record a real, scripted Claude Code session for the video course.
 
     python3 scripts/course/rig.py run LESSON.json [--cwd DIR] [--out DIR]
+    python3 scripts/course/rig.py check LESSON.json ...
 
 The rig opens a dedicated Terminal.app window and runs its own driver in it.
 The driver starts the lesson command (for example `claude --model haiku`) in a
@@ -86,6 +87,102 @@ def strip_ansi(s):
     s = _CSI.sub(_csi_text, s)
     s = _ESC.sub("", s)
     return s.replace("\r", "")
+
+
+# ---------------------------------------------------------------- the lesson format
+
+TOP_KEYS = ("title", "cwd", "command", "prepare", "env", "config", "setup", "steps", "timeout", "setup_timeout")
+# The action keys, in the order Driver.run_step tries them, and the options each one takes.
+ACTIONS = (
+    ("say", ("wait",)),
+    ("type", ("enter", "cps")),
+    ("key", ("repeat", "gap")),
+    ("wait_for", ("timeout", "idle", "optional")),
+    ("idle", ("timeout", "optional")),
+    ("pause", ()),
+    ("shell", ("cwd", "optional")),
+    ("wait_shell", ("timeout", "interval", "cwd", "optional")),
+    ("wait_exit", ()),
+)
+NUMBER_OPTS = ("timeout", "idle", "cps", "repeat", "gap", "interval", "pause", "wait_exit")
+
+
+def step_action(step):
+    """The action of a step: the first action key it has, as Driver.run_step picks it."""
+    for name, _ in ACTIONS:
+        if name in step:
+            return name
+    return None
+
+
+def check_step(step, where, extra_keys=()):
+    """-> a list of problems with one step. extra_keys None: other keys are fine (the rig ignores them)."""
+    if not isinstance(step, dict):
+        return ["%s: a step is a JSON object" % where]
+    act = step_action(step)
+    if act is None:
+        return ["%s: no action (one of %s)" % (where, ", ".join(a for a, _ in ACTIONS))]
+    errs = []
+    allowed = set(dict(ACTIONS)[act]) | {act, "when"} | set(extra_keys or ())
+    for k in step:
+        if k not in allowed and extra_keys is not None:
+            errs.append("%s: %s step: unknown key %r" % (where, act, k))
+    for k in NUMBER_OPTS:
+        if k in step and k in allowed and (isinstance(step[k], bool) or not isinstance(step[k], (int, float))
+                                            or step[k] < 0):
+            errs.append("%s: %s must be a number >= 0" % (where, k))
+    for k in ("wait", "enter", "optional"):
+        if k in step and not isinstance(step[k], bool):
+            errs.append("%s: %s must be true or false" % (where, k))
+    if act in ("say", "type", "shell", "wait_shell", "wait_for") and not isinstance(step[act], str):
+        errs.append("%s: %s must be a string" % (where, act))
+    elif act in ("say", "shell", "wait_shell", "wait_for") and not step[act].strip():
+        errs.append("%s: %s is empty" % (where, act))
+    if act == "key" and (not isinstance(step["key"], str) or (step["key"] not in KEYS and len(step["key"]) != 1)):
+        errs.append("%s: unknown key %r (one of %s, or one character)" % (where, step["key"], ", ".join(sorted(KEYS))))
+    for k in ("wait_for", "when"):
+        if isinstance(step.get(k), str):
+            try:
+                re.compile(step[k], re.M)
+            except re.error as e:
+                errs.append("%s: %s is not a valid regex: %s" % (where, k, e))
+    return errs
+
+
+def check_lesson(lesson, extra_keys=(), extra_step_keys=()):
+    """-> a list of problems with a lesson (the format in README.md); empty when the rig can play it.
+
+    Keys the rig does not know are problems, except those in extra_keys and extra_step_keys; with None,
+    any other key is fine (the rig ignores it)."""
+    if not isinstance(lesson, dict):
+        return ["a lesson is a JSON object"]
+    errs = ["unknown key %r" % k for k in lesson
+            if k not in TOP_KEYS and extra_keys is not None and k not in extra_keys]
+    cmd = lesson.get("command", ["claude"])
+    if not (isinstance(cmd, list) and cmd and all(isinstance(c, str) and c for c in cmd)):
+        errs.append("command must be a list of strings")
+    for k in ("env",):
+        v = lesson.get(k, {})
+        if not (isinstance(v, dict) and all(isinstance(a, str) and isinstance(b, str) for a, b in v.items())):
+            errs.append("env must map names to strings")
+    if not (isinstance(lesson.get("prepare", []), list) and all(isinstance(c, str) for c in lesson.get("prepare", []))):
+        errs.append("prepare must be a list of shell commands")
+    for k in lesson.get("config", {}) or {}:
+        if k not in DEFAULTS:
+            errs.append("config: unknown key %r" % k)
+    if not isinstance(lesson.get("steps"), list) or not lesson.get("steps"):
+        errs.append("steps must be a non-empty list")
+    for part in ("setup", "steps"):
+        steps = lesson.get(part, [])
+        if not isinstance(steps, list):
+            errs.append("%s must be a list" % part)
+            continue
+        for n, st in enumerate(steps):
+            where = "%s[%d]" % (part, n)
+            errs += check_step(st, where, extra_step_keys)
+            if part == "setup" and isinstance(st, dict) and step_action(st) == "say":
+                errs.append("%s: narration runs only in steps, not in setup" % where)
+    return errs
 
 
 # ---------------------------------------------------------------- helpers
@@ -211,6 +308,11 @@ class Driver:
     def send(self, s):
         os.write(self.fd, s.encode())
 
+    def shell_env(self):
+        env = dict(os.environ)
+        env.update(self.plan.get("env", {}))
+        return env
+
     def text_since_mark(self):
         return strip_ansi(self.raw[self.mark:])
 
@@ -282,10 +384,26 @@ class Driver:
             self.log(i, step, "pause", t0)
         elif "shell" in step:
             p = subprocess.run(step["shell"], shell=True, cwd=step.get("cwd", self.plan["cwd"]),
-                               capture_output=True, text=True)
+                               env=self.shell_env(), capture_output=True, text=True)
             self.log(i, step, "shell", t0, rc=p.returncode, out=(p.stdout + p.stderr)[-2000:])
             if p.returncode != 0 and not step.get("optional"):
                 raise RuntimeError("shell step failed: %s" % step["shell"])
+        elif "wait_shell" in step:
+            # poll a command off camera until it exits 0, mirroring the screen in between
+            end = t0 + step.get("timeout", 600)
+            ok, p = False, None
+            while True:
+                p = subprocess.run(step["wait_shell"], shell=True, cwd=step.get("cwd", self.plan["cwd"]),
+                                   env=self.shell_env(), capture_output=True, text=True)
+                if p.returncode == 0:
+                    ok = True
+                    break
+                if time.time() >= end:
+                    break
+                self.pump(min(step.get("interval", 5), max(0.1, end - time.time())))
+            self.log(i, step, "wait_shell", t0, rc=p.returncode, matched=ok, out=(p.stdout + p.stderr)[-2000:])
+            if not ok and not step.get("optional"):
+                raise RuntimeError("wait_shell timed out: %s" % step["wait_shell"])
         elif "wait_exit" in step:
             end = t0 + step["wait_exit"]
             while time.time() < end and self.alive():
@@ -515,19 +633,25 @@ def cues_for(text, start, dur, maxlen=84):
     return out
 
 
-def claude_usage(cwd, since):
-    """Sum token usage from Claude Code's transcripts for cwd written after `since`."""
-    proj = os.path.expanduser("~/.claude/projects/" + re.sub(r"[^A-Za-z0-9]", "-", os.path.realpath(cwd)))
-    if not os.path.isdir(proj):
-        proj = os.path.expanduser("~/.claude/projects/" + re.sub(r"[^A-Za-z0-9]", "-", cwd))
-    seen, tot, models = set(), {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0}, set()
-    if not os.path.isdir(proj):
-        return None
-    for name in os.listdir(proj):
-        p = os.path.join(proj, name)
-        if not name.endswith(".jsonl") or os.path.getmtime(p) < since:
-            continue
-        for line in open(p, errors="replace"):
+# API list price, USD per million tokens: input, output (cache write = 1.25x input,
+# cache read = 0.1x input). On a Claude subscription nothing is billed per token.
+PRICES = {"claude-haiku-5-5": (0.10, 0.50), "claude-haiku-4-5": (1.0, 5.0),
+          "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
+
+
+def config_dir(env=None):
+    """Claude Code's config dir: CLAUDE_CONFIG_DIR of `env` (the lesson's), else of this process, else ~/.claude."""
+    d = (env or {}).get("CLAUDE_CONFIG_DIR") or os.environ.get("CLAUDE_CONFIG_DIR") or "~/.claude"
+    return os.path.expanduser(d)
+
+
+def usage_of(paths):
+    """Sum the token usage of Claude Code transcripts (.jsonl files), priced per model."""
+    seen, tot, by_model = set(), {"input": 0, "output": 0, "cache_write": 0, "cache_read": 0}, {}
+    for p in paths:
+        with open(p, errors="replace") as f:
+            lines = f.readlines()
+        for line in lines:
             try:
                 rec = json.loads(line)
             except ValueError:
@@ -537,20 +661,54 @@ def claude_usage(cwd, since):
             if rec.get("type") != "assistant" or not u or msg.get("id") in seen:
                 continue
             seen.add(msg.get("id"))
-            models.add(msg.get("model"))
-            tot["input"] += u.get("input_tokens", 0)
-            tot["output"] += u.get("output_tokens", 0)
-            tot["cache_write"] += u.get("cache_creation_input_tokens", 0)
-            tot["cache_read"] += u.get("cache_read_input_tokens", 0)
-    # API list price, USD per million tokens: input, output (cache write = 1.25x input,
-    # cache read = 0.1x input). On a Claude subscription nothing is billed per token.
-    prices = {"claude-haiku-5-5": (0.10, 0.50), "claude-haiku-4-5": (1.0, 5.0),
-              "claude-sonnet-5-5": (2.0, 10.0), "claude-opus-5-5": (4.0, 20.0)}
-    pin, pout = max((prices.get(m, (0, 0)) for m in models), default=(0, 0))
-    usd = (tot["input"] * pin + tot["output"] * pout + tot["cache_write"] * pin * 1.25
-           + tot["cache_read"] * pin * 0.1) / 1e6
-    return {"models": sorted(m for m in models if m), "tokens": tot, "requests": len(seen),
-            "usd_at_api_list_price": round(usd, 5) if pin else None}
+            row = (u.get("input_tokens", 0), u.get("output_tokens", 0), u.get("cache_creation_input_tokens", 0),
+                   u.get("cache_read_input_tokens", 0))
+            m = by_model.setdefault(msg.get("model") or "?", [0, 0, 0, 0])
+            for k, v in enumerate(row):
+                m[k] += v
+            for k, v in zip(("input", "output", "cache_write", "cache_read"), row):
+                tot[k] += v
+    usd, priced = 0.0, True
+    for model, (i, o, cw, cr) in by_model.items():
+        if model not in PRICES:
+            priced = False
+            continue
+        pin, pout = PRICES[model]
+        usd += (i * pin + o * pout + cw * pin * 1.25 + cr * pin * 0.1) / 1e6
+    return {"models": sorted(m for m in by_model if m != "?"), "tokens": tot, "requests": len(seen),
+            "usd_at_api_list_price": round(usd, 5) if by_model and priced else None}
+
+
+def transcripts(projects_dir, since, prefix=None):
+    """The .jsonl transcripts under projects_dir written after `since`; with `prefix`, only the project
+    folders whose name starts with it (Claude Code names a folder after the session's cwd)."""
+    out = []
+    if not os.path.isdir(projects_dir):
+        return out
+    for proj in sorted(os.listdir(projects_dir)):
+        if prefix and not proj.startswith(prefix):
+            continue
+        d = os.path.join(projects_dir, proj)
+        if not os.path.isdir(d):
+            continue
+        for name in sorted(os.listdir(d)):
+            p = os.path.join(d, name)
+            if name.endswith(".jsonl") and os.path.getmtime(p) >= since:
+                out.append(p)
+    return out
+
+
+def project_key(path):
+    return re.sub(r"[^A-Za-z0-9]", "-", path)
+
+
+def claude_usage(cwd, since, env=None):
+    """Token usage of the sessions started in cwd after `since` (the lesson's CLAUDE_CONFIG_DIR)."""
+    projects = os.path.join(config_dir(env), "projects")
+    paths = []
+    for key in sorted({project_key(os.path.realpath(cwd)), project_key(cwd)}):
+        paths += [p for p in transcripts(projects, since) if os.path.basename(os.path.dirname(p)) == key]
+    return usage_of(sorted(set(paths))) if paths else None
 
 
 def mux(raw, clips, srt, out, cfg, rect_size):
@@ -668,7 +826,7 @@ def run(args):
                 row[k] = ev[k]
         st = ev["step"]
         row["what"] = st.get("say") or st.get("type") or st.get("key") or st.get("wait_for") or \
-            st.get("shell") or ("idle %s" % st["idle"] if "idle" in st else "") or \
+            st.get("shell") or st.get("wait_shell") or ("idle %s" % st["idle"] if "idle" in st else "") or \
             ("pause %s" % st["pause"] if "pause" in st else "")
         timeline.append(row)
         if ev["kind"] == "say":
@@ -683,7 +841,7 @@ def run(args):
 
     final = os.path.join(out, name + ".mp4")
     mux(raw, clips, srt, final, cfg, rec.size)
-    usage = claude_usage(cwd, t_start)
+    usage = claude_usage(cwd, t_start, lesson.get("env"))
     if usage:
         json.dump(usage, open(os.path.join(out, "usage.json"), "w"), indent=1)
     for row in timeline:
@@ -703,9 +861,20 @@ def main():
     r.add_argument("--cwd", help="working directory for the session (overrides the lesson)")
     r.add_argument("--out", help="output directory (default ./course-out/<lesson>)")
     r.add_argument("--scale-factor", type=int, help="screen pixels per point (default: auto)")
+    c = sub.add_parser("check", help="check lesson files against the format; exit 1 on a problem")
+    c.add_argument("lessons", nargs="+")
     d = sub.add_parser("_drive")
     d.add_argument("plan")
     a = ap.parse_args()
+    if a.cmd == "check":
+        bad = 0
+        for path in a.lessons:
+            errs = check_lesson(json.load(open(path)), extra_keys=None, extra_step_keys=None)
+            print("%s: %s" % (path, "ok" if not errs else "%d problems" % len(errs)))
+            for e in errs:
+                print("  " + e)
+            bad += bool(errs)
+        return 1 if bad else 0
     if a.cmd == "_drive":
         Driver(json.load(open(a.plan))).main()
         return 0

@@ -1,0 +1,240 @@
+{
+  "title": "Lesson 9: Triage and merging",
+  "slug": "09-triage-merge",
+  "demo": {
+    "name": "brownfield",
+    "state": "triage"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 7,
+    "real_min": 45,
+    "lead": "sonnet, workers haiku",
+    "cost": "$2 to $6 (lead) plus $0.10 to $0.50 (workers)"
+  },
+  "command": [
+    "claude",
+    "--model",
+    "sonnet",
+    "--permission-mode",
+    "default",
+    "--plugin-dir",
+    "${COURSE_PLUGIN}",
+    "--disallowedTools",
+    "AskUserQuestion",
+    "--allowedTools",
+    "mcp__plugin_wavecoord_wavecoord,Bash(wavecoord *),Bash(git *),Bash(gh *),Bash(python3 -m unittest *),Read,Grep,Glob"
+  ],
+  "timeout": 5400,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "Triage and merging",
+        "subtitle": "Lesson 9: /wavecoord:triage and /wavecoord:resolve",
+        "say": "When workers report, triage turns each result into the next action: merge it, retry it, ask you, or send it to resolve. This lesson merges a wave with a protected file and a conflict."
+      },
+      {
+        "title": "The refinery",
+        "diagram": "refinery",
+        "say": "The refinery merges one pull request at a time. Before each merge it checks that the branch still merges cleanly, looks for protected paths, checks the fence, runs your check command, and runs the task's acceptance and the requirement's Verify. Only then does it merge, at the exact commit it checked."
+      }
+    ],
+    "outro": [
+      {
+        "title": "Holds and what to do",
+        "bullets": [
+          "conflict: /wavecoord:resolve.  protected: say yes, or not.",
+          "verify_failed or check_failed: continue the attempt with a fix.",
+          "spec_change or config_change: never merge; revise or config PR.",
+          "held, report_not_done, fence: see the lesson page."
+        ],
+        "say": "Every hold has a reason and a next step. The lesson page lists them all: conflicts, protected paths, failed checks, spec or config changes in a task, and the rest."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    }
+  ],
+  "steps": [
+    {
+      "say": "The to-do app again, with two twists. Both wave-one tasks add a line to the changelog, so the second one to merge will conflict. And the changelog is a protected path: a person reads it before it merges."
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "type": "/wavecoord:wave-run",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)dispatch",
+      "timeout": 600,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 6,
+      "timeout": 900
+    },
+    {
+      "say": "Two workers run. We skip ahead to their reports.",
+      "wait": false
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} idle --min 2",
+      "timeout": 2700,
+      "interval": 15,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true,
+      "optional": true
+    },
+    {
+      "type": "/wavecoord:triage",
+      "enter": true
+    },
+    {
+      "say": "Triage collects first: that opens a pull request for each finished attempt. Then the refinery checks them.",
+      "wait": false
+    },
+    {
+      "wait_for": "(?i)collect|refinery|merge",
+      "timeout": 600,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 8,
+      "timeout": 1500,
+      "cut": true
+    },
+    {
+      "say": "Both pull requests are held, because they touch a protected path. The refinery waits for you, and only for you. A worker's message can never approve it. We read the change, and say yes."
+    },
+    {
+      "type": "Yes, I approve the protected CHANGELOG.md changes in both PRs. Merge them.",
+      "enter": true
+    },
+    {
+      "idle": 8,
+      "timeout": 1500,
+      "cut": true
+    },
+    {
+      "say": "One merged. The other now conflicts: the changelog changed under it. Conflicts go to the resolve skill."
+    },
+    {
+      "type": "! wavecoord refinery status",
+      "enter": true
+    },
+    {
+      "idle": 2,
+      "timeout": 60
+    },
+    {
+      "type": "/wavecoord:resolve",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)conflict|resolver",
+      "timeout": 600,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "A resolver is the same attempt, continued. It merges main into its branch, keeps both changelog lines, and keeps its pull request. We wait for it."
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} running --min 1",
+      "timeout": 300,
+      "interval": 5,
+      "optional": true
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} idle --min 2",
+      "timeout": 2400,
+      "interval": 15,
+      "cut": true,
+      "optional": true
+    },
+    {
+      "idle": 6,
+      "timeout": 600,
+      "cut": true,
+      "optional": true
+    },
+    {
+      "type": "/wavecoord:triage and if the refinery holds the resolved PR for the protected changelog again, I approve that change too.",
+      "enter": true
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} done --min 2",
+      "timeout": 1800,
+      "interval": 10,
+      "cut": true,
+      "optional": true
+    },
+    {
+      "idle": 8,
+      "timeout": 1500,
+      "cut": true
+    },
+    {
+      "type": "! wavecoord refinery status",
+      "enter": true
+    },
+    {
+      "idle": 2,
+      "timeout": 60
+    },
+    {
+      "type": "! wavecoord spec tree",
+      "enter": true
+    },
+    {
+      "wait_for": "todo",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Both wave-one tasks are done, and the changelog has both lines. The command line task is ready for the next wave."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 20
+    }
+  ]
+}

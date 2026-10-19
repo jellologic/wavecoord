@@ -1,0 +1,217 @@
+{
+  "title": "Lesson 2: Your first spec",
+  "slug": "02-first-spec",
+  "demo": {
+    "name": "fresh"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 5,
+    "real_min": 20,
+    "lead": "sonnet",
+    "cost": "$0.80 to $2.50"
+  },
+  "command": [
+    "claude",
+    "--model",
+    "sonnet",
+    "--permission-mode",
+    "default",
+    "--plugin-dir",
+    "${COURSE_PLUGIN}",
+    "--disallowedTools",
+    "AskUserQuestion",
+    "--allowedTools",
+    "mcp__plugin_wavecoord_wavecoord,Bash(wavecoord *),Bash(git *),Bash(gh *),Bash(python3 -m unittest *),Read,Grep,Glob"
+  ],
+  "timeout": 2400,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "Your first spec",
+        "subtitle": "Lesson 2: /wavecoord:spec",
+        "say": "In this lesson you write your first spec with the spec skill: one small feature, from a question list to a merged plan pull request."
+      },
+      {
+        "title": "What you get",
+        "bullets": [
+          "A capability, a feature and a few requirements, each one file under specs/.",
+          "Each requirement: an EARS statement, scenarios, and Verify commands.",
+          "One plan PR. Nothing reaches main until you merge it."
+        ],
+        "say": "The skill asks you a few questions, then writes a capability, a feature and a few requirements. Each requirement gets a statement, scenarios and Verify commands. All of it arrives as one pull request, and nothing changes until you merge it."
+      }
+    ],
+    "outro": [
+      {
+        "title": "Recap",
+        "bullets": [
+          "Answer the questions: who, done when, out of scope, shared interfaces.",
+          "Read each statement: one rule, shall once, a measurable response.",
+          "Verify must fail today. Check that before you approve.",
+          "Approve, merge the plan PR, then wavecoord spec check."
+        ],
+        "say": "To recap. Answer the questions plainly. Read every statement. Make sure each Verify fails today. Then approve and merge. Your exercise is on the lesson page."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    }
+  ],
+  "steps": [
+    {
+      "say": "This is the bookmarks repo from the course. It has a README with an idea, and the wavecoord config. The coordinator already runs in the background."
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "say": "We specify one small feature: saving and listing bookmarks. Not the whole app."
+    },
+    {
+      "type": "/wavecoord:spec save and list bookmarks, as the README describes",
+      "enter": true
+    },
+    {
+      "say": "First the skill reads the spec tree, the config and the code.",
+      "wait": false
+    },
+    {
+      "wait_for": "(?i)scope|question",
+      "timeout": 600,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "It asks a few questions. Answer them in plain words. The shape of the tree depends on them."
+    },
+    {
+      "type": "Users: one person in a terminal. Done when: python3 -m bookmarks add <url> --title <title> saves the bookmark in the JSON file, and python3 -m bookmarks list prints them, newest first. Out of scope: find, tags and any web page. No other work depends on an interface yet. When the records are right, you may set the requirements to approved and the capability and feature to active in this PR.",
+      "enter": true
+    },
+    {
+      "say": "We also gave our approval in the answer. Only you can approve; the skill always asks.",
+      "wait": false
+    },
+    {
+      "wait_shell": "gh pr list --state all | grep -q '^#1 '",
+      "timeout": 1500,
+      "interval": 10,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "Here is the result: one plan pull request, a table of the records, and any open questions. Let's read the pull request."
+    },
+    {
+      "type": "! gh pr view 1",
+      "enter": true
+    },
+    {
+      "wait_for": "OPEN",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "The body lists each new file, and the result of spec check. Now the records themselves."
+    },
+    {
+      "type": "! gh pr diff 1 | grep -A14 '^+## Statement' | head -48",
+      "enter": true
+    },
+    {
+      "wait_for": "\\+(When|While|If|Where|The) ",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "Each requirement has one statement with shall, a measurable result, scenarios in Given, When, Then, and a Verify command. Verify must fail today. Let's ask Claude to prove it."
+    },
+    {
+      "type": "Run the Verify commands of the new requirements here on main, and tell me whether each one fails.",
+      "enter": true
+    },
+    {
+      "idle": 6,
+      "timeout": 600,
+      "cut": true
+    },
+    {
+      "say": "Good. Each Verify fails now. It will pass only when the work is merged, and the merge queue runs it again before each merge."
+    },
+    {
+      "say": "The records look right, so we merge the plan pull request."
+    },
+    {
+      "type": "! gh pr merge 1 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request #1",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "type": "! wavecoord spec check",
+      "enter": true
+    },
+    {
+      "wait_for": "records, \\d+ errors",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "spec check passes. Its warnings say that no task produces the promised outputs yet. That is expected: tasks come in the next step, with wave plan."
+    },
+    {
+      "type": "! wavecoord spec tree",
+      "enter": true
+    },
+    {
+      "wait_for": "bookmarks",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "And here is the tree: the capability, the feature and the requirements, approved and active."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 20
+    }
+  ]
+}

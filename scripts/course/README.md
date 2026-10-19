@@ -3,10 +3,13 @@
 `rig.py` records a real, scripted Claude Code session for the video course. It
 types into a live `claude` and waits on what the screen shows. It records only
 the terminal window, then adds the narration (`say`) and subtitles.
+`build.py` turns the lesson scripts in `lessons/` into the course videos
+([docs/course](../../docs/course/README.md)): see [Building the course](#building-the-course).
 
 ```bash
 COURSE_DEMO_DIR=/tmp/wavecoord-demo \
   python3 scripts/course/rig.py run scripts/course/proof-take.json --out /tmp/course-out/proof
+python3 scripts/course/rig.py check scripts/course/lessons/*.json     # the format only; records nothing
 ```
 
 Outputs in `--out`:
@@ -14,7 +17,7 @@ Outputs in `--out`:
 - `<lesson>.mp4`: the final video, 1920x1080, 30 fps, H.264 + AAC, with soft English subtitles.
 - `<lesson>.srt`: the subtitles as a sidecar file.
 - `timeline.json`: each step with its start and end time in the video.
-- `usage.json`: the tokens Claude Code used (from its transcripts), with the API list price.
+- `usage.json`: the tokens Claude Code used (from its transcripts in the lesson's `CLAUDE_CONFIG_DIR`), with the API list price per model.
 - `raw.mp4` (the cropped capture without audio), `voice/` (one narration clip per line), `ctl/` (driver state, the screen text).
 
 ## How it works
@@ -63,7 +66,8 @@ Steps:
 | `{"wait_for": "regex", "timeout": 60, "idle": 2}` | Polls the screen text printed since the last `type` or `key` step (ANSI stripped) until the regex matches. With `idle`, it then waits until the screen has been still for that many seconds. It fails the take on timeout unless `"optional": true`. |
 | `{"idle": 2, "timeout": 60}` | Waits until the screen has been still for N seconds. |
 | `{"pause": 2}` | Waits N seconds. |
-| `{"shell": "cmd"}` | Runs a command off camera (in `cwd` unless `"cwd"` is given) and logs its output. Use it to set up state between beats. |
+| `{"shell": "cmd"}` | Runs a command off camera (in `cwd` unless `"cwd"` is given, with the lesson's `env`) and logs its output. Use it to set up state between beats. |
+| `{"wait_shell": "cmd", "timeout": 600, "interval": 5}` | Runs a command off camera every `interval` seconds until it exits 0, mirroring the screen in between. It fails the take on timeout unless `"optional": true`. Use it to wait on state the screen does not show, such as workers finishing. |
 | `{"wait_exit": 10}` | Waits up to N seconds for the session to exit. |
 
 Any step can take `"when": "regex"`. The step then runs only if the screen text
@@ -119,3 +123,42 @@ since the last action matches. This handles dialogs that appear only sometimes.
   length. Voice onsets in the proof take matched the step log to within 10 ms.
 - Claude Code's TUI changes between versions. The `wait_for` regexes are what
   breaks first.
+
+## Building the course
+
+```bash
+python3 scripts/course/build.py --validate         # check every lesson script against this format
+python3 scripts/course/build.py --check            # the prerequisites of a recording
+python3 scripts/course/build.py --lesson 03        # record one lesson
+python3 scripts/course/build.py --all              # record every lesson
+```
+
+Each lesson in `lessons/NN-slug.json` is a rig lesson plus keys the rig ignores:
+
+| Key | Meaning |
+|---|---|
+| `slug` | The file name; the video is `dist/course/course-<slug>.mp4` |
+| `demo` | `{"name", "state", "config"}`: the demo repo to build (`demos/demos.py`) |
+| `plugin` | `dir`: the lead loads `--plugin-dir <repo>/plugin`; `marketplace`: lesson 1 installs it on camera |
+| `server`, `server_env` | Start a coordinator for the demo before the take, with these extra variables |
+| `cards` | `{"intro": [...], "outro": [...]}`: title, bullet, code or diagram cards, each with a `say` |
+| `estimate` | Video and recording minutes, the lead model and the expected cost |
+| `"cut": true` on a wait step | The middle of the wait is cut to a short "later" card, never over a voice line |
+
+Strings may use `${COURSE_DEMO_DIR}`, `${COURSE_PLUGIN}`, `${COURSE_URL}`, `${COURSE_PORT}`, `${COURSE_WAIT}`
+(`wait.py`: `idle`, `running`, `done`), `${COURSE_BUILD}` and the other names in `build.placeholders`.
+
+What a recording needs:
+
+- macOS with Terminal, `say`, `ffmpeg` and `rsvg-convert`, and the one-time setup above. Mermaid diagrams
+  render with `mmdc` (or `npx @mermaid-js/mermaid-cli`) when present, else `build.py` draws them.
+- A dedicated, logged-in Claude Code profile: `CLAUDE_CONFIG_DIR=~/.wavecoord-course/claude claude auth login`
+  once (`COURSE_HOME` moves `~/.wavecoord-course`). Its `projects/` folder gives the cost of each take.
+- A free port for the demo coordinator (18793; `COURSE_PORT` changes it). An existing coordinator on 18741 is
+  never touched.
+
+Each take builds its demo under `/tmp/wavecoord-demo/`, with a bare origin and `demos/bin/gh`, a local stand-in
+for GitHub (`demos/forge.py`), first on the PATH. It resets `$COURSE_HOME/wc` (the isolated `WAVECOORD_HOME`
+with fresh tokens) and the plugin options of the course profile, so the lessons are independent. Lesson 1
+installs the plugin from the `jellologic/wavecoord` marketplace and the CLI from the v0.3.0 release into
+`~/.local/bin`, as a reader does.
