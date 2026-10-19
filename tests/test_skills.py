@@ -13,7 +13,7 @@ PLUGIN = os.path.join(_paths.ROOT, "plugin")
 SKILLS = os.path.join(PLUGIN, "skills")
 AGENTS = os.path.join(PLUGIN, "agents")
 TOOL_PREFIX = "mcp__plugin_wavecoord_wavecoord__"
-EXPECTED_SKILLS = {"coord-status", "wave-plan", "wave-run", "triage", "revise", "resolve", "spec"}
+EXPECTED_SKILLS = {"coord-status", "wave-plan", "wave-run", "triage", "revise", "resolve", "spec", "spec-import"}
 EXPECTED_AGENTS = {"planner", "reviewer", "steerer"}
 BUILTIN_TOOLS = {"Read", "Grep", "Glob", "Monitor", "Bash", "Edit", "Write", "Agent", "WebFetch"}
 PLUGIN_AGENT_IGNORED = ("hooks", "mcpServers", "permissionMode", "initialPrompt")
@@ -273,7 +273,7 @@ class ParserTest(unittest.TestCase):
             self.assertNotIn("Bash(wavecoord spec *)", fm["allowed-tools"], d)
             for t in fm["allowed-tools"]:
                 for cmd in ("revert", "rebuild", "tokens", "install-server", "gc", "refinery", "steer", "launch",
-                            "spec apply", "spec status-sync", "spec migrate-plan"):
+                            "spec apply", "spec status-sync", "spec migrate-plan", "spec import"):
                     self.assertFalse(t.startswith("Bash(wavecoord %s" % cmd), (d, t))
         for d in ("triage", "wave-run"):
             fm, body = parse_frontmatter(read(os.path.join(SKILLS, d, "SKILL.md")))
@@ -290,6 +290,23 @@ class ParserTest(unittest.TestCase):
         self.assertIn("Retry an attempt that has a PR", actions)
         with open(os.path.join(PLUGIN, ".claude-plugin", "plugin.json")) as f:
             self.assertNotIn("project", json.load(f)["userConfig"])
+
+    def test_spec_import_skill(self):
+        """/wavecoord:spec-import pre-allows exactly what it uses: the spec reads, spec_edit for the plan PR, the
+        read-only spec commands and file reads; never `wavecoord spec import` itself, which writes without
+        --dry-run. /wavecoord:spec points to it."""
+        fm, body = parse_frontmatter(read(os.path.join(SKILLS, "spec-import", "SKILL.md")))
+        self.assertEqual(set(fm["allowed-tools"]), {
+            TOOL_PREFIX + t for t in ("config", "spec_tree", "spec_get", "spec_query", "spec_check", "spec_edit")} | {
+            "Bash(wavecoord spec tree *)", "Bash(wavecoord spec show *)", "Bash(wavecoord spec check *)",
+            "Bash(git ls-files *)", "Bash(git log *)", "Read", "Grep", "Glob", "Agent"})
+        for t in ("config", "spec_tree", "spec_edit"):
+            self.assertIn("`%s`" % t, body)
+        for word in ("--dry-run", "--json", "--ref origin/", "/wavecoord:wave-plan", "Spec Kit", "Kiro", "OpenSpec",
+                     "ADR"):
+            self.assertIn(word, body)
+        _, spec_body = parse_frontmatter(read(os.path.join(SKILLS, "spec", "SKILL.md")))
+        self.assertIn("/wavecoord:spec-import", spec_body)
 
     def test_rejects_ambiguous_yaml(self):
         for bad in ("---\nname: a: b\n---\n", "---\n- x\n---\n", "---\nname: [a]\n---\n", "no frontmatter",

@@ -259,6 +259,25 @@ def _prune(base, rel):
         d = os.path.dirname(d)
 
 
+def _diff(d, files, changes):
+    for rel in sorted(changes):
+        old = files.get(rel, "")
+        new = changes[rel] or ""
+        sys.stdout.writelines(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
+                                                   "a/%s/%s" % (d, rel) if rel in files else "/dev/null",
+                                                   "b/%s/%s" % (d, rel) if changes[rel] is not None else "/dev/null"))
+
+
+def _write_changes(base, changes):
+    for rel, text in sorted(changes.items()):
+        if text is not None:
+            _write(os.path.join(base, rel), text)
+    for rel, text in sorted(changes.items()):
+        if text is None and os.path.exists(os.path.join(base, rel)):
+            os.remove(os.path.join(base, rel))
+            _prune(base, rel)
+
+
 def run_ops(args, ops, coordinator=False):
     """Apply ops to the working tree, or print the diff (--dry-run; with --ref, against that ref, for example
     origin/main or a plan branch). `coordinator` only for migrate-plan."""
@@ -268,20 +287,9 @@ def run_ops(args, ops, coordinator=False):
     changes, moves, problems = apply_ops(files, ops, coordinator=coordinator)
     base = os.path.join(root, d)
     if args.dry_run:
-        for rel in sorted(changes):
-            old = files.get(rel, "")
-            new = changes[rel] or ""
-            sys.stdout.writelines(difflib.unified_diff(old.splitlines(True), new.splitlines(True),
-                                                       "a/%s/%s" % (d, rel) if rel in files else "/dev/null",
-                                                       "b/%s/%s" % (d, rel) if changes[rel] is not None else "/dev/null"))
+        _diff(d, files, changes)
         return 0
-    for rel, text in sorted(changes.items()):
-        if text is not None:
-            _write(os.path.join(base, rel), text)
-    for rel, text in sorted(changes.items()):
-        if text is None and os.path.exists(os.path.join(base, rel)):
-            os.remove(os.path.join(base, rel))
-            _prune(base, rel)
+    _write_changes(base, changes)
     warnings = [p for p in problems if p.level == "warning"]
     if args.json:
         _print({"changed": sorted(r for r, t in changes.items() if t is not None),
@@ -448,6 +456,95 @@ def _migrate_states(args, root, ids):
     return {n["id"]: n["state"] for n in out.get("nodes") or [] if n.get("id") in want and n.get("state")}
 
 
+
+def _inside(path, folder):
+    path, folder = os.path.realpath(path), os.path.realpath(folder)
+    return path == folder or path.startswith(folder.rstrip(os.sep) + os.sep)
+
+
+def _import_report(rep, problems, d, cfg_dir, up_to_date=False):
+    """The import's report as text lines (docs/import.md)."""
+    c = rep["created"]
+    kinds = ", ".join("%d %s" % (c[k], k if c[k] == 1 else k + "s") for k in
+                      ("capability", "feature", "requirement", "task", "decision") if c.get(k))
+    out = ["import from %s into %s/%s: %s (draft)%s" % (rep["from"], d, rep["into"], kinds,
+                                                       "; already imported, nothing changed" if up_to_date else "")]
+    if rep["flags"]:
+        out.append("flagged for a person (%d):" % len(rep["flags"]))
+        for f in rep["flags"]:
+            out.append("  %-15s %s: %s%s" % (f["kind"], f["id"] or "-", f["msg"],
+                                             " [%s]" % f["source"] if f["source"] else ""))
+    for v in rep["verify"]:
+        out.append("warning %s: %s" % (v["id"], v["msg"]))
+    for i in rep["info"]:
+        out.append("note: %s" % i)
+    errs = [p for p in problems if p.level == "error"]
+    out.append("check: %d errors, %d warnings (wavecoord spec check lists them)" % (
+        len(errs), len(problems) - len(errs)))
+    out.append("next:")
+    out.append("  1. Review the records and fix what is flagged; the source files are untouched.")
+    out.append("  2. Add a Verify command to each requirement, then approve the requirements and activate the"
+               " capability and features in the plan PR.")
+    n = 3
+    if cfg_dir != d:
+        out.append("  3. Set \"spec\": {\"dir\": \"%s\"} in .claude/wavecoord.json so the lead reads this tree." % d)
+        n = 4
+    out.append("  %d. Commit %s/ as a plan PR (or run /wavecoord:spec-import in the lead), merge it, then"
+               " /wavecoord:wave-plan %s plans the tasks." % (n, d, rep["into"]))
+    return out
+
+
+def w_import(args):
+    """Read another spec-driven setup (Spec Kit, Kiro, OpenSpec) and write it as records under one capability."""
+    from . import importers
+    if getattr(args, "ref", None) and not args.dry_run:
+        raise CliError("writes change the working tree, not --ref (--dry-run checks against a ref)")
+    root = _root(args)
+    src = os.path.abspath(args.src) if args.src else root
+    d = spec_dir(root, args.dir)
+    cfg_dir = spec_dir(root)
+    cap = args.into or args.source
+    for sd in importers.source_dirs(args.source, src):
+        if _inside(sd, os.path.join(root, d)):
+            raise CliError("the %s files in %s are inside the spec dir %s/: import into another folder (--dir"
+                           " docs/specs, then set \"spec\": {\"dir\": \"docs/specs\"} in .claude/wavecoord.json),"
+                           " or move the %s folder and pass --src (docs/import.md)" % (
+                               args.source, os.path.relpath(sd, root), d, args.source))
+    try:
+        ops, rep = importers.build(args.source, src, root, cap, args.granularity)
+    except importers.ImportFailed as e:
+        raise CliError(str(e))
+    _, _, files = load(args)
+    mine = {r: t for r, t in files.items() if r.startswith(cap + "/")}
+    rest = {r: t for r, t in files.items() if r not in mine}
+    changes, _, problems = apply_ops(rest, ops)
+    new = {r: t for r, t in changes.items() if t is not None}
+    up_to_date = False
+    if mine:
+        if mine != new:
+            raise CliError("%s/%s exists and differs from this import: import into another capability (--into),"
+                           " or delete it first (wavecoord spec delete %s --force)" % (d, cap, cap))
+        up_to_date, changes = True, {}
+    lines = _import_report(rep, problems, d, cfg_dir, up_to_date)
+    warnings = [p.to_json() for p in problems if p.level == "warning"]
+    if args.dry_run:
+        if args.json:
+            _print({"ops": ops, "files": sorted(changes), "report": rep, "warnings": warnings,
+                    "up_to_date": up_to_date})
+        else:
+            _diff(d, files, changes)
+            sys.stderr.write("\n".join(lines) + "\n")
+        return 0
+    _write_changes(os.path.join(root, d), changes)
+    if args.json:
+        _print({"changed": sorted(changes), "report": rep, "warnings": warnings, "up_to_date": up_to_date})
+    else:
+        for rel in sorted(changes):
+            print("wrote   %s/%s" % (d, rel))
+        print("\n".join(lines))
+    return 0
+
+
 # ------------------------------------------------------------------ parser
 
 def register(sub):
@@ -527,4 +624,11 @@ def register(sub):
     p.add_argument("--states", metavar="FILE", help="the coordinator's task states, JSON {task: state} (- reads"
                                                     " stdin); default: ask the coordinator")
     p.add_argument("--no-coord", action="store_true", help="no coordinator state: no task of the plan ever ran")
+    p = add("import", w_import, "import Spec Kit, Kiro or OpenSpec files as draft records (docs/import.md)",
+            write=True)
+    p.add_argument("--from", dest="source", required=True, choices=["speckit", "kiro", "openspec"])
+    p.add_argument("--src", help="the folder that holds the other tool's files (default: the repo root)")
+    p.add_argument("--into", help="the capability to create (default: the --from name)")
+    p.add_argument("--granularity", choices=["criterion", "story"], default="criterion",
+                   help="Kiro: one requirement per acceptance criterion (default) or per user story")
     return sub

@@ -189,7 +189,12 @@ wavecoord spec status-sync [--reset <task>]      write status now; --reset undoe
 wavecoord spec mv <old id> <new id>                (moving back to the old id is allowed)
 wavecoord spec delete <id>                       refused while referenced; --force also deletes children
 wavecoord spec migrate-plan --dry-run            move plan/tasks into the tree
+wavecoord spec import --from kiro --dry-run      import Spec Kit, Kiro or OpenSpec files (import.md)
 ```
+
+## Coming from another tool
+
+A project that uses GitHub Spec Kit, Amazon Kiro or OpenSpec can move its specs into the tree with `wavecoord spec import`, or in the lead session with `/wavecoord:spec-import`, which also reads PRDs and ADRs. The imported records are drafts that name their source files. [import.md](import.md) has the mapping for each tool and what it leaves for you.
 
 ## Moving a flat plan
 
