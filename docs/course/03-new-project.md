@@ -97,7 +97,7 @@ Before you merge, check that tasks in the same wave have disjoint `paths`, that 
 What you see: a table of the ready tasks it picks (and the ones it skips, with why), then `dispatch_wave`. Each task gets a lease on its paths and a worker in its own worktree and branch (`wave/<task>-1`). The skill arms a Monitor, so the workers' events arrive in your session.
 
 ```
-! wavecoord attempts ls --active
+! wavecoord attempts ls
 ```
 
 The workers run on their own for a few minutes; you can keep using the session meanwhile.

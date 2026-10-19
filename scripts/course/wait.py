@@ -3,6 +3,7 @@
 
     python3 wait.py idle --min 2        at least 2 attempts exist and none is in flight
     python3 wait.py running --min 1     at least 1 attempt is running
+    python3 wait.py started --min 4     at least 4 attempts exist, in any state (a fast worker may be done)
     python3 wait.py done --min 2        at least 2 tasks are `done` on origin's default branch
 
 Run it in the demo repo, with `wavecoord` on PATH (or WAVECOORD_BIN). Stdlib only.
@@ -30,6 +31,8 @@ def holds(cond, n, attempts=None, done=None):
     """Pure: does `cond` hold for these attempt rows (or this count of done tasks)?"""
     if cond == "idle":
         return len(attempts) >= n and all(a.get("state") in FINAL for a in attempts)
+    if cond == "started":
+        return len(attempts) >= n
     if cond == "running":
         return sum(1 for a in attempts if a.get("state") == "running") >= n
     if cond == "done":
@@ -39,7 +42,7 @@ def holds(cond, n, attempts=None, done=None):
 
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
-    ap.add_argument("cond", choices=("idle", "running", "done"))
+    ap.add_argument("cond", choices=("idle", "running", "started", "done"))
     ap.add_argument("--min", type=int, default=1)
     a = ap.parse_args(argv)
     try:

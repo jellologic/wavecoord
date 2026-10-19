@@ -434,6 +434,8 @@ class WaitTest(unittest.TestCase):
         a = [{"state": "running"}, {"state": "reported"}]
         self.assertFalse(wait.holds("idle", 1, attempts=a))
         self.assertTrue(wait.holds("running", 1, attempts=a))
+        self.assertTrue(wait.holds("started", 2, attempts=a))
+        self.assertFalse(wait.holds("started", 3, attempts=a))
         self.assertTrue(wait.holds("idle", 2, attempts=[{"state": "reported"}, {"state": "failed"}]))
         self.assertFalse(wait.holds("idle", 3, attempts=[{"state": "reported"}, {"state": "failed"}]))
         self.assertFalse(wait.holds("idle", 1, attempts=[]))

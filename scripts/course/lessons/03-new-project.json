@@ -184,7 +184,7 @@
       "say": "Each ready task got a lease on its files and a worker in its own worktree. A monitor now brings the workers' events into this session."
     },
     {
-      "type": "! wavecoord attempts ls --active",
+      "type": "! wavecoord attempts ls",
       "enter": true
     },
     {
@@ -250,7 +250,7 @@
       "enter": true
     },
     {
-      "wait_shell": "${COURSE_WAIT} running --min 2",
+      "wait_shell": "${COURSE_WAIT} started --min 4",
       "timeout": 900,
       "interval": 5,
       "optional": true
@@ -260,7 +260,7 @@
       "timeout": 900
     },
     {
-      "type": "! wavecoord attempts ls --active",
+      "type": "! wavecoord attempts ls",
       "enter": true
     },
     {
