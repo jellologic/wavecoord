@@ -33,6 +33,20 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
   - A non-forced flush never waits for a running one, and a forced one is queued behind it, so dispatch and the refinery do not stall. The status loop follows `spec.status_flush_s`.
 - **Bot commits** (status, `spec_edit`, `plan_edit`) do not run the consumer's git hooks, and their worktree add and remove take the worktree admin lock.
 - **`spec_edit`, `plan_edit`**: a reused branch that is merged, or whose PR is merged or closed, is refused; one without a PR gets one. A delete then a move into the freed id works. A move then a delete of the same record deletes it. Writes through a symlink under `spec.dir` are refused. The PR body reports the errors already on the base instead of "no errors".
+- **Spec tree in the lead.**
+  - The lead reads the spec tree only from the default branch, never from its working tree, so uncommitted spec files are never dispatched or pushed by a status commit.
+  - With no `plan.adapter`, the spec tree is the plan only when `spec.dir` on the default branch holds a valid record; a stray `specs/openapi.yaml` keeps the flat plan. The `config` tool shows the store in use (`plan.selected_by`) and the `spec` defaults.
+  - Coordinator state follows a task through its aliases: a moved task keeps its live or merged state (readiness, `plan_graph`, status commits) and is not dispatched again. `plan_get` and `dispatch` take a tree id or an alias.
+  - `conflicts_with` is enforced: a task is not ready while a task it conflicts with runs or is in review, and `dispatch_wave` never starts both.
+  - A task under a folder without `_node.md` no longer crashes `plan_graph`, `plan_get` or `plan_ready`; it is not ready, with a reason.
+  - A task left `in_progress` or `in_review` in the files with no live attempt is ready again.
+  - `attempt.start` records the task's `basis`; the worker prompt names the task that makes each input.
+  - `spec_tree` progress and `spec_query` use the coordinator's state.
+- **migrate-plan.**
+  - Carries the coordinator's state (`--states FILE`, `--no-coord`, else it asks the coordinator): merged tasks are `done`, running ones `in_progress`, in review `in_review`; `blocked` becomes `on_hold`.
+  - Keeps every old id as an alias (aliases may now hold any flat task id), fits long ids within 64 characters, and makes a valid tag of a phase that starts with `_`.
+  - Gives open tasks with overlapping paths `conflicts_with` instead of refusing the plan.
+  - The legacy requirement is approved and its capability and feature active, so the migrated tasks run; `docs/specs.md` says what to review and commit.
 
 ## 0.2.0
 

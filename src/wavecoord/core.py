@@ -90,7 +90,10 @@ def effective_config(repo, cfg):
         "auto_resolve": False,
         "auto_steer": "draft",
     }
+    spec = {"dir": "specs", "require_approved": True, "suspect": "warn", "verify_at_merge": True,
+            "status_commits": True, "status_flush_s": 60}
     out.update({k: v for k, v in cfg.items() if k != "$schema"})
+    out["spec"] = dict(spec, **(cfg.get("spec") or {}))
     if "wip_cap" not in out:
         out["wip_cap"] = sum(h.get("slots", 1) for h in out["hosts"])
     return out
@@ -567,7 +570,17 @@ class Coord(object):
 
     def config(self, ctx):
         self._require(ctx, *READ_ROLES)
-        return {"now": self.ts(), "config": effective_config(self.repo, self.cfg)}
+        out = effective_config(self.repo, self.cfg)
+        try:  # the plan store the lead uses: with no plan.adapter it depends on the default branch
+            from wavecoord.lead import lead_for
+            adapter, why = lead_for(self).plan_store()
+        except Exception:  # noqa: BLE001 - no consumer config or no repo: the defaults stand
+            adapter, why = None, None
+        if adapter == "specs":
+            out["plan"] = {"adapter": "specs", "dir": out["spec"]["dir"], "selected_by": why}
+        elif adapter:
+            out["plan"] = dict(out["plan"], adapter=adapter, selected_by=why)
+        return {"now": self.ts(), "config": out}
 
     # ----- heartbeat and finish -----
 

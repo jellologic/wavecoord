@@ -548,6 +548,9 @@ def prompt_from_spec(spec):
 
 def _artifact_line(a):
     src = (" from `%s`" % a["from"]) if a.get("from") else (" (external)" if a.get("external") else "")
+    made = [p for p in a.get("producers") or [] if p != a.get("from")]
+    if made:
+        src += " (made by %s)" % ", ".join("`%s`" % p for p in made)
     return "- `%s` (%s)%s%s" % (a["id"], a["kind"], src, (": " + a["contract"]) if a.get("contract") else "")
 
 

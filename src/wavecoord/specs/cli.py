@@ -1,7 +1,7 @@
 """`wavecoord spec ...`: read, check, format and change the spec tree (docs/specs.md).
 
-Offline: it reads the working tree (or a git ref with --ref) and never needs the
-coordinator. Every write goes through the op API (ops.py), so a change that
+Offline: it reads the working tree (or a git ref with --ref). Only status-sync,
+and migrate-plan (for the task states), ask the coordinator. Every write goes through the op API (ops.py), so a change that
 would leave the tree invalid writes nothing; --dry-run prints the diff instead.
 """
 
@@ -371,7 +371,12 @@ def w_migrate(args):
         raise CliError("plan/tasks has invalid specs: %s" % "; ".join("%s: %s" % (k, v[0]) for k, v in errors.items()))
     if not specs:
         raise CliError("no task specs in %s" % plan_dir(cfg_plan))
-    ops, ids = migrate.plan_ops(specs, args.into)
+    states = _migrate_states(args, root, [s["id"] for s in specs])
+    _, d, files = load(args)
+    try:
+        ops, ids = migrate.plan_ops(specs, args.into, states=states, taken_ids=Tree(files).nodes)
+    except migrate.MigrateError as e:
+        raise CliError(str(e))
     rc = run_ops(args, ops)
     if rc == 0 and not args.dry_run:
         pdir = os.path.join(root, plan_dir(cfg_plan))
@@ -383,7 +388,42 @@ def w_migrate(args):
         if not args.json:
             for old, new in sorted(ids.items()):
                 print("%s -> %s" % (old, new))
+            print("Commit %s/ (and the removal of the old files) and merge it as a plan PR: the lead then plans from"
+                  " the spec tree. The legacy requirement is approved and its capability and feature are active, so"
+                  " the tasks run as before; move them under real requirements with `wavecoord spec mv`." % d)
     return rc
+
+
+def _migrate_states(args, root, ids):
+    """The coordinator's effective state of each flat task: --states FILE, else the coordinator's plan graph."""
+    if args.states:
+        try:
+            if args.states == "-":
+                data = json.load(sys.stdin)
+            else:
+                with open(args.states, encoding="utf-8") as f:
+                    data = json.load(f)
+        except (OSError, ValueError) as e:
+            raise CliError("--states: %s" % e)
+        if not isinstance(data, dict):
+            raise CliError("--states: a JSON object {task: state}")
+        return data
+    if args.no_coord:
+        return {}
+    from wavecoord.cli import resolve_coord_url
+    from wavecoord.corecli import api
+    url = resolve_coord_url(cwd=root)
+    try:
+        status, out = api(url, "GET", "/api/plan/graph") if url else (None, None)
+    except OSError as e:
+        status, out = None, {"error": {"message": str(e)}}
+    if status != 200 or not isinstance(out, dict):
+        why = ((out or {}).get("error") or {}).get("message") or "no coordinator configured"
+        raise CliError("cannot read the coordinator's task states (%s): merged and running tasks would become"
+                       " planned. Start the coordinator, pass --states FILE, or --no-coord when no task of this"
+                       " plan ever ran" % why)
+    want = set(ids)
+    return {n["id"]: n["state"] for n in out.get("nodes") or [] if n.get("id") in want and n.get("state")}
 
 
 # ------------------------------------------------------------------ parser
@@ -459,4 +499,7 @@ def register(sub):
     p = add("migrate-plan", w_migrate, "move plan/tasks into the spec tree", write=True)
     p.add_argument("--into", default="legacy", help="the capability to create (default legacy)")
     p.add_argument("--keep", action="store_true", help="keep the old plan/tasks files")
+    p.add_argument("--states", metavar="FILE", help="the coordinator's task states, JSON {task: state} (- reads"
+                                                    " stdin); default: ask the coordinator")
+    p.add_argument("--no-coord", action="store_true", help="no coordinator state: no task of the plan ever ran")
     return sub

@@ -162,18 +162,37 @@ class LeadBase(object):
         return norm_dir((self.cfg().raw.get("spec") or {}).get("dir"))
 
     def spec_files(self):
-        """The spec tree's files on the default branch as fetched, else in the working tree."""
+        """The spec tree's files on the default branch as fetched. Never the working tree: the lead
+        dispatches from these files and the status commits write them back to the default branch."""
         from wavecoord.launcher.worktrees import REMOTE
         from wavecoord.specs import source
         self.fetch()
-        d = self.spec_dir()
+        ref = "refs/remotes/%s/%s" % (REMOTE, self.default_branch())
         try:
-            files = source.read_ref(self.repo, "refs/remotes/%s/%s" % (REMOTE, self.default_branch()), d)
-            if files:
-                return files
-        except (source.SourceError, ApiError):
-            pass
-        return source.read_tree(self.root(), d)
+            return source.read_ref(self.repo, ref, self.spec_dir())
+        except source.SourceError as e:
+            raise ApiError("unavailable", "cannot read the spec tree on %s: %s" % (ref, e))
+
+    @staticmethod
+    def has_records(files):
+        """Whether the files hold at least one record of the spec tree (a stray file does not count)."""
+        from wavecoord.specs.tree import Tree
+        return any(n.rec is not None for n in Tree(files).nodes.values()) if files else False
+
+    def plan_store(self):
+        """-> (adapter, why): the plan store in use (docs/adapters.md, `plan`)."""
+        p = self.cfg().raw.get("plan") or {}
+        if p.get("adapter") in ("commands", "specs", "builtin"):
+            return p["adapter"], "plan.adapter"
+        try:
+            files = self.spec_files()
+        except ApiError as e:
+            return "builtin", "no spec tree (%s)" % e.message
+        if self.has_records(files):
+            return "specs", "%s/ has spec records on the default branch" % self.spec_dir()
+        if files:
+            return "builtin", "%s/ has no spec records on the default branch; its files are ignored" % self.spec_dir()
+        return "builtin", "no %s/ on the default branch" % self.spec_dir()
 
     def spec_plan(self, files=None):
         from wavecoord.specs.plan import SpecTreePlan
@@ -189,9 +208,12 @@ class LeadBase(object):
             return CommandPlan(p.get("commands"), self.root())
         if p.get("adapter") == "specs":
             return self.spec_plan()
-        if p.get("adapter") is None:  # no adapter named: the spec tree when there is one (docs/specs.md)
-            files = self.spec_files()
-            if files:
+        if p.get("adapter") is None:  # no adapter named: the spec tree when it has records (docs/adapters.md)
+            try:
+                files = self.spec_files()
+            except ApiError:
+                files = {}
+            if self.has_records(files):
                 return self.spec_plan(files)
         d = plan_dir(p)
         self.fetch()
@@ -219,14 +241,25 @@ class LeadBase(object):
         out["wip"] = {"in_flight": len(self.in_flight(snap)), "cap": cap}
         return out
 
+    @staticmethod
+    def task_ids(plan, spec):
+        """The coordinator ids of a task: its id, and for the spec tree its aliases (a moved task)."""
+        ids = getattr(plan, "ids", None)
+        return ids(spec) if ids else [spec["id"]]
+
     def plan_get(self, task):
         snap = self.snapshot()
-        spec = self._plan_call(lambda: self.plan().get(task))
-        state = g.effective(spec["state"], self.states(snap).get(task))
-        lease = next((l for l in snap["leases"] if l["task"] == task and l["state"] != "released"), None)
+        plan = self.plan()
+        spec = self._plan_call(lambda: plan.get(task))
+        ids = self.task_ids(plan, spec)  # a tree id or an alias resolves to the task's coordinator id
+        states = self.states(snap)
+        rank = {"review": 1, "active": 2, "done": 3}
+        live = sorted((states[i] for i in ids if states.get(i)), key=lambda x: rank.get(x, 0))
+        state = g.effective(spec["state"], live[-1] if live else None)
+        lease = next((l for l in snap["leases"] if l["task"] in ids and l["state"] != "released"), None)
         return {"spec": spec, "state": state,
-                "proposals": [p for p in snap["proposals"] if p.get("task") == task and p["state"] == "open"],
-                "attempts": [a for a in snap["attempts"] if a["task"] == task],
+                "proposals": [p for p in snap["proposals"] if p.get("task") in ids and p["state"] == "open"],
+                "attempts": [a for a in snap["attempts"] if a["task"] in ids],
                 "lease": self.coord.render_lease(lease) if lease else None}
 
     def plan_graph(self):
@@ -265,18 +298,15 @@ class LeadBase(object):
         return Tree(self.spec_files())
 
     def _graph(self):
-        """The tree's graph, with the coordinator's states over the status in the files."""
-        from wavecoord.specs.graph import Graph
-        from wavecoord.specs.plan import COORD_STATE, tree_id
-        override = {tree_id(c): COORD_STATE[s] for c, s in self.states().items() if s in COORD_STATE}
-        return Graph(self._tree(), status_override=override)
+        """The tree's graph, with the coordinator's states over the status in the files (through aliases)."""
+        return self.spec_plan()._graph(self.states())
 
     def spec_tree(self, node=None):
         from wavecoord.specs import query
-        tree = self._tree()
-        if node and node not in tree.nodes:
+        gr = self._graph()
+        if node and node not in gr.t.nodes:
             raise ApiError("not_found", "no node %s" % node)
-        return {"tree": query.tree_view(tree, node)[0]}
+        return {"tree": query.tree_view(gr.t, node, status=gr.override)[0]}
 
     def spec_get(self, node):
         from wavecoord.specs import query
@@ -288,7 +318,9 @@ class LeadBase(object):
     def spec_query(self, expr):
         from wavecoord.specs import query
         try:
-            return {"records": [query.summary(n) for n in query.query(self._tree(), expr or "")]}
+            gr = self._graph()
+            return {"records": [query.summary(n, gr.override) for n in query.query(gr.t, expr or "",
+                                                                                  status=gr.override)]}
         except query.QueryError as e:
             raise ApiError("bad_request", str(e))
 
@@ -513,6 +545,8 @@ class LeadBase(object):
                  "provider": rec.get("provider")}
         if record:
             start.update({k: record[k] for k in ("resolver", "conflict_id") if k in record})
+        if t and t.get("basis"):
+            start["basis"] = t["basis"]  # the fingerprint the run was planned on (design 9.4)
         self.coord.record(self.ctx, "attempt.start", start, spec["id"], rec["attempt"],
                           idem="attempt-start:%s" % rec["agent"])
         return {"task": spec["id"], "attempt": rec["attempt"], "id": rec["id"], "host": rec["host"],
@@ -529,6 +563,7 @@ class LeadBase(object):
         """Start one attempt of one task (dispatch tool)."""
         overrides = dict(overrides or {})
         spec = self._plan_call(lambda: self.plan().get(task))
+        task = spec["id"]  # a tree id or an alias names the task by its coordinator id from here on
         with self.dispatch_lock:
             snap = self.snapshot()
             d = self.decide(spec, host, overrides, snap)
@@ -542,7 +577,9 @@ class LeadBase(object):
         """Start every ready, non-overlapping task up to wip_cap (dispatch_wave tool)."""
         with self.dispatch_lock:
             snap = self.snapshot()
-            ready = self._plan_call(lambda: self.plan().ready(self.states(snap), snap["live"]))
+            plan = self.plan()
+            ready = self._plan_call(lambda: plan.ready(self.states(snap), snap["live"]))
+            clash = getattr(plan, "clash", None)  # the spec tree: predicate P (conflicts_with) between picks
             cands = ready["tasks"]
             skipped = []
             if tasks:
@@ -562,6 +599,10 @@ class LeadBase(object):
                 hit = next((p for p in picked if g.specs_overlap(s, p)), None)
                 if hit:
                     skipped.append({"task": s["id"], "why": "overlaps %s in this wave" % hit["id"]})
+                    continue
+                why = next((w for w in (clash(s, p) for p in picked) if w), None) if clash else None
+                if why:
+                    skipped.append({"task": s["id"], "why": "%s in this wave" % why})
                     continue
                 picked.append(s)
             done, stop = [], None
