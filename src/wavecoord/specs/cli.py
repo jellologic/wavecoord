@@ -343,7 +343,7 @@ def w_apply(args):
 
 def r_status_sync(args):
     from wavecoord.leadcli import _call
-    out = _call("POST", "/api/spec/status")
+    out = _call("POST", "/api/spec/status", {"reset": args.reset} if getattr(args, "reset", None) else None)
     out.pop("now", None)
     if args.json:
         _print(out)
@@ -453,7 +453,9 @@ def register(sub):
     p.add_argument("steps", nargs="+")
     p = add("apply", w_apply, "apply ops from a JSON file (schemas/spec-ops.schema.json); - reads stdin", write=True)
     p.add_argument("file")
-    add("status-sync", r_status_sync, "ask the coordinator to write every task's status into the tree now")
+    p = add("status-sync", r_status_sync, "ask the coordinator to write every task's status into the tree now")
+    p.add_argument("--reset", action="append", metavar="TASK", default=[],
+                   help="set this done task back to planned when the coordinator has no merge for it (repeatable)")
     p = add("migrate-plan", w_migrate, "move plan/tasks into the spec tree", write=True)
     p.add_argument("--into", default="legacy", help="the capability to create (default legacy)")
     p.add_argument("--keep", action="store_true", help="keep the old plan/tasks files")

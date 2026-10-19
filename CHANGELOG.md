@@ -21,6 +21,18 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - A Verify or Acceptance command with a trailing `# comment` no longer fails every merge.
 - Predicate S applies only when the repo uses the spec tree, so a flat-plan repo with its own `specs/` folder is not refused with `spec_change`.
 - `spec.dir` values such as `./specs`, `specs/.` or `docs//specs` no longer cut characters off the record ids; the schema now rejects `.`, `..` and `//` in it.
+- **Status commits** (`docs/specs.md`, Status; `docs/design/spec-layer.md` 7.2):
+  - The writer reads the task files at the exact sha it commits on, never at a moving ref or the working tree, and refuses a write that changes more than the `status:` line. A plan PR merged during a flush is no longer reverted.
+  - The status line is found in any form the parser reads: quotes, a trailing comment (kept), CRLF (kept).
+  - The writer writes only over `planned`, `in_progress` and `in_review`; `draft`, `on_hold` and `dropped` are never overwritten, also while an attempt runs (listed under `held`).
+  - A parked lease counts as `in_review` only when its attempt has a PR.
+  - `spec status-sync --reset <task>` (and `spec_status_sync` `reset`) sets a rolled-back `done` back to `planned` when the coordinator has no merged attempt.
+  - The status PR: the branch `wavecoord/status` is no longer deleted under its open PR; it is force-pushed with a lease and rebuilt only when the base or the changes move. A merged or closed status PR is replaced. `merge_cmd` gets `WAVECOORD_PR`, `WAVECOORD_SHA` and the other variables, as in the refinery.
+  - A push failure is classified: a lost race is retried after a fetch with backoff, a refusal goes to the status PR, anything else is blocked.
+  - A flush never raises, so `dispatch`, `collect` and `refinery_merge` no longer fail after their side effects. `spec.status_blocked` is logged once per distinct reason.
+  - A non-forced flush never waits for a running one, and a forced one is queued behind it, so dispatch and the refinery do not stall. The status loop follows `spec.status_flush_s`.
+- **Bot commits** (status, `spec_edit`, `plan_edit`) do not run the consumer's git hooks, and their worktree add and remove take the worktree admin lock.
+- **`spec_edit`, `plan_edit`**: a reused branch that is merged, or whose PR is merged or closed, is refused; one without a PR gets one. A delete then a move into the freed id works. A move then a delete of the same record deletes it. Writes through a symlink under `spec.dir` are refused. The PR body reports the errors already on the base instead of "no errors".
 
 ## 0.2.0
 

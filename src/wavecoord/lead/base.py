@@ -130,15 +130,19 @@ class LeadBase(object):
                     "refinery": [dict(r) for r in st.values("refinery")]}
 
     def states(self, snap=None):
-        """task -> effective state from the coordinator: merged -> done; a parked lease -> review;
-        a live lease or an attempt in flight -> active."""
+        """task -> effective state from the coordinator: merged -> done; a parked lease whose attempt has a PR
+        -> review (without a PR, not yet opened or refused: active); a live lease or an attempt in flight -> active."""
         snap = snap or self.snapshot()
         out = {}
+        prs = {(a["task"], a.get("n")) for a in snap["attempts"] if a.get("pr_url")}
         for l in snap["leases"]:
             if l["state"] in ("active", "stale"):
                 out[l["task"]] = "active"
-            elif l["state"] == "parked" and l.get("reason") != PARKED_FAILED:
-                out.setdefault(l["task"], "review")  # a failed run's parked lease is no review
+            elif l["state"] == "parked" and l.get("reason") != PARKED_FAILED:  # a failed run's is no review
+                if (l["task"], l.get("attempt")) in prs:
+                    out.setdefault(l["task"], "review")
+                else:
+                    out[l["task"]] = "active"
         for a in snap["attempts"]:
             if a["state"] in IN_FLIGHT:
                 out[a["task"]] = "active"
@@ -246,7 +250,7 @@ class LeadBase(object):
 
         try:
             out = git_plan_edit(self.repo, plan_dir(p), edits, branch=branch, pr=pr, title=title, body=body,
-                                wt_root=os.path.join(L.index_dir(), "plan-wt"))
+                                wt_root=os.path.join(L.index_dir(), "plan-wt"), pr_state=self.plan_pr_state)
         except EditError as e:
             raise ApiError("bad_request", str(e))
         except LauncherError as e:
@@ -310,15 +314,31 @@ class LeadBase(object):
             self._status = StatusWriter(self)
         return self._status
 
-    def status_flush(self, force=False):
-        """Write task status into the spec tree (docs/specs.md, Status); a no-op without a spec tree."""
-        from wavecoord.specs.plan import SpecTreePlan
+    def status_flush(self, force=False, wait=False, reset=None):
+        """Write task status into the spec tree (docs/specs.md, Status); a no-op without a spec tree. Never raises
+        (it runs after dispatch, collect and merges, whose side effects have happened): a failure is
+        spec.status_blocked. `wait`: wait for a running flush instead of queueing behind it. `reset`: tasks whose
+        `done` goes back when the coordinator has no merged attempt (a rolled-back merge); unknown ids raise."""
+        from wavecoord.specs.plan import SpecTreePlan, tree_id
+        if reset:
+            tree = self._tree()
+            bad = [r for r in reset if not isinstance(r, str) or getattr(
+                tree.nodes.get(tree_id(r)), "kind", None) != "task"]
+            if bad:
+                raise ApiError("bad_request", "reset: no task %s" % ", ".join(str(b) for b in bad))
         try:
             if not isinstance(self.plan(), SpecTreePlan):
                 return {"skipped": "no spec tree"}
-            return self.status_writer().flush(force)
+            return self.status_writer().flush(force, wait=wait, reset=reset or ())
         except ApiError as e:
             return {"skipped": e.message}
+        except Exception as e:  # noqa: BLE001 - see above
+            return {"skipped": "%s: %s" % (type(e).__name__, e)}
+
+    def plan_pr_state(self, branch):
+        """(OPEN, MERGED, CLOSED or None, error) of a plan branch's PR, by pr_state_cmd with the branch as {pr}."""
+        st, merged_at, err = self.pr_state(branch, branch)
+        return ("MERGED" if merged_at else st), err
 
     def spec_edit(self, ops, branch=None, title=None, body=None):
         """Spec tree ops on a plan/<n> branch, one commit, and a PR on a new branch (like plan_edit)."""
@@ -331,7 +351,7 @@ class LeadBase(object):
 
         try:
             out = git_spec_edit(self.repo, self.spec_dir(), ops, branch=branch, pr=pr, title=title, body=body,
-                                wt_root=os.path.join(L.index_dir(), "plan-wt"))
+                                wt_root=os.path.join(L.index_dir(), "plan-wt"), pr_state=self.plan_pr_state)
         except EditError as e:
             raise ApiError("bad_request", str(e))
         except LauncherError as e:

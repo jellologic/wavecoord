@@ -58,7 +58,7 @@ Each command gets the JSON of the `stdin` column and must print the JSON of the 
 | `anchor` | Exact text. It must occur exactly once, or `occurrence` (from 1) picks one; a missing or ambiguous anchor fails the call |
 | `text` | The new text |
 
-The edits apply in order, in memory. Every changed file must still be a valid spec with `id` equal to its file name. Any failure fails the whole call and writes nothing. Then wavecoord fetches `origin`, adds a detached worktree at `origin/<default>` (or at `origin/<branch>` for an existing plan branch), writes the files, commits once, pushes only `refs/heads/plan/<n>` (`n` is one more than any `plan/<number>` on origin or local), removes the worktree, and runs `pr_cmd` on the lead machine for a new branch. An edit on an existing branch adds a commit to its PR. The default branch is never written.
+The edits apply in order, in memory. Every changed file must still be a valid spec with `id` equal to its file name. Any failure fails the whole call and writes nothing. Then wavecoord fetches `origin`, adds a detached worktree at `origin/<default>` (or at `origin/<branch>` for an existing plan branch), writes the files, commits once, pushes only `refs/heads/plan/<n>` (`n` is one more than any `plan/<number>` on origin or local), removes the worktree, and runs `pr_cmd` on the lead machine for a new branch. An edit on an existing branch adds a commit to its PR; the branch is refused when it is already merged into the default branch, or when `pr_state_cmd` (with the branch as `{pr}`) says its PR is merged or closed, and gets a PR when it has none. The commit does not run your git hooks. The default branch is never written.
 
 ## PR state command
 

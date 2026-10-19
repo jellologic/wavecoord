@@ -19,6 +19,8 @@ Everything wavecoord knows is in git, so every change can be undone with git.
 
 `wavecoord rebuild --at <sha>` rolls state back to a `coord/log` commit. It appends one `revert` event with `payload.to_seq` (the last seq in that commit). From then on the fold is: the state after `to_seq`, then the events after the `revert` event. The events in between stay on the branch as history. These exceptions keep fencing safe: `last_epoch` per task keeps its maximum seen value; any lease granted after `to_seq` is released with reason `rollback`, so its holder sees it in `lost` and stops; and a lease released after `to_seq` stays released (its holder was already told to stop). Id counters, agent host bindings and used `idem` keys are also kept.
 
+A status commit already wrote `done` into the spec tree for a merge that you roll back this way (or with a `git revert` of the merge). Run `wavecoord spec status-sync --reset <task>` to set it back to `planned` (`specs.md`, Status).
+
 ## Invariant tested in CI
 
 For random sequences of operations: `rebuild --at <sha>` gives the same state as folding the log prefix up to `<sha>` (apart from the two fencing exceptions), and replay of the full log gives the same state as the live cache.
