@@ -1,0 +1,79 @@
+{
+  "title": "Proof take: Claude Code in a demo repo",
+  "cwd": "$COURSE_DEMO_DIR",
+  "command": [
+    "claude",
+    "--model",
+    "haiku",
+    "--permission-mode",
+    "default"
+  ],
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 45,
+      "idle": 1.5
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 30,
+      "idle": 2.0
+    }
+  ],
+  "steps": [
+    {
+      "say": "This is Claude Code, running in a small demo repository."
+    },
+    {
+      "type": "/help",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)esc|commands",
+      "timeout": 20,
+      "idle": 1.5
+    },
+    {
+      "say": "The help screen lists the commands and shortcuts. Escape closes it."
+    },
+    {
+      "key": "escape"
+    },
+    {
+      "idle": 1.0,
+      "timeout": 10,
+      "optional": true
+    },
+    {
+      "say": "Now one short prompt.",
+      "wait": false
+    },
+    {
+      "type": "list the files here",
+      "enter": true
+    },
+    {
+      "wait_for": "hello\\.py",
+      "timeout": 90,
+      "idle": 2.5
+    },
+    {
+      "say": "Claude looked at the folder and answered: a readme and a hello dot py script."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 10
+    }
+  ]
+}

@@ -122,7 +122,7 @@ In short, as the terminal shows it (a demo repo with fake workers):
 /wavecoord:coord-status
 ```
 
-You see `ok: http://127.0.0.1:18741 version=0.3.0 api=1`, then the attempts in flight, the merge queue, open conflicts and ready tasks. Anything else (`not configured`, `unreachable`) is a setup problem: see the [quickstart](quickstart.md).
+You see `ok: http://127.0.0.1:18741 version=0.3.0 api=1`, then the attempts in flight, the merge queue, open conflicts and ready tasks. Anything else (`not configured`, `unreachable`) is a setup problem: run `/wavecoord:setup` (or `wavecoord doctor` in a terminal). It checks every prerequisite, from `git`, `gh` and the claude login to the plugin options, the coordinator and the tokens, and prints the command that fixes each problem. `wavecoord init` sets up what is missing without changing what is there ([quickstart](quickstart.md)).
 
 ![wavecoord status](img/status.svg)
 
@@ -407,7 +407,7 @@ Retry rules that keep waves healthy: at most 2 attempts per task without you; ea
     "labels": ["python3"]}
    ```
 3. **Give it a token**: `wavecoord tokens provision --role agent --host build-1 --out ~/.wavecoord/hosts/build-1.token`. The launcher copies it to the host's `~/.wavecoord/token` over ssh, never on a command line.
-4. **Probe it**: `wavecoord hosts` shows slots, memory, disk, the claude version and whether the host can authenticate a worker.
+4. **Probe it**: `wavecoord hosts` shows slots, memory, disk, the claude version and whether the host can authenticate a worker. `wavecoord doctor` checks the host's token file and probes it too.
 
 The launcher uploads the pinned zipapp and plugin itself, and opens an `ssh -R` tunnel so the worker reaches the loopback coordinator. Before it launches, it checks that the server on the tunnel port is really the coordinator. Prefer single-user worker hosts.
 
@@ -444,7 +444,9 @@ Details: [rollback.md](rollback.md).
 
 ## 9. FAQ and pitfalls
 
-**`wavecoord status` says `not configured`.** The terminal has no plugin option. Set `coord_url` in `.claude/wavecoord.json` or export `WAVECOORD_URL`.
+**Something in the setup is off.** Run `wavecoord doctor`: one line per prerequisite, with the fix for each `fail` and `warn`. `wavecoord init` adds what is missing (config keys, tokens, with `--server` the service, with `--configure-plugin` the plugin options) and never changes a config key or a token that is there.
+
+**`wavecoord status` says `not configured`.** The terminal has no plugin option. Set `coord_url` in `.claude/wavecoord.json` (`wavecoord init` does) or export `WAVECOORD_URL`.
 
 **Nothing is dispatched from my spec tree.** Check `config`: `plan.selected_by` must name the spec tree. A `"plan": {"adapter": "builtin"}` in your config pins `plan/tasks`; remove it. The tree must be merged on the default branch: the lead never reads your working tree.
 
@@ -463,6 +465,8 @@ Details: [rollback.md](rollback.md).
 **A plugin update did not change the server.** The service runs a pinned copy. Run `wavecoord install-server` again.
 
 ### Upgrading to 0.3.0
+
+Run `wavecoord doctor` after the upgrade: it flags an old plugin, a service pinned to an old build, an unset plugin option and a config that is not on the default branch, each with its fix.
 
 - **Set the plugin option `coord_url`.** It has no default now. The hooks act only in a repo with `.claude/wavecoord.json` or with `WAVECOORD_URL` set, so other repos no longer talk to the coordinator.
 - **Add `coord_url` to `.claude/wavecoord.json`** if you use the terminal CLI there (`status`, `hint`, `steer`, `events`).

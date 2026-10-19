@@ -13,7 +13,8 @@ PLUGIN = os.path.join(_paths.ROOT, "plugin")
 SKILLS = os.path.join(PLUGIN, "skills")
 AGENTS = os.path.join(PLUGIN, "agents")
 TOOL_PREFIX = "mcp__plugin_wavecoord_wavecoord__"
-EXPECTED_SKILLS = {"coord-status", "wave-plan", "wave-run", "triage", "revise", "resolve", "spec", "spec-import"}
+EXPECTED_SKILLS = {"coord-status", "wave-plan", "wave-run", "triage", "revise", "resolve", "spec", "spec-import",
+                   "setup"}
 EXPECTED_AGENTS = {"planner", "reviewer", "steerer"}
 BUILTIN_TOOLS = {"Read", "Grep", "Glob", "Monitor", "Bash", "Edit", "Write", "Agent", "WebFetch"}
 PLUGIN_AGENT_IGNORED = ("hooks", "mcpServers", "permissionMode", "initialPrompt")
@@ -307,6 +308,32 @@ class ParserTest(unittest.TestCase):
             self.assertIn(word, body)
         _, spec_body = parse_frontmatter(read(os.path.join(SKILLS, "spec", "SKILL.md")))
         self.assertIn("/wavecoord:spec-import", spec_body)
+
+    def test_setup_allows_exactly_what_it_runs(self):
+        """/wavecoord:setup pre-approves only doctor, init, status and read-only git, and each of them is used;
+        every `wavecoord ...` or `git ...` command in its body is covered by one of them."""
+        fm, body = parse_frontmatter(read(os.path.join(SKILLS, "setup", "SKILL.md")))
+        allowed = fm["allowed-tools"]
+        self.assertEqual(set(allowed), {"Bash(wavecoord doctor)", "Bash(wavecoord doctor *)", "Bash(wavecoord init *)",
+                                        "Bash(wavecoord status)", "Bash(git status *)", "Bash(git diff *)"})
+        cmds = re.findall(r"`((?:wavecoord|git) [^`]*)`", body)
+        cmds += [l.strip() for l in body.splitlines() if re.match(r"^(wavecoord|git) ", l.strip())]
+        self.assertGreater(len(cmds), 4)
+
+        def covers(pattern, cmd):
+            p = pattern[len("Bash("):-1]
+            return cmd == p[:-2] or cmd.startswith(p[:-1]) if p.endswith(" *") else cmd == p
+        for cmd in cmds:
+            self.assertTrue(any(covers(p, cmd) for p in allowed), cmd)
+        for p in allowed:
+            self.assertTrue(any(covers(p, c) for c in cmds), "%s is allowed but never used" % p)
+        self.assertIn("--show-token", body)  # named only to forbid it
+        self.assertIn("never with `--show-token`", body)
+        from wavecoord.cli import build_parser
+        import shlex
+        for cmd in cmds:
+            if cmd.startswith("wavecoord "):
+                build_parser().parse_args(shlex.split(cmd)[1:])
 
     def test_rejects_ambiguous_yaml(self):
         for bad in ("---\nname: a: b\n---\n", "---\n- x\n---\n", "---\nname: [a]\n---\n", "no frontmatter",
