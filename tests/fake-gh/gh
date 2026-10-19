@@ -2,7 +2,8 @@
 """A fake `gh` for tests: `gh pr create|view|edit|merge`, against the repo's origin. Stdlib only.
 
   gh pr view <n|url|branch> --json body
-                                      prints {"body", "baseRefName", "headRefName", "state", "mergedAt", "url", ...}
+                                      prints {"body", "baseRefName", "headRefName", "headRefOid", "state",
+                                      "mergedAt", "url"} (headRefOid: the head branch's commit on origin)
                                       (state OPEN, MERGED or CLOSED; a test may set "state" in the file)
   gh pr edit <n|url> --body-file F    replaces the PR body
 
@@ -79,7 +80,13 @@ def main(argv):
                 return 1
             pr = st["prs"][n - 1]
             if argv[1] == "view":
-                print(json.dumps({"body": pr["body"], "baseRefName": pr["base"], "headRefOid": pr.get("sha", ""),
+                sha = pr.get("sha", "")
+                if not sha and pr["state"] == "open":  # as gh: the head branch's commit on origin
+                    origin = git(["remote", "get-url", "origin"], os.getcwd(), check=False).stdout.strip()
+                    ls = git(["ls-remote", origin, "refs/heads/" + pr["head"]], os.getcwd(),
+                             check=False).stdout.split() if origin else []
+                    sha = ls[0] if ls else ""
+                print(json.dumps({"body": pr["body"], "baseRefName": pr["base"], "headRefOid": sha,
                                   "headRefName": pr["head"], "state": pr["state"].upper(),
                                   "url": "https://example.invalid/pull/%d" % n,
                                   "mergedAt": pr.get("merged_at") or (

@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="664" height="154" viewBox="0 0 664 154" role="img" aria-label="wavecoord attempts ls">
+<title>wavecoord attempts ls</title>
+<rect width="664" height="154" rx="10" ry="10" fill="#1e1e2e"/>
+<path d="M0 10 a10 10 0 0 1 10 -10 h644 a10 10 0 0 1 10 10 v18 h-664 z" fill="#313244"/>
+<circle cx="18" cy="14" r="6" fill="#f38ba8"/>
+<circle cx="38" cy="14" r="6" fill="#f9e2af"/>
+<circle cx="58" cy="14" r="6" fill="#a6e3a1"/>
+<text x="332" y="18.5" fill="#9399b2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="12" text-anchor="middle">wavecoord attempts ls</text>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="13" fill="#cdd6f4" xml:space="preserve" style="white-space:pre">
+<text x="16" y="52" xml:space="preserve"><tspan fill="#a6e3a1" font-weight="bold">$ </tspan><tspan font-weight="bold">wavecoord attempts ls</tspan></text>
+<text x="16" y="70" xml:space="preserve">ATTEMPT                      HOST       STATE      TURNS    COST     PR / NOTE</text>
+<text x="16" y="88" xml:space="preserve">notes.search.words.index-1   local      running    -        -        </text>
+<text x="16" y="106" xml:space="preserve">notes.search.words.tokens-1  local      reported   1        0.12     </text>
+<text x="16" y="124" xml:space="preserve">notes.sync.queue.store-1     local      reported   1        0.38     </text>
+</g></svg>

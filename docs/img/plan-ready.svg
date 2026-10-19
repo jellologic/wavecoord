@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="680" height="208" viewBox="0 0 680 208" role="img" aria-label="wavecoord spec ready">
+<title>wavecoord spec ready</title>
+<rect width="680" height="208" rx="10" ry="10" fill="#1e1e2e"/>
+<path d="M0 10 a10 10 0 0 1 10 -10 h660 a10 10 0 0 1 10 10 v18 h-680 z" fill="#313244"/>
+<circle cx="18" cy="14" r="6" fill="#f38ba8"/>
+<circle cx="38" cy="14" r="6" fill="#f9e2af"/>
+<circle cx="58" cy="14" r="6" fill="#a6e3a1"/>
+<text x="340" y="18.5" fill="#9399b2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="12" text-anchor="middle">wavecoord spec ready</text>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="13" fill="#cdd6f4" xml:space="preserve" style="white-space:pre">
+<text x="16" y="52" xml:space="preserve"><tspan fill="#a6e3a1" font-weight="bold">$ </tspan><tspan font-weight="bold">wavecoord spec ready</tspan></text>
+<text x="16" y="70" xml:space="preserve">ready      notes/search/words/index</text>
+<text x="16" y="88" xml:space="preserve">ready      notes/search/words/tokens</text>
+<text x="16" y="106" xml:space="preserve">ready      notes/sync/queue/store</text>
+<text x="16" y="124" xml:space="preserve">not ready  notes/search/words/query: needs not done: notes/search/words/index</text>
+<text x="16" y="142" xml:space="preserve">not ready  notes/sync/merge/keep-both: needs not done: notes/sync/queue/replay, </text>
+<text x="16" y="160" xml:space="preserve">notes/sync/queue/store</text>
+<text x="16" y="178" xml:space="preserve">not ready  notes/sync/queue/replay: needs not done: notes/sync/queue/store</text>
+</g></svg>
