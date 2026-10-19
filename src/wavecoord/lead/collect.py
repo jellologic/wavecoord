@@ -38,10 +38,19 @@ class CollectMixin(object):
         except LauncherError as e:
             raise ApiError("unavailable", str(e))
 
-    def changed_files(self, branch, default=None):
+    def changed_files(self, branch, default=None, strict=True):
+        """The net diff of origin/<branch> against origin/<default>, with the fence diff flags: a rename lists
+        the old and the new name (a moved protected file is a protected path), and a submodule change is a path.
+        A git error raises ApiError unavailable (strict) or gives [] (strict False: an overview only)."""
+        from wavecoord import fence
         default = default or self.default_branch()
-        rc, out, _ = git_run(["diff", "--name-only", "%s...%s" % (self._ref(default), self._ref(branch))], self.repo)
-        return [l for l in out.splitlines() if l.strip()] if rc == 0 else []
+        rc, out, err = git_run(fence.DIFF_GIT_CONFIG + ["diff", "--name-only"] + fence.DIFF_RENAME_FLAGS +
+                               ["-z", "%s...%s" % (self._ref(default), self._ref(branch))], self.repo)
+        if rc != 0:
+            if not strict:
+                return []
+            raise ApiError("unavailable", "git diff %s...%s failed: %s" % (default, branch, (err or out)[-300:]))
+        return sorted(set(p for p in out.split("\0") if p.strip()))
 
     # ----- collect -----
 
@@ -254,7 +263,7 @@ class CollectMixin(object):
             key = "%s/%d" % (a["task"], a["n"])
             if files:
                 merge.append({"task": a["task"], "attempt": a["n"], "branch": a["branch"], "files": files})
-            for f in self.changed_files(a["branch"], default):
+            for f in self.changed_files(a["branch"], default, strict=False):
                 touched.setdefault(f, []).append(key)
         hot = [{"file": f, "attempts": ks, "source": "branches"} for f, ks in sorted(touched.items()) if len(ks) > 1]
         holders = {}

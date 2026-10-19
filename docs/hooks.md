@@ -52,16 +52,17 @@ The fence sees only edit tools. Writes through Bash are covered by git guards th
 
 ```
 wavecoord guard install [--worktree DIR]
-wavecoord guard check --staged [--enforce]          # pre-commit
+wavecoord guard check --staged [--enforce]          # pre-commit, pre-merge-commit
 wavecoord guard check --push RANGE|- [--enforce]    # pre-push; "-" reads the pre-push stdin
 ```
 
 - `install` sets `extensions.worktreeConfig` and then `core.hooksPath` with `git config --worktree`, so only that worktree gets the guards. The scripts are in `<git dir of the worktree>/wavecoord-hooks/`.
 - Each script first runs the hook of the same name that was active before (the old `core.hooksPath`, else `.git/hooks`). A failure of that hook stops the commit or push. A re-install keeps the original chain.
 - `install` also writes `identity.json` in the same directory: the agent, task, attempt, epoch and fence modes from the launcher env. The env of a `git commit` that a worker starts with Bash is not a reliable source, so `check` reads the identity from the file.
-- `check` sends the changed paths (`git diff --name-only --no-renames`, so a rename is a delete and an add) to `POST /api/check` with `source: "guard"`, the agent, task and epoch of the identity file, and the branch.
+- `check` sends the changed paths (`git diff --name-only --no-renames --ignore-submodules=none`, so a rename is a delete and an add, and a submodule change is its gitlink path) to `POST /api/check` with `source: "guard"`, the agent, task and epoch of the identity file, and the branch.
+- Git runs no commit hook for `cherry-pick`, `rebase`, `am` or a fast-forward merge, so the commit guard does not see these commits. The launcher's push check (E3) and `gate-check` (E5) do: they check the net diff of the branch.
 - **Advisory** (the default): a violation prints a warning to stderr and exits 0. No URL, an unreachable coordinator, or a missing wavecoord build also exit 0.
-- **Enforce** (`--enforce`, `WAVECOORD_GUARD_FLAGS=--enforce`, or `commit`/`push` enforce in the fence modes that `install` recorded): a violation and every failure exit 1 (fail closed). The script refuses when the wavecoord build is missing. The offline override (below) lets a commit pass when the coordinator is unavailable, and logs it.
+- **Enforce** (`--enforce`, `WAVECOORD_GUARD_FLAGS=--enforce`, or `commit`/`push` enforce in the fence modes that `install` recorded): a violation and every failure exit 1 (fail closed), also a push whose paths git cannot compute. The script refuses when the wavecoord build is missing. The offline override (below) lets a commit pass when the coordinator is unavailable, and logs it.
 
 ## The edit fence (P6)
 
@@ -74,12 +75,12 @@ The design is `docs/design/edit-fence.md`; the test plan is `tests/fence/README.
 | Point | What | Enforce |
 |---|---|---|
 | E1 | `PreToolUse` on the edit tools | deny (exit 0 with `permissionDecision: "deny"`; exit 2 with the reason on stderr when stdout fails). A crash, a missing build or a hang past the hook timeout blocks through `onFailure: "block"` (Claude Code 2.1.295 or later) |
-| E2 | the git `pre-commit` guard | exit 1 |
+| E2 | the git `pre-commit` and `pre-merge-commit` guard | exit 1 |
 | E3 | the launcher's own check of the net diff before `git push` | no push; the attempt fails with `push failed: fence: <kind>` |
 | E4 | `changed_paths` in the report | the server stores `fence: {verdict, violations, count, seq, epoch}` on the attempt; the refinery blocks a `fail` verdict |
 | E5 | `wavecoord gate-check <pr \| BASE..HEAD>` | exit 0 pass, 1 violation or lease mismatch, 3 unavailable or error. The refinery runs it before `merge_cmd`. A task PR that changes the lead config (`config_change`) fails in `merge` modes `advisory` and `enforce` |
 
-**Kinds.** From the server: `no_lease`, `stale_epoch`, `outside_lease`, `foreign_exclusive`. From `gate-check`: `config_change` (a task PR changes a lead key of `.claude/wavecoord.json`: every key but `$schema` and `wip_cap`, and every host key but `name` and `slots`; the hook keys of the `.claude` settings files; or a `hooks/hooks.json`; the lead makes such a change in a plan or config PR; design section 8) and `spec_change` (a task PR changes the spec tree; section 8.1). These checks run whatever the `Lease:` line says; a missing or doubled `Lease:` line also fails. From the client: `foreign_worktree` (a target in another worktree of the repo), `protected_local` (`.git`, `$WAVECOORD_HOME`, `~/.wavecoord`, `~/.claude`, the plugin root), `unavailable`, `auth`, `bad_request`, `malformed`.
+**Kinds.** From the server: `no_lease`, `stale_epoch`, `outside_lease`, `foreign_exclusive`. From `gate-check`: `config_change` (a task PR changes a lead key of `.claude/wavecoord.json`: every key but `$schema` and `wip_cap`, and every host key but `name` and `slots`; any key but `$schema` of `.claude/settings.json` and `.claude/settings.local.json`; any other file under a `.claude` or `.claude-plugin` folder at any depth, any `.mcp.json` or `CLAUDE.local.md`; or a `hooks/hooks.json`; paths compare without case; the lead makes such a change in a plan or config PR; design section 8) and `spec_change` (a task PR changes the spec tree; section 8.1). These checks run whatever the `Lease:` line says; a missing or doubled `Lease:` line also fails. From the client: `foreign_worktree` (a target in another worktree of the repo), `protected_local` (`.git`, `$WAVECOORD_HOME`, `~/.wavecoord`, `~/.claude`, the plugin root), `unavailable`, `auth`, `bad_request`, `malformed`.
 
 **Paths.** The hook makes the target absolute from `cwd`, resolves symlinks and `..` with `realpath`, finds the innermost worktree that holds it, and classifies it (design section 3.6). A git-ignored path in the own worktree and a path outside the repo pass with no call. On a case-insensitive file system it rebuilds each existing component with its case on disk and sends `fold_case: true`.
 

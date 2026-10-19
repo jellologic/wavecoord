@@ -1,10 +1,13 @@
 """Git guards: `wavecoord guard install` and `wavecoord guard check`. Stdlib only.
 
 `install` points the worktree's own hooks path (per-worktree git config) at a
-directory with `pre-commit` and `pre-push` scripts. Each script first runs the
-hook of the same name that was active before (the chain), then
-`wavecoord guard check`. The check is the fence point E2 (pre-commit) and a
-second check after E3 (pre-push), docs/design/edit-fence.md: advisory by
+directory with `pre-commit`, `pre-merge-commit` and `pre-push` scripts. Each
+script first runs the hook of the same name that was active before (the chain),
+then `wavecoord guard check`. The check is the fence point E2 (pre-commit, and
+pre-merge-commit for a merge that makes a commit) and a second check after E3
+(pre-push), docs/design/edit-fence.md. Git runs no commit hook for a
+cherry-pick, a rebase, `git am` or a fast-forward merge: E3 and E5 check those
+commits (they diff the net change of the branch). Advisory by
 default; in enforce mode (`--enforce`, or the fence mode that the launcher
 recorded at install) it fails closed: a violation and every failure refuse.
 
@@ -23,7 +26,7 @@ import sys
 from wavecoord import fence
 from wavecoord.client import Client, Deadline
 
-HOOK_NAMES = ("pre-commit", "pre-push")
+HOOK_NAMES = ("pre-commit", "pre-merge-commit", "pre-push")
 HOOKS_DIRNAME = "wavecoord-hooks"
 MARK = "# wavecoord guard (generated; do not edit)"
 CHECK_BUDGET_S = 5.0
@@ -65,7 +68,7 @@ def _script(name, chain_dir, cmd, enforce=False):
     skip = 'have=1; [ -e %s ] || have=0\n' % shlex.quote(need) if need else 'have=1\n'
     gone = ('[ "$have" = 1 ] || { echo "wavecoord guard: the wavecoord build is missing; refused (fence'
             ' enforce)" >&2; exit 1; }\n') if enforce else '[ "$have" = 1 ] || exit 0\n'
-    if name == "pre-commit":
+    if name != "pre-push":  # pre-commit, pre-merge-commit: the staged check
         body = (
             'chain=%s\n'
             'if [ -n "$chain" ] && [ -x "$chain" ]; then "$chain" "$@" || exit $?; fi\n'
@@ -152,7 +155,7 @@ def install(worktree=None, cmd=None, out=sys.stdout, env=None):
                     else env, top)
     for name in HOOK_NAMES:
         p = os.path.join(hooks_dir, name)
-        point = "commit" if name == "pre-commit" else "push"
+        point = "push" if name == "pre-push" else "commit"
         with open(p, "w", encoding="utf-8") as f:
             f.write(_script(name, chain_dir, cmd, enforce=m[point] == "enforce"))
         os.chmod(p, os.stat(p).st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
@@ -179,8 +182,13 @@ def staged_paths(cwd):
     return fence.diff_paths(cwd, "--cached")
 
 
+def _has_commit(cwd, sha):
+    return _git(cwd, "cat-file", "-e", sha + "^{commit}") is not None
+
+
 def push_paths(cwd, spec, stdin):
-    """Changed paths for a push. `spec` is a range (a..b) or "-" for the pre-push stdin."""
+    """Changed paths for a push. `spec` is a range (a..b) or "-" for the pre-push stdin. None when git cannot
+    compute them (the caller refuses in enforce mode)."""
     cmds = []
     if spec and spec != "-":
         cmds.append(["diff", "--name-only"] + fence.DIFF_RENAME_FLAGS + ["-z", spec])
@@ -190,16 +198,20 @@ def push_paths(cwd, spec, stdin):
             if len(parts) != 4 or parts[1] == ZERO_SHA:
                 continue  # malformed, or a branch delete
             local_sha, remote_sha = parts[1], parts[3]
-            if remote_sha == ZERO_SHA:
-                # A new remote branch: the commits that no remote-tracking ref has.
-                cmds.append(["log", "--name-only"] + fence.DIFF_RENAME_FLAGS +
+            if remote_sha == ZERO_SHA or not _has_commit(cwd, remote_sha):
+                # A new remote branch, or a remote head this repo does not have (a forced push over a remote
+                # branch that moved since the last fetch): the commits that no remote-tracking ref has. -m with
+                # --first-parent: a merge commit lists what it brings in (git log shows no paths for it otherwise).
+                cmds.append(["log", "-m", "--first-parent", "--name-only"] + fence.DIFF_RENAME_FLAGS +
                             ["-z", "--format=", local_sha, "--not", "--remotes"])
             else:
                 cmds.append(["diff", "--name-only"] + fence.DIFF_RENAME_FLAGS + ["-z", remote_sha, local_sha])
     paths = set()
     for c in cmds:
-        out = _git(cwd, *c)
-        paths.update(p for p in (out or "").replace("\n", "\0").split("\0") if p)
+        out = _git(cwd, *(fence.DIFF_GIT_CONFIG + c))
+        if out is None:
+            return None  # a git error is never "no paths"
+        paths.update(p for p in out.replace("\n", "\0").split("\0") if p)
     return sorted(paths)
 
 

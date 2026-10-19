@@ -46,18 +46,34 @@ def const(name, env=None):
     return DEFAULTS[name]
 
 
+def _in_repo(d):
+    """Is there a `.git` at or above folder `d`?"""
+    while True:
+        if os.path.lexists(os.path.join(d, ".git")):
+            return True
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+
+
 def find_repo_config(start):
-    """Return the parsed .claude/wavecoord.json above `start`, or None."""
+    """Return the parsed .claude/wavecoord.json of the repo that holds `start`, or None. Only the file at the
+    repo's top level counts (the innermost folder with a `.git`): a nested `pkg/.claude/wavecoord.json` is
+    not the repo's config. Outside a repo, the nearest file above `start`."""
     d = os.path.abspath(start)
     while True:
+        top = os.path.lexists(os.path.join(d, ".git"))
         p = os.path.join(d, CONFIG_REL_PATH)
-        if os.path.isfile(p):
+        if os.path.isfile(p) and (top or not _in_repo(d)):
             try:
                 with open(p, encoding="utf-8") as f:
                     data = json.load(f)
                 return data if isinstance(data, dict) else None
             except (OSError, ValueError):
                 return None
+        if top:
+            return None
         parent = os.path.dirname(d)
         if parent == d:
             return None

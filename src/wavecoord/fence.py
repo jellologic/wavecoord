@@ -22,8 +22,12 @@ import time
 from wavecoord import fencecore, schemaload
 from wavecoord.client import Client, Deadline, Unreachable, find_repo_config, idem_key
 
-# --no-renames in every diff: without it, the rename of a foreign file shows only the new name.
-DIFF_RENAME_FLAGS = ["--no-renames"]
+# The flags of every fence diff (E2, E3, E5, the Stop hook, the refinery). --no-renames: without it, the rename
+# of a foreign file shows only the new name. --ignore-submodules=none: a submodule (gitlink) change is a path
+# too, whatever `submodule.<name>.ignore` in .gitmodules or `diff.ignoreSubmodules` in the git config says.
+DIFF_RENAME_FLAGS = ["--no-renames", "--ignore-submodules=none"]
+# The git config of the same diffs (it goes before the subcommand).
+DIFF_GIT_CONFIG = ["-c", "diff.ignoreSubmodules=none"]
 OVERRIDE_NAME = "fence-override.json"
 JOURNAL_NAME = "fence-override.jsonl"
 MAX_OVERRIDE_S = 4 * 3600
@@ -150,6 +154,44 @@ def _under(p, d):
     return p == d or p.startswith(d.rstrip(os.sep) + os.sep)
 
 
+_FOLD_CACHE = {}
+
+
+def folds_case(path):
+    """Does the file system at `path` (its deepest existing folder) fold case? A probe: the same name in the
+    other case names the same file. Cached per folder."""
+    d = path
+    while d and not os.path.isdir(d):
+        parent = os.path.dirname(d)
+        if parent == d:
+            return False
+        d = parent
+    if d in _FOLD_CACHE:
+        return _FOLD_CACHE[d]
+    v = False
+    probe = d
+    while probe and os.path.dirname(probe) != probe:  # the nearest component with a cased letter
+        base = os.path.basename(probe)
+        if base.swapcase() != base:
+            other = os.path.join(os.path.dirname(probe), base.swapcase())
+            try:
+                v = os.path.samefile(probe, other)
+            except OSError:
+                v = False
+            break
+        probe = os.path.dirname(probe)
+    _FOLD_CACHE[d] = v
+    return v
+
+
+def under_local(p, d):
+    """Is `p` under the protected folder `d`? On a file system that folds case, `~/.CLAUDE/x` is under
+    `~/.claude` (realpath keeps the case as typed), so the compare is case-insensitive there."""
+    if _under(p, d):
+        return True
+    return folds_case(d) and _under(os.path.normcase(p).casefold(), os.path.normcase(d).casefold())
+
+
 def protected_dirs(env):
     """The local paths that a worker never writes with an edit tool (section 3.6)."""
     home = os.path.expanduser("~")
@@ -213,6 +255,16 @@ def is_ignored(top, rel):
     return rc == 0
 
 
+def outer_top(top, own):
+    """The worktree whose paths name a target in the repo at `top`. A nested repo of another git repo below the
+    own worktree (a submodule, a vendored clone) is part of the own worktree: the outer repo sees a change in
+    it as its path below the own worktree (a submodule change is its gitlink path), so the path is checked from
+    there, never from the nested repo's root. A nested worktree of the same repo (a subagent's) keeps its top."""
+    if own is not None and top != own and _under(top, own) and not same_repo(top, own):
+        return own
+    return top
+
+
 def classify(path, cwd, env, worker):
     """The path table of section 3.6 for one edit target."""
     if not isinstance(path, str) or not path or "\0" in path:
@@ -221,19 +273,20 @@ def classify(path, cwd, env, worker):
     own = own_worktree(env, cwd)
     if worker:
         for d in protected_dirs(env):
-            if _under(abs_path, d) and not (own and _under(own, d) and _under(abs_path, own)):
+            if under_local(abs_path, d) and not (own and under_local(own, d) and under_local(abs_path, own)):
                 return Target("protected_local", abs_path)
         if own:
             cd = common_dir(own)
-            if cd and _under(abs_path, cd):
+            if cd and under_local(abs_path, cd):
                 return Target("protected_local", abs_path)
     top = find_top(abs_path)
     if top is None:
         return Target("outside", abs_path)
-    rel = os.path.relpath(abs_path, top).replace(os.sep, "/")
+    top = outer_top(top, own)
+    rel =os.path.relpath(abs_path, top).replace(os.sep, "/")
     if rel == ".":
         return Target("outside", abs_path, top)  # the worktree directory itself is not a file
-    if ".git" in rel.split("/"):
+    if any(seg.lower() == ".git" for seg in rel.split("/")):  # `.GIT` too: the same folder on a folding disk
         return Target("protected_local" if worker else "outside", abs_path, top, rel)
     if worker:
         if own is None:
@@ -436,33 +489,30 @@ def acked_entries(notice, batch):
     return set(r.get("n") for r in batch) & set(r.get("n") for r in acked if isinstance(r, dict))
 
 
-JOURNAL_FLUSH_ROUNDS = 4
-
-
 def journal_flush(client, env, agent):
     """Send the journal to the server as fence_override notices. -> entries left (0 when empty).
 
     An entry leaves the journal only when the server acknowledged it. A send that removes some entries but not
-    all (a deduplicated retry, or more than JOURNAL_SEND_MAX entries) is followed by the next one, with a new
-    idempotency key, so one reachable call sends the whole journal.
+    all (a deduplicated retry, or a journal larger than one request) is followed by the next one, with a new
+    idempotency key, so one reachable call sends the whole journal. It stops when a send makes no progress (the
+    server is unreachable, the client's deadline ended, or the answer is not an acknowledgement).
     """
     left = len(journal_entries(env))
-    for _ in range(JOURNAL_FLUSH_ROUNDS):
-        if not left:
-            return 0
+    while left:
         now = _journal_flush_once(client, env, agent)
         if now >= left:
             return now  # no progress: unreachable, or not acknowledged
         left = now
-    return left
+    return 0
 
 
-def _journal_flush_once(client, env, agent):
-    p = journal_path(env)
-    entries = journal_entries(env)
-    if not entries:
-        return 0
-    batch = entries[:JOURNAL_SEND_MAX]
+def journal_body_max():
+    """The largest notify body a flush sends: half the server's body limit, so a batch never gets a 413."""
+    from wavecoord import const
+    return int(const.get("REQ_MAX_BYTES")) // 2
+
+
+def _journal_body(entries, batch, agent):
     first = batch[0]
     detail = {"created": first.get("created"), "until": first.get("until"), "reason": first.get("reason"),
               "nonce": first.get("nonce"), "count": len(entries), "entries": batch}
@@ -471,6 +521,28 @@ def _journal_flush_once(client, env, agent):
     body = {"kind": "fence_override", "agent": agent or "unknown", "text": text, "detail": detail}
     if first.get("task"):
         body["task"] = first["task"]
+    return body
+
+
+def journal_batch(entries, agent, limit=None):
+    """The oldest entries that fit in one notify body (at most JOURNAL_SEND_MAX, at least one). -> (batch, body)."""
+    limit = journal_body_max() if limit is None else limit
+    n = min(len(entries), JOURNAL_SEND_MAX)
+    while True:
+        body = _journal_body(entries, entries[:n], agent)
+        size = len(json.dumps(body, separators=(",", ":")).encode("utf-8"))
+        if size <= limit or n == 1:
+            return entries[:n], body
+        n = max(1, min(n - 1, int(n * limit / size)))
+
+
+def _journal_flush_once(client, env, agent):
+    p = journal_path(env)
+    entries = journal_entries(env)
+    if not entries:
+        return 0
+    batch, body = journal_batch(entries, agent)
+    first = batch[0]
     try:
         status, resp = client.post("/api/notify", body,
                                    idem=idem_key("fence-override", first.get("nonce"), first.get("n")))
@@ -720,7 +792,7 @@ def e1_fail_closed(env, cwd):
 
 def diff_paths(cwd, *rev_args):
     """Changed paths of `git diff --name-only <DIFF_RENAME_FLAGS> -z <rev_args>`, or None on a git error."""
-    rc, out = _git(cwd, *(["diff", "--name-only"] + DIFF_RENAME_FLAGS + ["-z"] + list(rev_args)))
+    rc, out = _git(cwd, *(DIFF_GIT_CONFIG + ["diff", "--name-only"] + DIFF_RENAME_FLAGS + ["-z"] + list(rev_args)))
     if rc != 0 or out is None:
         return None
     return sorted(set(p for p in out.split("\0") if p))

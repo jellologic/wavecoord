@@ -324,8 +324,14 @@ class Hook(object):
             pass
 
     def check(self, paths):
-        """POST /api/check. Returns the violations list ([] when unreachable)."""
-        body = {"agent": self.id.agent, "paths": paths[:1000], "source": "hook"}
+        """POST /api/check. Returns the violations list ([] when unreachable). A path that no glob can hold (the
+        server refuses the whole request for one) is outside_lease here, and is not sent."""
+        from wavecoord import fencecore
+        bad = [p for p in paths[:1000] if fencecore.path_syntax_error(p) or not fencecore.globbable(p)]
+        mine = [{"kind": "outside_lease", "path": p} for p in bad]
+        body = {"agent": self.id.agent, "paths": [p for p in paths[:1000] if p not in bad], "source": "hook"}
+        if not body["paths"]:
+            return mine
         lease = self.state.get("lease") or {}
         task = self.id.task or lease.get("task")
         if task:
@@ -335,10 +341,10 @@ class Hook(object):
         try:
             status, resp = self.c.post("/api/check", body)
         except Unreachable:
-            return []
+            return mine
         if status == 200 and isinstance(resp, dict):
-            return [v for v in as_list(resp.get("violations")) if isinstance(v, dict)]
-        return []
+            return mine + [v for v in as_list(resp.get("violations")) if isinstance(v, dict)]
+        return mine
 
     def live(self):
         try:
@@ -578,13 +584,14 @@ class Hook(object):
         return {"decision": "block", "reason": clip("wavecoord: before you stop:\n- " + "\n- ".join(reasons))}
 
     def changed_paths(self):
+        """The branch diff and the uncommitted changes, with the fence diff flags (-z: a non-ASCII name is not
+        quoted)."""
+        from wavecoord import fence
         base = base_ref(self.cwd)
         paths = set()
         if base:
-            out = git(self.cwd, "diff", "--name-only", "--no-renames", base + "...HEAD")
-            paths.update(x for x in (out or "").splitlines() if x)
-        out = git(self.cwd, "diff", "--name-only", "--no-renames", "HEAD")
-        paths.update(x for x in (out or "").splitlines() if x)
+            paths.update(fence.diff_paths(self.cwd, base + "...HEAD") or [])
+        paths.update(fence.diff_paths(self.cwd, "HEAD") or [])
         return sorted(paths)
 
     def _subagent(self, start):

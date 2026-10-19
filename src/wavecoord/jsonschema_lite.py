@@ -73,6 +73,33 @@ def _resolve(root, ref):
     return node
 
 
+def ecma_anchors(pattern):
+    """The pattern with each `$` anchor (not escaped, not in a class) as `\\Z`. In JSON Schema (ECMA 262) `$`
+    matches only at the end of the string; Python's `$` also matches before a final newline, so `^t1$` would
+    take "t1\\n"."""
+    out, i, cls = [], 0, False
+    while i < len(pattern):
+        c = pattern[i]
+        if c == "\\":
+            out.append(pattern[i:i + 2])
+            i += 2
+            continue
+        if cls:
+            cls = c != "]"
+        elif c == "[":
+            cls = True
+            j = i + 1 + (pattern[i + 1:i + 2] == "^")
+            j += pattern[j:j + 1] == "]"  # `[]..]`, `[^]..]`: a leading ] is a member in Python
+            out.append(pattern[i:j])
+            i = j
+            continue
+        elif c == "$":
+            c = r"\Z"
+        out.append(c)
+        i += 1
+    return "".join(out)
+
+
 class _Validator(object):
     def __init__(self, root):
         self.root = root
@@ -82,7 +109,7 @@ class _Validator(object):
         r = self._re.get(pattern)
         if r is None:
             try:
-                r = re.compile(pattern)
+                r = re.compile(ecma_anchors(pattern))
             except re.error as e:
                 raise SchemaError("bad pattern %r: %s" % (pattern, e))
             self._re[pattern] = r

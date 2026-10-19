@@ -1,6 +1,6 @@
 """Seeded defects (tests/fence/README.md, section 2).
 
-For each of the 25 defects, the test applies its patch (tests/fencedefects.py)
+For each of the 37 defects, the test applies its patch (tests/fencedefects.py)
 and runs (1) the defect's named table check and (2) the randomized
 simulation on the first fixed seeds. At least one must fail, else the
 defect is not caught and the suite fails. Without a patch, every table
@@ -242,6 +242,139 @@ class Table(object):
     def D30(self):
         return spec_change_check(self.w)
 
+    def D31(self):
+        return config_change_check(self.w)
+
+    def D32(self):
+        return config_change_check(self.w)
+
+    def D33(self):
+        return submodule_check(self.w)
+
+    def D34(self):
+        return nested_repo_check(self.w)
+
+    def D35(self):
+        return protected_case_check(self.w)
+
+    def D36(self):
+        return journal_size_check(self.w)
+
+    def D37(self):
+        return push_git_error_check(self.w)
+
+
+def _scratch(w, name):
+    d = os.path.join(w.root, name)
+    os.makedirs(d)
+    return d
+
+
+def submodule_check(w):
+    """A gitlink (submodule) change is a path at E2, E3 and E5, also when .gitmodules says ignore = all and the
+    git config says diff.ignoreSubmodules = all. -> None or the failure."""
+    r = _scratch(w, "sm")
+    git(r, "init", "-q")
+    git(r, "config", "diff.ignoreSubmodules", "all")
+    with open(os.path.join(r, "a.txt"), "w") as f:
+        f.write("a\n")
+    git(r, "add", "a.txt")
+    git(r, "commit", "-q", "-m", "a")
+    s1 = git(r, "rev-parse", "HEAD").strip()
+    with open(os.path.join(r, ".gitmodules"), "w") as f:
+        f.write('[submodule "vendor/sub"]\n\tpath = vendor/sub\n\turl = ../sub\n\tignore = all\n')
+    git(r, "add", ".gitmodules")
+    git(r, "update-index", "--add", "--cacheinfo", "160000,%s,vendor/sub" % s1)
+    git(r, "commit", "-q", "-m", "sub")
+    s2 = git(r, "rev-parse", "HEAD").strip()
+    git(r, "checkout", "-q", "-b", "w")
+    git(r, "update-index", "--cacheinfo", "160000,%s,vendor/sub" % s2)
+    staged = guard.staged_paths(r)
+    if "vendor/sub" not in (staged or []):
+        return "E2: the staged gitlink change is not a path (%s)" % staged
+    with open(os.path.join(r, "a.txt"), "a") as f:
+        f.write("b\n")
+    git(r, "commit", "-q", "-am", "w")
+    pushed = guard.push_paths(r, "main..w", None)
+    if "vendor/sub" not in (pushed or []):
+        return "E3: the pushed gitlink change is not a path (%s)" % pushed
+    seen = []
+
+    def check_fn(body):
+        seen.extend(body["paths"])
+        return fence.CheckResult([{"kind": "outside_lease", "path": p} for p in body["paths"] if p != "a.txt"], 1,
+                                 lease={"task": "t", "epoch": 1, "state": "active"})
+    code = gatecheck.run(None, "t", 1, "main..w", lease="t@1", repo=r, out=io.StringIO(), err=io.StringIO(),
+                         check_fn=check_fn, merge_mode="enforce")
+    if "vendor/sub" not in seen or code != 1:
+        return "E5: a gitlink change outside the lease passed (exit %s, checked %s)" % (code, seen)
+    return None
+
+
+def nested_repo_check(w):
+    """E1: a file in a nested repo of another git repo (a submodule checkout) is checked by its path in the own
+    worktree, so a lease src/** does not cover vendor/sub/src/main.c. -> None or the failure."""
+    wt = _scratch(w, "nest")
+    git(wt, "init", "-q")
+    sub = os.path.join(wt, "vendor", "sub")
+    os.makedirs(os.path.join(sub, "src"))
+    git(sub, "init", "-q")
+    target = os.path.join(sub, "src", "main.c")
+    t = fence.classify(target, wt, {"WAVECOORD_WORKTREE": wt, "WAVECOORD_TASK": "t"}, True)
+    if (t.kind, t.rel) != ("check", "vendor/sub/src/main.c"):
+        return "a file in a nested repo: %r, want check vendor/sub/src/main.c" % t
+    return None
+
+
+def protected_case_check(w):
+    """E1: a protected local folder in another case (~/.CLAUDE on a folding disk) is still protected.
+    On a case-sensitive disk the probe is patched to fold (as D08). -> None or the failure."""
+    root = _scratch(w, "pcase")
+    cfg = os.path.join(root, ".claude")
+    os.makedirs(cfg)
+    env = {"CLAUDE_CONFIG_DIR": cfg, "WAVECOORD_TASK": "t"}
+    old = fence.folds_case
+    if not CI_FS:
+        fence.folds_case = lambda p: True
+    try:
+        t = fence.classify(os.path.join(root, ".CLAUDE", "settings.json"), root, env, True)
+    finally:
+        fence.folds_case = old
+    return None if t.kind == "protected_local" else "a Write to .CLAUDE/settings.json: %r, want protected_local" % t
+
+
+def journal_size_check(w):
+    """A large override journal (long reasons, long paths) reaches the server in one reachable flush: each
+    request stays under the server's body limit. -> None or the failure."""
+    from wavecoord.client import Client, Deadline
+    env = w.base_env("agent")
+    fence.write_override(env, 3600, "r" * 500)
+    try:
+        ovr = fence.read_override(env)
+        wk = w.workers[0]
+        for i in range(400):
+            fence.journal_append(env, ovr, wk.agent, wk.task, wk.epoch, "src/%s/f%04d.py" % ("d" * 60, i), "commit")
+        left = fence.journal_flush(Client.from_env(agent=wk.agent, deadline=Deadline(20), env=env), env, wk.agent)
+        if left or fence.journal_entries(env):
+            return "%d journal entries left after a reachable flush" % len(fence.journal_entries(env))
+        return None
+    finally:
+        fence.remove_override(env)
+        try:
+            os.remove(fence.journal_path(env))
+        except OSError:
+            pass
+
+
+def push_git_error_check(w):
+    """The pre-push guard in enforce mode refuses when git cannot compute the pushed paths. -> None or the
+    failure."""
+    wk = w.workers[0]
+    bad = "1" * 40
+    rc = guard.check("push", "-", enforce=True, cwd=wk.wt, env=w.commit_env(wk), err=io.StringIO(),
+                     stdin=io.StringIO("refs/heads/x %s refs/heads/x %s\n" % ("2" * 40, bad)))
+    return None if rc == 1 else "a push whose paths git cannot compute passed (exit %s)" % rc
+
 
 def config_change_check(w):
     """A task PR must not change the lead's config (edit-fence.md, section 8). The lease covers `.claude/**`, so
@@ -302,8 +435,27 @@ def config_change_check(w):
              (1, [".claude/wavecoord.json (the new file does not parse)"])),
             ("auto_steer", cfg_edit(lambda c: c.update(auto_steer="hints")), None, (1, ["auto_steer"])),
             ("an unguarded key", cfg_edit(lambda c: c.update(wip_cap=5)), None, (0, [])),
+            # settings deny by default (D32): every key but $schema runs commands, widens trust or steers the lead
             ("settings permissions", write(".claude/settings.json", json.dumps({"permissions": {"allow": []}})), None,
-             (0, [])),
+             (1, ["permissions"])),
+            ("settings statusLine and apiKeyHelper",
+             write(".claude/settings.json", json.dumps({"statusLine": {"type": "command", "command": "x"},
+                                                        "apiKeyHelper": "x", "enableAllProjectMcpServers": True})),
+             None, (1, ["apiKeyHelper", "enableAllProjectMcpServers", "statusLine"])),
+            ("settings $schema only", write(".claude/settings.json", json.dumps({"$schema": "x"})), None, (0, [])),
+            ("an MCP server", write(".mcp.json", json.dumps({"mcpServers": {"x": {"command": "sh"}}})), None,
+             (1, ["the Claude Code config (.mcp.json)"])),
+            ("a project agent", write(".claude/agents/reviewer.md", "x"), None,
+             (1, ["the Claude Code config (.claude/agents/reviewer.md)"])),
+            # any case, any depth (D31)
+            ("settings in another case", write(".claude/Settings.json", json.dumps({"hooks": {}})), None,
+             (1, ["the Claude Code config (.claude/Settings.json)"])),
+            ("plugin hooks in another case", write("plugin/Hooks/hooks.json", "{}"), None,
+             (1, ["the plugin hooks (plugin/Hooks/hooks.json)"])),
+            ("nested settings and config", lambda: (write("pkg/.claude/settings.json", "{}")(),
+                                                    write("pkg/.claude/wavecoord.json", "{}")()), None,
+             (1, ["the Claude Code config (pkg/.claude/settings.json)",
+                  "the Claude Code config (pkg/.claude/wavecoord.json)"])),
             ("fence off, merge mode off", cfg_edit(lambda c: c.update(fence="off")), "off", (0, ["fence"])),
         ]
         for what, change, mode, want in cases:
@@ -322,6 +474,11 @@ def config_change_check(w):
     finally:
         git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, "origin/main")
         git(wk.wt, "clean", "-fdq")
+
+
+with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "fixtures", "specs", "auth", "_node.md"),
+          encoding="utf-8") as _f:
+    NODE = _f.read()  # a capability record: a top-level _node.md of the spec tree
 
 
 def spec_change_check(w):
@@ -347,8 +504,9 @@ def spec_change_check(w):
         for rel in files:
             p = os.path.join(wk.wt, rel)
             os.makedirs(os.path.dirname(p), exist_ok=True)
+            new_node = rel.endswith("/_node.md") and not os.path.exists(p)
             with open(p, "a") as f:
-                f.write("---\nstatus: done\n---\n")
+                f.write(NODE if new_node else "---\nstatus: done\n---\n")  # a new _node.md is a spec record
         git(wk.wt, "add", "-A")
         git(wk.wt, "commit", "-q", "--no-verify", "--allow-empty", "-m", "c")
         return git(wk.wt, "rev-parse", "HEAD").strip()
@@ -369,6 +527,8 @@ def spec_change_check(w):
         dotdir = commit("origin/main", cfg={"spec": {"dir": "./specs/."}}, files=["specs/a/_node.md"])
         moved = commit(tree, cfg={"spec": {"dir": "requirements"}}, mv=("specs", "requirements"))
         flat = commit("origin/main", cfg={"plan": {"adapter": "builtin"}}, files=["specs/openapi.yaml"])
+        # no plan adapter and no spec record: the lead plans from the flat plan (lead/base.py, plan_store)
+        stray = commit("origin/main", files=["specs/api.yaml"])
         cases = [
             ("a status line", tree, commit(tree, files=["specs/auth/s/r/tasks/t.md"]), None,
              (1, key("specs/auth/s/r/tasks/t.md"))),
@@ -387,6 +547,9 @@ def spec_change_check(w):
             ("the tree moved on the base side", moved, commit(tree, files=["specs/a/_node.md"]), None,
              (1, key("specs/a/_node.md"))),
             ("a flat plan repo", flat, commit(flat, files=["specs/openapi.yaml"]), None, (0, [])),
+            ("a stray specs/ file, no plan adapter", stray, commit(stray, files=["specs/api.yaml"]), None, (0, [])),
+            ("the first spec record in a task PR", stray, commit(stray, files=["specs/a/_node.md"]), None,
+             (1, key("specs/a/_node.md"))),
         ]
         for what, base, head, mode, want in cases:
             got = gate(base, head, mode)

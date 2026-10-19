@@ -71,6 +71,13 @@ Each defect is a small patch (a monkeypatch of one function or constant) on the 
 | D28 | `spec.dir` not normalized: with `./specs` no path is under the tree | the table test `spec_change_check` (0.2.1; design section 8.1) |
 | D29 | The spec dir only from the base side: an edit of a tree that the base side moved passes | the table test `spec_change_check` (0.2.1; design section 8.1) |
 | D30 | Spec paths compared case-sensitively: `SPECS/x` passes | the table test `spec_change_check` (0.2.1; design section 8.1) |
+| D31 | Lead-config paths matched by exact case at the root only: `.claude/Settings.json`, `plugin/Hooks/hooks.json` and a nested `pkg/.claude/settings.json` pass | the table test `config_change_check` (0.2.1; design section 8) |
+| D32 | The settings rule as a list of five keys: `permissions`, `statusLine`, `apiKeyHelper`, `.mcp.json` and `.claude/agents/` pass | the table test `config_change_check` (0.2.1; design section 8) |
+| D33 | Diffs that honor `submodule.<name>.ignore` and `diff.ignoreSubmodules`: a gitlink change is no path at E2, E3 and E5 | the table test `submodule_check` (0.2.1; design section 3.2) |
+| D34 | E1 checks a file of a nested repo (a submodule) by the nested repo's own path, so `src/**` covers `vendor/sub/src/x` | the table test `nested_repo_check` (0.2.1; design section 3.6) |
+| D35 | Protected local folders compared case-sensitively: `~/.CLAUDE/settings.json` passes on a folding disk | the table test `protected_case_check` (0.2.1; design section 3.6; the fold probe is patched on a case-sensitive disk) |
+| D36 | The override journal sent in batches by count: a journal of long entries never fits one request (413), and E3 refuses forever | the table test `journal_size_check` (0.2.1; design section 4.4) |
+| D37 | The pre-push guard reads a git error as "no paths" and passes in enforce mode | the table test `push_git_error_check` (0.2.1; design section 3.2) |
 
 ## 3. Table tests (`test_fence_points.py`)
 
@@ -110,7 +117,7 @@ These facts come from the Claude Code hooks reference. The fence depends on them
 | `tests/fenceworld.py` | the world: a real coordinator with a fake clock behind a fault proxy, the repo and worktrees, and the oracle (its own glob matcher `omatch`, its own log fold `OState`, and the inode-based `truth` of a target) |
 | `tests/fencesim.py` | the random operations and the six assertions |
 | `tests/test_fence_invariant.py` | 50 fixed seeds and one new random seed in parallel processes; on a case-sensitive file system 5 more seeds with a case-insensitive probe. `OracleCacheTest`: a cached oracle fold equals a fresh fold, also when a later event list gets the id of a freed one (seeded defect O1 of the oracle, seed 44 after seed 5 in one process) |
-| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 25 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
+| `tests/fencedefects.py`, `tests/test_fence_defects.py` | the 37 defects as patches, one named table check per defect, and the simulation on the first seeds of each defect (`WAVECOORD_FENCE_DEFECT_SEEDS`, default 2) |
 | `tests/test_fence_points.py` | the failure table, the path table, the output shapes, the override, the modes, the server rules, gate-check, the launcher helpers and the fake-claude hook runs |
 
 `WAVECOORD_FENCE_SEED=<n>` reruns one seed, `WAVECOORD_FENCE_RUNS=<n>` adds n random seeds, and `WAVECOORD_FENCE_OPS=<n>` sets the maximum number of operations per seed (default 80; use 300 for a soak run).
