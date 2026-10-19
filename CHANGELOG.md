@@ -153,6 +153,7 @@ Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the who
 - The lead cursor moved to `<state dir>/coord-<sha(url)>/lead-cursor.json`. After the upgrade a lead session starts at the head, without the old backlog. `wavecoord events --for lead --state-dir` takes the same base dir and finds the subdirectory from `--url`. Run one lead session per coordinator.
 - The plugin option `coord_url` must be set (it had the default `http://127.0.0.1:18741`).
 - Hints (plain messages) to a task still reach every later run of the task that has not seen them; this is now documented (`launcher.md`, "Listen and steer").
+- Docs: the README is rewritten as the front door, with an architecture diagram and a wave sequence. The new `docs/guide.md` teaches the workflow (the model, one feature from idea to merge, writing specs, safe waves, steering, triage, recovery, upgrade notes), and `docs/README.md` maps the pages. The quickstart config sets `coord_url`, which the terminal CLI needs now that nothing has a default URL.
 
 ## 0.2.0
 
