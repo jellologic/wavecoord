@@ -149,6 +149,38 @@ def cmd_hosts(args):
     return 0
 
 
+def _table(rows):
+    """Text rows with each column (but the last) as wide as its widest cell, two spaces apart; no trailing space."""
+    rows = [["%s" % c for c in r] for r in rows]
+    widths = [max(len(r[i]) for r in rows) for i in range(len(rows[0]) - 1)]
+    return [("  ".join(c.ljust(w) for c, w in zip(r, widths)) + "  " + r[-1]).rstrip() for r in rows]
+
+
+def _fill_pr_urls(L, rows):
+    """The PR URL of each attempt that has none in its host's record: `collect` opens PRs on the lead and keeps
+    the URL in the launcher index and the coordinator state, not on the host. Best effort: text output only."""
+    for r in rows:
+        if not r.get("pr_url"):
+            try:
+                r["pr_url"] = (L.index_get(r["id"]) or {}).get("pr_url")
+            except Exception:  # noqa: BLE001 - an unreadable index record: no URL
+                pass
+    if all(r.get("pr_url") for r in rows) or not L.coord_url:
+        return
+    from . import coord as coordmod
+    try:
+        status, out = coordmod.Coord(L.coord_url, timeout=5).request("GET", "/api/attempts")
+    except Exception:  # noqa: BLE001 - the coordinator is down or refuses: no URL
+        return
+    if status != 200:
+        return
+    urls = {"%s-%s" % (a.get("task"), a.get("n")): a.get("pr_url") for a in out.get("attempts") or []
+            if isinstance(a, dict)}
+    for r in rows:
+        if not r.get("pr_url") and urls.get(r["id"]):
+            r["pr_url"] = urls[r["id"]]
+
+
 def cmd_attempts(args):
     try:
         L = _launcher(args)
@@ -159,11 +191,13 @@ def cmd_attempts(args):
             if args.json:
                 _print(rows, True)
                 return 0
-            print("%-28s %-10s %-10s %-8s %-8s %s" % ("ATTEMPT", "HOST", "STATE", "TURNS", "COST", "PR / NOTE"))
-            for r in rows:
-                print("%-28s %-10s %-10s %-8s %-8s %s" % (r["id"], r["host"], r["state"], r.get("turns") or "-",
-                                                         r.get("cost_usd") if r.get("cost_usd") is not None else "-",
-                                                         r.get("pr_url") or r.get("note") or ""))
+            _fill_pr_urls(L, rows)
+            table = [("ATTEMPT", "HOST", "STATE", "TURNS", "COST", "PR / NOTE")] + [
+                (r["id"], r["host"], r["state"], r.get("turns") or "-",
+                 r.get("cost_usd") if r.get("cost_usd") is not None else "-", r.get("pr_url") or r.get("note") or "")
+                for r in rows]
+            for line in _table(table):
+                print(line)
             return 0
         if not args.id:
             raise LauncherError("attempts %s needs an attempt id" % args.action)

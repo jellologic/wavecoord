@@ -334,6 +334,57 @@ def coord_checker(coord, ctx):
     return check
 
 
+VIOLATION_WHAT = {"outside_lease": ("path outside the lease", "paths outside the lease"),
+                  "foreign_exclusive": ("path reserved by another task", "paths reserved by another task"),
+                  "stale_epoch": ("path under a stale lease epoch", "paths under a stale lease epoch"),
+                  "no_lease": ("path with no lease", "paths with no lease"),
+                  "config_change": ("lead config change", "lead config changes"),
+                  "spec_change": ("spec tree change", "spec tree changes")}
+LIST_MAX = 5
+
+
+def violations_summary(violations):
+    """The violations grouped by kind, for a person: `1 path outside the lease: README.md; 2 lead config changes:
+    a, b`. Each group lists at most LIST_MAX paths (or config keys)."""
+    groups = {}
+    for v in violations:
+        groups.setdefault(v.get("kind") or "violation", []).append(v)
+    parts = []
+    order = list(VIOLATION_WHAT)
+    for kind in sorted(groups, key=lambda k: (order.index(k) if k in order else len(order), k)):
+        vs = groups[kind]
+        one, many = VIOLATION_WHAT.get(kind, ("%s violation" % kind, "%s violations" % kind))
+        names = [str((v.get("key") if kind == "config_change" else None) or v.get("path") or "?") for v in vs]
+        shown = ", ".join(names[:LIST_MAX]) + (" and %d more" % (len(names) - LIST_MAX) if len(names) > LIST_MAX
+                                                else "")
+        parts.append("%d %s: %s" % (len(vs), one if len(vs) == 1 else many, shown))
+    return "; ".join(parts)
+
+
+def human_verdict(res):
+    """The one-line verdict of a gate-check result, for a person (the JSON `detail` stays as it is)."""
+    verdict, detail = res.get("verdict") or "error", res.get("detail")
+    if verdict == "fail" and res.get("violations"):
+        detail = violations_summary(res["violations"])
+        if any(v.get("kind") in ("config_change", "spec_change") for v in res["violations"]):
+            detail += "; " + CONFIG_ADVICE
+    elif verdict == "pass" and res.get("paths"):
+        n = res["paths"]
+        detail = "%d %s checked against the lease%s" % (n, "path" if n == 1 else "paths",
+                                                       (" at seq %s" % res["seq"]) if res.get("seq") is not None
+                                                       else "")
+    return "%s%s" % (verdict, (": " + detail) if detail else "")
+
+
+def _same_file(a, b):
+    """True when two streams write to the same file (stdout and stderr on one terminal, or 2>&1)."""
+    try:
+        sa, sb = os.fstat(a.fileno()), os.fstat(b.fileno())
+    except (AttributeError, OSError, ValueError):
+        return False
+    return (sa.st_dev, sa.st_ino) == (sb.st_dev, sb.st_ino)
+
+
 def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None, repo=None, env=None,
         out=sys.stdout, err=sys.stderr, as_json=False, check_fn=None, body_text=None, merge_mode=None):
     env = os.environ if env is None else env
@@ -347,9 +398,14 @@ def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None
         if as_json:
             out.write(json.dumps(res, sort_keys=True) + "\n")
         else:
-            err.write("wavecoord gate-check: %s%s\n" % (verdict, (": " + detail) if detail else ""))
+            # the human verdict on stdout, with one line per violation; the verdict line also on stderr (as
+            # before), unless stderr is the same file as stdout (a terminal, or 2>&1)
+            line = human_verdict(res)
+            out.write(line + "\n")
             for v in res["violations"][:50]:
-                err.write("  %s\n" % fence.violation_line(v))
+                out.write("  %s\n" % fence.violation_line(v))
+            if not _same_file(out, err):
+                err.write("wavecoord gate-check: %s\n" % line)
         return code
 
     try:

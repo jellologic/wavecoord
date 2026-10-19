@@ -456,7 +456,6 @@ class Demo(object):
         })
         self.capture("dispatch", None, [["dispatch"]], cols=110)
         self.wait(lambda: self.ended(QUEUE + "-1") and self.ended(TOKENIZE + "-1"), "wave 1 reports")
-        self.capture("attempts", None, [["attempts", "ls"]])
         self.capture("steer-hint", "wavecoord steer && wavecoord hint",
                      [["steer", INDEX, "model", "opus"],
                       ["hint", INDEX, "Export the index through notes.search.index only."]])
@@ -467,6 +466,8 @@ class Demo(object):
         # wave 2 starts: replay runs (it waits) while the tree shows the progress so far
         self.wc("dispatch")
         self.wait(lambda: self.attempt_state(REPLAY + "-1") == "running", "the replay attempt")
+        # wave 1 has its PRs (collect), replay runs
+        self.capture("attempts", None, [["attempts", "ls"]])
         self.wait(lambda: self.main_status("notes/sync/queue/tasks/replay.md") == "in_progress" and
                   self.main_status("notes/sync/queue/tasks/store.md") == "done", "the status commits")
         self.git("pull", "-q", "--ff-only", "origin", "main")

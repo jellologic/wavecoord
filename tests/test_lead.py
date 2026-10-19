@@ -438,7 +438,11 @@ class RefineryTest(LeadTestCase):
         r = out["results"][0]
         self.assertEqual((r["state"], r["reason"]), ("blocked", "fence"))
         self.assertIn("E4: the report's fence verdict is fail", r["detail"])
-        self.assertIn("E5: gate-check exit 1", r["detail"])
+        self.assertIn("E5: gate-check exit 1: 1 path outside the lease: elsewhere.txt", r["detail"])
+        self.assertLess(r["detail"].index("E5:"), r["detail"].index("E4:"))  # the paths come first
+        from wavecoord import leadcli
+        self.assertEqual(leadcli._merge_line(r), "solo/1 #%s: blocked fence (E5: gate-check exit 1: 1 path outside"
+                                                 " the lease: elsewhere.txt)" % r["pr"])
         self.assertEqual([c for c in self.gh()["calls"] if c[:2] == ["pr", "merge"]], [])
         self.run_task("late", "late/f.txt")  # inside the lease: merged
         out = self.lead.refinery_merge("late/1")
@@ -659,6 +663,28 @@ class DispatchLoopCliTest(LeadTestCase):
         p = self.wc("refinery", "status")
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("alpha/1", p.stdout)
+        self.assertTrue(p.stdout.startswith("alpha/1  #"), p.stdout)  # the task column fits its content
+        # attempts ls: the PR that collect opened, in columns sized to the content
+        p = self.wc("attempts", "ls")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        lines = p.stdout.splitlines()
+        self.assertRegex(lines[0], r"^ATTEMPT  HOST +STATE +TURNS +COST +PR / NOTE$")
+        row = [ln for ln in lines if ln.startswith("alpha-1 ")][0]
+        self.assertRegex(row, r"https://example.invalid/pull/\d+$")
+        self.assertEqual(len({ln.index("HOST") if ln is lines[0] else ln.index("local") for ln in lines}), 1)
+        # with no launcher index record, the URL comes from the coordinator state
+        import glob
+        for f in glob.glob(os.path.join(os.environ["WAVECOORD_HOME"], "client", "*", "alpha-1.json")):
+            os.unlink(f)
+        p = self.wc("attempts", "ls")
+        self.assertRegex([ln for ln in p.stdout.splitlines() if ln.startswith("alpha-1 ")][0],
+                         r"https://example.invalid/pull/\d+$")
+        p = self.wc("attempts", "ls", "--json")
+        self.assertNotIn("example.invalid", p.stdout)  # the JSON is the hosts' records, as before
+        p = self.wc("refinery", "merge")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("alpha/1 #", p.stdout)
+        self.assertTrue(all(ln.endswith(": merged") for ln in p.stdout.splitlines()), p.stdout)
 
 
 if __name__ == "__main__":

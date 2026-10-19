@@ -322,7 +322,7 @@ The fence modes come only from `.claude/wavecoord.json` on the default branch. A
   List `CLAUDE.md` and the scripts your hooks run: the config fence does not cover them (`security.md`).
 - **`check_cmd`** runs before each merge, in a worktree of the PR head, with your environment. It runs the worker's code as you, after the fence check. Keep it to your test command, or run it in CI or a container when you merge work from hosts you do not trust.
 - **Verify and Acceptance** run on the merge result with a scrubbed environment. Add the variables your toolchain needs with `"spec": {"verify_env": ["CARGO_HOME"]}`.
-- **`gate-check` in CI.** On a runner that can reach the coordinator, make a `gate` token (`wavecoord tokens provision --role gate --out <file>`) and run `wavecoord gate-check <pr>` as a required check, with `WAVECOORD_URL` and `WAVECOORD_TOKEN_FILE` set. Exit 0 passes, 1 is a violation, 3 is an error.
+- **`gate-check` in CI.** On a runner that can reach the coordinator, make a `gate` token (`wavecoord tokens provision --role gate --out <file>`) and run `wavecoord gate-check <pr>` as a required check, with `WAVECOORD_URL` and `WAVECOORD_TOKEN_FILE` set. Exit 0 passes, 1 is a violation, 3 is an error. It prints its verdict on stdout, such as `fail: 1 path outside the lease: README.md`, with one line per violation; `--json` prints only the JSON result.
 
 ![wavecoord gate-check](img/gate-check.svg)
 

@@ -168,8 +168,8 @@ class RefineryMixin(object):
         st = it.get("report_status")
         if st not in MERGE_REPORT:
             return "report_not_done", (
-                "the attempt's report status is %s, not done: retry it (`wavecoord launch %s --continue`), ask the"
-                " user, or close the PR; the refinery merges only a done report" % (st or "missing", it["task"]))
+                "report status is %s, not done; retry it (`wavecoord launch %s --continue`), ask the"
+                " user, or close the PR: the refinery merges only a done report" % (st or "missing", it["task"]))
         plan = self.plan()
         try:
             spec = plan.get(it["task"])
@@ -286,8 +286,9 @@ class RefineryMixin(object):
         problems = []
         with self.coord.wlock:
             att = self.coord.state.get("attempts", "%s/%d" % (it["task"], it["attempt"])) or {}
+        e4 = None
         if (att.get("fence") or {}).get("verdict") == "fail":
-            problems.append("E4: the report's fence verdict is fail (%d violation(s))" % att["fence"].get("count", 0))
+            e4 = "E4: the report's fence verdict is fail (%d violation(s))" % att["fence"].get("count", 0)
         rc, out, err = run_cmd(["gh", "pr", "view", str(it["pr"]), "--json", "body"], self.root(), timeout=120)
         try:
             body = _json.loads(out).get("body") if rc == 0 else None
@@ -327,7 +328,12 @@ class RefineryMixin(object):
         if body is None:
             problems.append("E5: cannot read the PR body (gh pr view exit %s)" % rc)
         if code != 0:
-            problems.append("E5: gate-check exit %s: %s" % (code, d.get("detail")))
+            # the gate-check verdict in words (the paths outside the lease, ...): the first problem a person reads
+            v = gatecheck.human_verdict(d) if d else None
+            problems.append("E5: gate-check exit %s: %s" % (code, v[len("fail: "):] if v and v.startswith("fail: ")
+                                                              else v))
+        if e4:
+            problems.append(e4)
         if not problems:
             return None
         return {"block": mode == "enforce", "detail": "; ".join(problems)}

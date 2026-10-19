@@ -163,6 +163,42 @@ class CliTest(Repo):
         self.assertEqual(run("check", cwd=self.repo).returncode, 0)
         self.assertEqual(run("show", "nope", cwd=self.repo).returncode, 2)
 
+    def test_tree_text_sizes_the_name_column(self):
+        out = run("tree", cwd=self.repo)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        lines = out.stdout.splitlines()
+        self.assertEqual(lines[0], "auth                active      Authentication  1/3 done")
+        self.assertEqual(lines[-1], "      rotate-tests  planned     Tests for token rotation")
+        cols = {ln.index(ln.split()[1], len(ln) - len(ln.lstrip()) + len(ln.split()[0])) for ln in lines}
+        self.assertEqual(len(cols), 1)  # one status column
+        self.assertTrue(all(ln == ln.rstrip() for ln in lines))
+        # the column is capped: a longer name pushes only its own row, still apart from its status
+        old = query.NAME_COL_MAX
+        query.NAME_COL_MAX = 12
+        try:
+            _, lines = query.tree_view(Tree(source.read_tree(self.repo, "specs")))
+        finally:
+            query.NAME_COL_MAX = old
+        self.assertIn("auth          active      Authentication  1/3 done", lines)
+        self.assertIn("      rotate-tests  planned     Tests for token rotation", lines)
+
+    def test_plan_points_to_the_spec_tree(self):
+        env = dict(os.environ, PYTHONPATH=_paths.SRC)
+        for action in ("ready", "validate", "graph"):
+            p = subprocess.run([sys.executable, "-m", "wavecoord", "plan", action], cwd=self.repo, env=env,
+                               stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+            self.assertIn("the plan of this repo is the spec tree in specs/; use `wavecoord spec ready` or"
+                          " `wavecoord spec waves`", p.stderr, action)
+            self.assertEqual(p.stderr.count("\n"), 1, p.stderr)
+        p = subprocess.run([sys.executable, "-m", "wavecoord", "plan", "ready", "--json"], cwd=self.repo, env=env,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+        self.assertEqual(json.loads(p.stdout)["tasks"], [])  # the JSON is unchanged
+        # a flat plan with tasks and plan.adapter builtin: no pointer; the commands adapter: none either
+        from wavecoord import leadcli
+        self.assertIsNone(leadcli.spec_tree_hint(self.repo, {"adapter": "commands"}, None))
+        shutil.rmtree(os.path.join(self.repo, "specs"))
+        self.assertIsNone(leadcli.spec_tree_hint(self.repo, None, None))
+
     def test_fmt_and_check_exit_codes(self):
         p = self.path(ROT)
         with open(p) as f:
