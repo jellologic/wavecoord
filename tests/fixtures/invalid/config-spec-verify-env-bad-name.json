@@ -1,0 +1,11 @@
+{
+  "schema": "config",
+  "doc": {
+    "project": "demo",
+    "spec": {
+      "verify_env": [
+        "NOT A NAME"
+      ]
+    }
+  }
+}

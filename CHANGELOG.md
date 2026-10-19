@@ -2,6 +2,26 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
+## Unreleased
+
+### Security
+
+- The refinery runs the fence check (the `Lease:` line, config and spec changes) before `check_cmd` and before a spec tree task's Acceptance and Verify, so a PR that is refused never runs its code on the lead.
+- Verify and Acceptance run with a scrubbed environment: `PATH`, `HOME`, `LANG`, `LC_*`, `TMPDIR`, `TERM`, `TZ`, `USER`, `LOGNAME`, `SHELL` and the new `spec.verify_env` names; never `WAVECOORD_*`, `GIT_*`, `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK` or the Anthropic keys. This is not a sandbox; `docs/security.md` has the trust model.
+- A task PR may not change any lead config key: `pr_cmd`, `pr_state_cmd`, `coord_url`, `project`, `log_branch`, `default_provider`, `auto_resolve`, `branch_prefix` and the hosts' `ssh`, `repo_path`, `prepare_cmd`, `providers`, `labels` and `dispatch` are now `config_change` too (seeded defect D27).
+- `gate-check` runs the config and spec checks before it reads the `Lease:` line, so a PR body with no `Lease:` line, or with two, can no longer skip them (D26). The refinery refuses a missing or doubled `Lease:` line like a stale one (a PR body that `gh pr view` cannot read is an E5 problem instead: `enforce` blocks, `advisory` notes).
+- The refinery takes the fence merge mode and `spec.verify_at_merge` from the config on the default branch, never from the lead's working tree.
+- Predicate S (a task PR may not change the spec tree) normalizes `spec.dir` (D28), also uses the spec dir at the merge base, so a tree that moved meanwhile is still covered (D29), and compares paths without case (D30).
+
+### Fixed
+
+- Verify and Acceptance run on the merge of the default branch and the PR head, not on the head alone, so work merged since the branch started is in the checked tree.
+- Verification fails closed: a task or requirement record that is missing or does not parse at merge blocks with `verify_unavailable`. `verified` is recorded only when a Verify command ran.
+- A `dropped` or `on_hold` sibling no longer defers a requirement's Verify: the last merging task runs it.
+- A Verify or Acceptance command with a trailing `# comment` no longer fails every merge.
+- Predicate S applies only when the repo uses the spec tree, so a flat-plan repo with its own `specs/` folder is not refused with `spec_change`.
+- `spec.dir` values such as `./specs`, `specs/.` or `docs//specs` no longer cut characters off the record ids; the schema now rejects `.`, `..` and `//` in it.
+
 ## 0.2.0
 
 The spec tree: requirements and plans as typed Markdown records in your repo, merge-friendly, checked by scripts, planned in waves, with live status in git (`docs/specs.md`, `docs/design/spec-layer.md`). Phases S0 to S5.

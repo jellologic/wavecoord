@@ -29,6 +29,15 @@ wavecoord runs agents that edit code and push branches. The coordinator is a con
 - **Inbox sockets.** The launcher removes `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` from a worker's environment, so a worker started from inside a Claude session cannot write into that session. The inbox relay (`hooks.md`) gets the session's own socket and token on stdin, never on a command line, and writes only into that socket; Claude Code still applies the session's inbound rules (`crossSessionInbound`).
 - The public repo holds no secrets, hostnames or addresses of any deployment. Consumers keep those in their own config. `tests/test_generic.py` checks the repo for common secret formats.
 
+## Code that the lead runs
+
+The refinery runs code from a PR on the lead machine, as the lead user, before it merges:
+
+- `check_cmd`, in a detached worktree of the PR head, with the lead's environment.
+- For a spec tree task, its Acceptance and its requirement's Verify (`spec.verify_at_merge`, on by default). The command text comes from the default branch, but what it runs (tests, a Makefile) is the worker's code. It runs in a detached worktree of the merge of the default branch and the PR head, with a scrubbed environment: only `PATH`, `HOME`, `LANG`, `LC_*`, `TMPDIR`, `TERM`, `TZ`, `USER`, `LOGNAME`, `SHELL`, the names in `spec.verify_env`, and the refinery's `WAVECOORD_PR`, `WAVECOORD_SHA` and similar PR variables. `WAVECOORD_*` from the lead's environment, `GIT_*`, `GH_TOKEN`, `GITHUB_TOKEN`, `SSH_AUTH_SOCK` and the Anthropic keys are never passed, even when `verify_env` names them.
+
+A scrubbed environment is not a sandbox. The code can still read any file the lead user can read, such as `~/.wavecoord/token`, `~/.ssh` or the `gh` config, and it can use the network. So the refinery runs it only after the fence check (the `Lease:` line, config and spec changes) has passed. If you merge work from hosts you do not trust, run the lead as a user without those files, run the checks in your CI instead (`verify_at_merge: false` on the default branch), or put `check_cmd` in a container.
+
 ## Reporting
 
 Report a vulnerability privately through GitHub security advisories on `jellologic/wavecoord`, not in a public issue.

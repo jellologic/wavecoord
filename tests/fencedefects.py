@@ -1,4 +1,4 @@
-"""The 24 seeded defects of tests/fence/README.md, section 2, as patches.
+"""The 30 seeded defects of tests/fence/README.md, section 2, as patches.
 
 Each defect is a small monkeypatch of one function or constant of the code
 under test. `patched(name)` applies one and undoes it on exit. The patches
@@ -12,6 +12,7 @@ import os
 
 import _paths  # noqa: F401
 from wavecoord import fence, fencecore, gatecheck, globs, guard, hooks
+from wavecoord.specs import source as specsource
 
 _orig = {}
 
@@ -129,7 +130,28 @@ DEFECTS = {
             [(gatecheck, "config_changes", lambda: (lambda repo, base, head, paths: []))]),
     "D25": ("a task PR that changes the spec tree passes the merge check",
             [(gatecheck, "spec_changes", lambda: (lambda repo, base, head, paths: []))]),
+    "D26": ("a PR body with two Lease: lines skips the config and spec checks",
+            [(gatecheck, "parse_body", lambda: _parse_body_d26)]),
+    "D27": ("the 0.2.0 lead config keys: pr_cmd, coord_url, hosts[].prepare_cmd and others pass the merge check",
+            [(gatecheck, "CONFIG_KEYS", lambda: ("fence", "merge_cmd", "check_cmd", "protected_paths_cmd", "providers",
+                                                 "auto_steer", "spec", "plan")),
+             (gatecheck, "HOST_KEYS", lambda: ("claude_flags", "env"))]),
+    "D28": ("spec.dir not normalized: ./specs never matches a path",
+            [(specsource, "norm_dir", lambda: (lambda d: str(d or "specs").strip("/")))]),
+    "D29": ("the spec dir only from the base side: an edit of a tree that moved on the base side passes",
+            [(gatecheck, "spec_dirs", lambda: (lambda f: (lambda repo, revs: f(repo, revs[:1])))(
+                _o(gatecheck, "spec_dirs")))]),
+    "D30": ("spec paths compared case-sensitively: SPECS/x passes",
+            [(gatecheck, "under_dir", lambda: (lambda path, d: path.startswith(d + "/")))]),
 }
+
+
+def _parse_body_d26(text):
+    """D26: the 0.2.0 parse_body, which raises on two Lease: lines (before the config and spec checks ran)."""
+    out = _o(gatecheck, "parse_body")(text)
+    if out.get("error"):
+        raise gatecheck.GateError(out["error"])
+    return out
 
 
 @contextlib.contextmanager

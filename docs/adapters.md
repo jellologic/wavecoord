@@ -21,7 +21,8 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `spec.dir` | `specs` | The spec tree's folder, relative to the repo root (`specs.md`) |
 | `spec.require_approved` | `true` | A task is ready only when its requirement is approved and its ancestors are active |
 | `spec.suspect` | `warn` | `refuse`: a task whose requirement changed since its `basis` is not ready |
-| `spec.verify_at_merge` | `true` | The refinery runs the task's Acceptance and its requirement's Verify, both from the default branch, before a merge; a failure blocks with `verify_failed` |
+| `spec.verify_at_merge` | `true` | The refinery runs the task's Acceptance and its requirement's Verify, both from the default branch, on the merge result, before a merge; a failure blocks with `verify_failed`. Read from the default branch only |
+| `spec.verify_env` | `[]` | More environment variable names that Verify and Acceptance get (the rest is scrubbed; `security.md`) |
 | `spec.status_commits` | `true` | The coordinator writes task status into the spec tree (`specs.md`, Status) |
 | `spec.status_flush_s` | `60` | Seconds between status commits; a merge flushes at once |
 | `spec.status_author` | `wavecoord <wavecoord@localhost>` | Author of the status commits |

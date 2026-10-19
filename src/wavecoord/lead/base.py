@@ -154,7 +154,8 @@ class LeadBase(object):
     # ----- the plan -----
 
     def spec_dir(self):
-        return str((self.cfg().raw.get("spec") or {}).get("dir") or "specs").strip("/")
+        from wavecoord.specs.source import norm_dir
+        return norm_dir((self.cfg().raw.get("spec") or {}).get("dir"))
 
     def spec_files(self):
         """The spec tree's files on the default branch as fetched, else in the working tree."""

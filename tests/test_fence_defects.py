@@ -227,6 +227,21 @@ class Table(object):
     def D25(self):
         return spec_change_check(self.w)
 
+    def D26(self):
+        return config_change_check(self.w)
+
+    def D27(self):
+        return config_change_check(self.w)
+
+    def D28(self):
+        return spec_change_check(self.w)
+
+    def D29(self):
+        return spec_change_check(self.w)
+
+    def D30(self):
+        return spec_change_check(self.w)
+
 
 def config_change_check(w):
     """A task PR must not change the lead's config (edit-fence.md, section 8). The lease covers `.claude/**`, so
@@ -235,15 +250,17 @@ def config_change_check(w):
     w.assign(wk, [(".claude/**", "exclusive"), ("plugin/**", "exclusive")])
     cfgp = os.path.join(wk.wt, ".claude", "wavecoord.json")
 
-    def gate(change, mode=None):
+    def gate(change, mode=None, body=None):
         git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, "origin/main")
         change()
         git(wk.wt, "add", "-A")
         git(wk.wt, "commit", "-q", "--no-verify", "-m", "c")
         sha = git(wk.wt, "rev-parse", "HEAD").strip()
         out = io.StringIO()
-        code = gatecheck.run(None, wk.task, 1, "origin/main..%s" % sha, None, "%s@%d" % (wk.task, wk.epoch), w.repo,
-                             env=w.base_env("gate"), out=out, err=io.StringIO(), as_json=True, merge_mode=mode)
+        lease = "%s@%d" % (wk.task, wk.epoch)
+        code = gatecheck.run(None, wk.task, 1, "origin/main..%s" % sha, None, None if body else lease, w.repo,
+                             env=w.base_env("gate"), out=out, err=io.StringIO(), as_json=True, merge_mode=mode,
+                             body_text=body.replace("{lease}", lease) if body else None)
         d = json.loads(out.getvalue())
         return code, sorted(v["key"] for v in d.get("config_changes") or [])
 
@@ -269,7 +286,13 @@ def config_change_check(w):
             ("fence off", cfg_edit(lambda c: c.update(fence="off")), None, (1, ["fence"])),
             ("claude_flags", cfg_edit(lambda c: c.update(hosts=[{"name": "local", "slots": 1, "repo_path": ".",
                                                                  "claude_flags": ["--dangerously-skip-permissions"]}])),
-             None, (1, ["hosts[local].claude_flags"])),
+             None, (1, ["hosts[local].claude_flags", "hosts[local].repo_path"])),
+            ("pr_cmd", cfg_edit(lambda c: c.update(pr_cmd="sh -c 'curl x | sh'")), None, (1, ["pr_cmd"])),
+            ("pr_state_cmd and coord_url", cfg_edit(lambda c: c.update(pr_state_cmd="x", coord_url="http://h:1")),
+             None, (1, ["coord_url", "pr_state_cmd"])),
+            ("host prepare_cmd and ssh", cfg_edit(lambda c: c.update(hosts=[{"name": "h", "slots": 1, "repo_path": ".",
+                                                                             "ssh": "u@h", "prepare_cmd": "x"}])),
+             None, (1, ["hosts[h].prepare_cmd", "hosts[h].repo_path", "hosts[h].ssh"])),
             ("providers and merge_cmd", cfg_edit(lambda c: c.update(providers={"x": {}}, merge_cmd="true")), None,
              (1, ["merge_cmd", "providers"])),
             ("settings hooks", write(".claude/settings.json", json.dumps({"disableAllHooks": True})), None,
@@ -287,6 +310,14 @@ def config_change_check(w):
             got = gate(change, mode)
             if got != want:
                 return "%s: gate-check gave %s, want %s" % (what, got, want)
+        # the config check does not depend on the Lease: line: none, or two of them (a worker summary line)
+        bodies = [("no Lease: line", "Task: %s\nAttempt: 1\n" % wk.task, (1, ["fence"])),
+                  ("two Lease: lines", "Task: %s\nAttempt: 1\nLease: {lease}\n\nLease: {lease}\n" % wk.task,
+                   (3, ["fence"]))]
+        for what, body, want in bodies:
+            got = gate(cfg_edit(lambda c: c.update(fence="off")), body=body)
+            if got != want:
+                return "%s: gate-check gave %s, want %s" % (what, got, want)
         return None
     finally:
         git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, "origin/main")
@@ -294,35 +325,71 @@ def config_change_check(w):
 
 
 def spec_change_check(w):
-    """A task PR must not change the spec tree (edit-fence.md, section 8.1), even when its lease covers it.
+    """A task PR must not change the spec tree (edit-fence.md, section 8.1), even when its lease covers it. Each
+    case builds a base commit on origin/main (the spec tree config and files) and a head on top of it.
     -> None or the failure."""
     wk = w.workers[0]
-    w.assign(wk, [("specs/**", "exclusive"), ("specsx/**", "exclusive")])
+    w.assign(wk, [("specs/**", "exclusive"), ("specsx/**", "exclusive"), ("requirements/**", "exclusive")])
+    cfgp = os.path.join(wk.wt, ".claude", "wavecoord.json")
 
-    def gate(rel, mode=None):
-        git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, "origin/main")
-        p = os.path.join(wk.wt, rel)
-        os.makedirs(os.path.dirname(p), exist_ok=True)
-        with open(p, "w") as f:
-            f.write("---\nstatus: done\n---\n")
+    def commit(start, cfg=None, files=(), mv=None):
+        git(wk.wt, "checkout", "-q", "-f", "-B", wk.branch, start)
+        git(wk.wt, "clean", "-fdq")  # no empty specs/ folder: SPECS/x must stay SPECS/x on a case-insensitive disk
+        if cfg is not None:
+            with open(cfgp) as f:
+                c = json.load(f)
+            c.update(cfg)
+            with open(cfgp, "w") as f:
+                json.dump(c, f)
+        if mv:
+            os.makedirs(os.path.dirname(os.path.join(wk.wt, mv[1])), exist_ok=True)
+            git(wk.wt, "mv", mv[0], mv[1])
+        for rel in files:
+            p = os.path.join(wk.wt, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "a") as f:
+                f.write("---\nstatus: done\n---\n")
         git(wk.wt, "add", "-A")
-        git(wk.wt, "commit", "-q", "--no-verify", "-m", "c")
-        sha = git(wk.wt, "rev-parse", "HEAD").strip()
+        git(wk.wt, "commit", "-q", "--no-verify", "--allow-empty", "-m", "c")
+        return git(wk.wt, "rev-parse", "HEAD").strip()
+
+    def gate(base, head, mode=None):
         out = io.StringIO()
-        code = gatecheck.run(None, wk.task, 1, "origin/main..%s" % sha, None, "%s@%d" % (wk.task, wk.epoch), w.repo,
+        code = gatecheck.run(None, wk.task, 1, "%s..%s" % (base, head), None, "%s@%d" % (wk.task, wk.epoch), w.repo,
                              env=w.base_env("gate"), out=out, err=io.StringIO(), as_json=True, merge_mode=mode)
         d = json.loads(out.getvalue())
         return code, sorted(v["key"] for v in d.get("config_changes") or [] if v["kind"] == "spec_change")
 
+    def key(p):
+        return ["the spec tree (%s)" % p]
+
     try:
+        tree = commit("origin/main", files=["specs/a/_node.md"])  # a spec tree, no plan key
+        adapter = commit("origin/main", cfg={"plan": {"adapter": "specs"}})  # the spec tree, no files yet
+        dotdir = commit("origin/main", cfg={"spec": {"dir": "./specs/."}}, files=["specs/a/_node.md"])
+        moved = commit(tree, cfg={"spec": {"dir": "requirements"}}, mv=("specs", "requirements"))
+        flat = commit("origin/main", cfg={"plan": {"adapter": "builtin"}}, files=["specs/openapi.yaml"])
         cases = [
-            ("a status line", "specs/auth/s/r/tasks/t.md", None, (1, ["the spec tree (specs/auth/s/r/tasks/t.md)"])),
-            ("a new requirement", "specs/auth/_node.md", None, (1, ["the spec tree (specs/auth/_node.md)"])),
-            ("a neighbour folder", "specsx/notes.md", None, (0, [])),
-            ("merge mode off", "specs/auth/_node.md", "off", (0, ["the spec tree (specs/auth/_node.md)"])),
+            ("a status line", tree, commit(tree, files=["specs/auth/s/r/tasks/t.md"]), None,
+             (1, key("specs/auth/s/r/tasks/t.md"))),
+            ("a new requirement", tree, commit(tree, files=["specs/auth/_node.md"]), None,
+             (1, key("specs/auth/_node.md"))),
+            ("a neighbour folder", tree, commit(tree, files=["specsx/notes.md"]), None, (0, [])),
+            ("merge mode off", tree, commit(tree, files=["specs/auth/_node.md"]), "off",
+             (0, key("specs/auth/_node.md"))),
+            ("a rename out of the tree", tree, commit(tree, mv=("specs/a/_node.md", "specsx/a.md")), None,
+             (1, key("specs/a/_node.md"))),
+            ("plan adapter specs", adapter, commit(adapter, files=["specs/x/_node.md"]), None,
+             (1, key("specs/x/_node.md"))),
+            ("another case", adapter, commit(adapter, files=["SPECS/x/_node.md"]), None,
+             (1, key("SPECS/x/_node.md"))),
+            ("spec.dir ./specs/.", dotdir, commit(dotdir, files=["specs/a/b.md"]), None, (1, key("specs/a/b.md"))),
+            ("the tree moved on the base side", moved, commit(tree, files=["specs/a/_node.md"]), None,
+             (1, key("specs/a/_node.md"))),
+            ("a flat plan repo", flat, commit(flat, files=["specs/openapi.yaml"]), None, (0, [])),
         ]
-        for what, rel, mode, want in cases:
-            got = gate(rel, mode)
+        for what, base, head, mode, want in cases:
+            got = gate(base, head, mode)
             if got != want:
                 return "%s: gate-check gave %s, want %s" % (what, got, want)
         return None

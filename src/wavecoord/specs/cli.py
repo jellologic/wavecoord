@@ -24,10 +24,10 @@ DEFAULT_DIR = "specs"
 
 def spec_dir(root, override=None):
     if override:
-        return override.strip("/")
+        return source.norm_dir(override)
     from wavecoord.core import load_consumer_config
     cfg = load_consumer_config(root).get("spec") or {}
-    return str(cfg.get("dir") or DEFAULT_DIR).strip("/")
+    return source.norm_dir(cfg.get("dir") or DEFAULT_DIR)
 
 
 def _root(args):

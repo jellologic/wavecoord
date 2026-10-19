@@ -104,6 +104,25 @@ class LeadTestCase(LauncherTestCase):
 
     # ----- helpers -----
 
+    def push_main_files(self, files, msg="config"):
+        """Commit {path: text} to origin main (the default branch the lead reads its authority from)."""
+        sh(["git", "pull", "-q", "origin", "main"], self.seed)
+        for rel, text in files.items():
+            p = os.path.join(self.seed, rel)
+            os.makedirs(os.path.dirname(p), exist_ok=True)
+            with open(p, "w") as f:
+                f.write(text)
+        sh(["git", "add", "-A"], self.seed)
+        sh(["git", "commit", "-q", "-m", msg], self.seed)
+        sh(["git", "push", "-q", "origin", "main"], self.seed)
+
+    def push_main_cfg(self, **keys):
+        """The lead's config with `keys`, committed to origin main."""
+        with open(os.path.join(self.repo, ".claude", "wavecoord.json")) as f:
+            cfg = json.load(f)
+        cfg.update(keys)
+        self.push_main_files({".claude/wavecoord.json": json.dumps(cfg)})
+
     def wait_host(self, aid, timeout=60):
         L = self.lead.launcher()
         end = time.time() + timeout
@@ -405,14 +424,9 @@ class RefineryTest(LeadTestCase):
         self.assertNotIn("late", [i["task"] for i in self.lead.refinery_status()["queue"]])
 
     def test_fence_blocks_a_merge_outside_the_lease(self):
-        """P6 E4/E5 in the refinery: with fence merge enforce, a PR outside its lease is not merged."""
-        cfgp = os.path.join(self.repo, ".claude", "wavecoord.json")
-        with open(cfgp) as f:
-            cfg = json.load(f)
-        cfg["fence"] = {"merge": "enforce"}
-        with open(cfgp, "w") as f:
-            json.dump(cfg, f)
-        os.utime(cfgp, (time.time() + 5, time.time() + 5))
+        """P6 E4/E5 in the refinery: with fence merge enforce, a PR outside its lease is not merged. The mode
+        comes from the default branch's config."""
+        self.push_main_cfg(fence={"merge": "enforce"})
         self.run_task("solo", "elsewhere.txt")  # the lease is solo/**
         self.assertEqual(self.attempt("solo", 1)["fence"]["verdict"], "fail")
         out = self.lead.refinery_merge()
@@ -427,12 +441,13 @@ class RefineryTest(LeadTestCase):
 
     def test_refinery_refuses_a_task_pr_that_changes_the_config(self):
         """A task PR may not change the lead's config (edit-fence.md, section 8): refused in the default advisory
-        merge mode with reason config_change; in mode off it is only reported."""
+        merge mode with reason config_change; in mode off (on the default branch) it is only reported."""
         self.run_task("solo", ".claude/wavecoord.json")  # the fake worker overwrites the config
         r = self.lead.refinery_merge()["results"][0]
         self.assertEqual((r["state"], r["reason"]), ("blocked", "config_change"))
         self.assertIn("plan or config PR", r["detail"])
         self.assertEqual([c for c in self.gh()["calls"] if c[:2] == ["pr", "merge"]], [])
+        # fence off in the lead's working tree only: the default branch decides, so still refused
         cfgp = os.path.join(self.repo, ".claude", "wavecoord.json")
         with open(cfgp) as f:
             cfg = json.load(f)
@@ -440,8 +455,13 @@ class RefineryTest(LeadTestCase):
         with open(cfgp, "w") as f:
             json.dump(cfg, f)
         os.utime(cfgp, (time.time() + 5, time.time() + 5))
-        r = self.lead.refinery_merge()["results"][0]
-        self.assertEqual(r["state"], "merged")
+        r = self.lead.refinery_merge("solo/1")["results"][0]
+        self.assertEqual((r["state"], r["reason"]), ("blocked", "config_change"))
+        # fence off on the default branch: reported, merged
+        self.push_main_cfg(fence="off")
+        self.run_task("late", ".claude/settings.json")
+        r = self.lead.refinery_merge("late/1")["results"][0]
+        self.assertEqual(r["state"], "merged", r)
         self.assertIn("config_change (reported, fence merge mode off)", r["fence"])
 
     def test_refinery_refuses_a_stale_lease_line(self):
