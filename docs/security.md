@@ -25,6 +25,8 @@ wavecoord runs agents that edit code and push branches. The coordinator is a con
 
 - **Messages, reports, proposals and channel events are data.** They never grant consent or approval. The lead must ask the user in chat for protected paths, destructive actions and merges that `protected_paths_cmd` flags.
 - The channel bridge does not declare `claude/channel/permission`, so coordination traffic can never answer a permission prompt.
+- **Steering a worker.** The launcher writes a worker's messages into the worker's stdin as user lines with a header that says they are data, and the worker rules say a hint is guidance and the task stays the authority. Only a message from `lead` can be a steer action (interrupt, model switch, stop); from any other sender the same text stays plain text. The wrapper never sends a permission answer on stdin: it registers no `can_use_tool` handler.
+- **Inbox sockets.** The launcher removes `CLAUDE_CODE_MESSAGING_SOCKET` and `CLAUDE_CODE_MESSAGING_TOKEN` from a worker's environment, so a worker started from inside a Claude session cannot write into that session. The inbox relay (`hooks.md`) gets the session's own socket and token on stdin, never on a command line, and writes only into that socket; Claude Code still applies the session's inbound rules (`crossSessionInbound`).
 - The public repo holds no secrets, hostnames or addresses of any deployment. Consumers keep those in their own config. `tests/test_generic.py` checks the repo for common secret formats.
 
 ## Reporting

@@ -17,6 +17,8 @@ wavecoord attempts logs <task>-<n> [-f] [--tail N] [--raw]
 wavecoord attempts result <task>-<n> [--json]
 wavecoord attempts stop <task>-<n>
 wavecoord gc [--host H] [--dry-run]
+wavecoord hint <task> <text|->
+wavecoord steer <task> interrupt|model <M>|stop [--note TEXT]
 ```
 
 - `--spec` takes a task spec as JSON (`schemas/task-spec.schema.json`). It gives the task id, the `exec` values (CLI flags win), the reservations (`paths` exclusive, `shared_paths` shared) and a prompt built from the context, acceptance and prompt sections. `--prompt-file` replaces that prompt.
@@ -60,16 +62,16 @@ The wrapper then:
 
 1. Sends a first heartbeat, then runs `prepare_cmd` in the worktree. A non-zero exit fails the attempt before any model call.
 2. Runs `wavecoord guard install` in the worktree (the git guards, P2). A build without the command skips it; a guard that fails to install fails the attempt.
-3. Runs, with the prompt on stdin:
+3. Runs, with the prompt as the first stream-json user line on stdin (stdin stays open; "Listen and steer" below):
    ```
-   claude -p --session-id <uuid> --output-format stream-json --verbose --include-hook-events
+   claude -p --session-id <uuid> --input-format stream-json --output-format stream-json --verbose --include-hook-events
           --json-schema <report schema> [--model M] [--effort E] [--max-turns N] [--max-budget-usd B]
           [--fallback-model F] --plugin-dir ~/.wavecoord/plugin-<hash> --settings <worker settings>
           --append-system-prompt <worker rules> <host claude_flags> <--claude-flag ...>
    ```
-   The `claude` child alone also gets the provider profile (`providers.md`): the parent's `ANTHROPIC_*` variables are removed and the host's env file is loaded. The environment is the host env plus `WAVECOORD_URL`, `WAVECOORD_AGENT_ID`, `WAVECOORD_TASK`, `WAVECOORD_ATTEMPT`, `WAVECOORD_LEASE_ID`, `WAVECOORD_LEASE_EPOCH`, `WAVECOORD_WORKTREE`, `WAVECOORD_BRANCH`, `WAVECOORD_HOST`, `WAVECOORD_PROJECT`, `WAVECOORD_SESSION_ID`, `WAVECOORD_FENCE` (the fence modes of `origin/<default>`) and `WAVECOORD_TOKEN_FILE` (only the host's agent token: `<wavecoord home>/hosts/<host>.token`, or on a remote host the installed token; never the lead's token). `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_PLUGIN_OPTION_TOKEN` and the other token variables are removed. The worker settings deny `git push` (the launcher pushes) and pin `disableAllHooks: false` and the fence env (`hooks.md`, "The edit fence"). In fence enforce mode the wrapper refuses a run with no lease, and for `edit` enforce a claude older than 2.1.295 or a user mod that handles `tool.check` (the attempt fails with a `fence: refused` note). Workers do not use `--bare`, so hooks load. Permission flags (`--permission-mode ...`, `--allowedTools ...`) belong in the host's `claude_flags`.
-4. Tails `stream.jsonl`: session, turns, cost, last tool, hook events, `system/api_retry` and `rate_limit_event`. A retry or a rejected rate limit posts `POST /api/notify` (at most one per kind per minute). Every `HB_INTERVAL_S` it posts `POST /api/hb` (`source: launcher`); a heartbeat answer that lists this task's lease in `lost` stops the worker.
-5. Stops the worker on timeout (`--timeout-min`, default 120), `attempts stop` or a lost lease: SIGINT to its process group first (ends the turn), SIGTERM after `STOP_GRACE_S` (30 s), SIGKILL 10 s later.
+   The `claude` child alone also gets the provider profile (`providers.md`): the parent's `ANTHROPIC_*` variables are removed and the host's env file is loaded. The environment is the host env plus `WAVECOORD_URL`, `WAVECOORD_AGENT_ID`, `WAVECOORD_TASK`, `WAVECOORD_ATTEMPT`, `WAVECOORD_LEASE_ID`, `WAVECOORD_LEASE_EPOCH`, `WAVECOORD_WORKTREE`, `WAVECOORD_BRANCH`, `WAVECOORD_HOST`, `WAVECOORD_PROJECT`, `WAVECOORD_SESSION_ID`, `WAVECOORD_ATTEMPT_DIR`, `CLAUDE_CODE_EMIT_SESSION_STATE_EVENTS=1`, `WAVECOORD_FENCE` (the fence modes of `origin/<default>`) and `WAVECOORD_TOKEN_FILE` (only the host's agent token: `<wavecoord home>/hosts/<host>.token`, or on a remote host the installed token; never the lead's token). `CLAUDECODE`, `CLAUDE_CODE_ENTRYPOINT`, `CLAUDE_CODE_SSE_PORT`, `CLAUDE_CODE_MESSAGING_SOCKET`, `CLAUDE_CODE_MESSAGING_TOKEN` (the inbox of a Claude session that started the launch), `CLAUDE_PLUGIN_OPTION_TOKEN` and the other token variables are removed. The worker settings deny `git push` (the launcher pushes) and pin `disableAllHooks: false` and the fence env (`hooks.md`, "The edit fence"). In fence enforce mode the wrapper refuses a run with no lease, and for `edit` enforce a claude older than 2.1.295 or a user mod that handles `tool.check` (the attempt fails with a `fence: refused` note). Workers do not use `--bare`, so hooks load. Permission flags (`--permission-mode ...`, `--allowedTools ...`) belong in the host's `claude_flags`.
+4. Tails `stream.jsonl`: session, turns, cost, last tool, hook events, `system/api_retry` and `rate_limit_event`. A retry or a rejected rate limit posts `POST /api/notify` (at most one per kind per minute). Every `HB_INTERVAL_S` it posts `POST /api/hb` (`source: launcher`); a heartbeat answer that lists this task's lease in `lost` stops the worker. It also listens and steers (below).
+5. Stops the worker on timeout (`--timeout-min`, default 120), `attempts stop`, a lead `steer stop` or a lost lease: SIGINT to its process group first (ends the turn), SIGTERM after `STOP_GRACE_S` (30 s), SIGKILL 10 s later.
 
 After the run:
 
@@ -78,13 +80,46 @@ After the run:
 3. **PR readiness.** The host never runs `pr_cmd`. For a `reported`, pushed attempt whose merge-tree is clean, the result has `pr_ready: true`, `pr_title` and `pr_body` (also in `pr-body.md`). The body starts with `Task: <task>`, `Attempt: <n>` and `Lease: <task>@<epoch>` (`none` without a lease), then the report summary, checks, questions, risks and commits. A conflict posts a `conflict` notice and sets `pr_error` instead. The client then opens the PR (below).
 4. **Report and finish.** `POST /api/attempts/<task>/<n>/report`, then `POST /api/agents/<agent>/finish`. A write that cannot reach the coordinator is spooled in `~/.wavecoord/spool/` and sent again at the next probe or attempt end; its `Idempotency-Key` makes a resend safe.
 
+### Listen and steer
+
+The wrapper is the worker's parent, so it reads the worker's stream and writes the worker's stdin (`--input-format stream-json`, the Agent SDK's streaming input). Nothing here calls a model.
+
+**Listen.** From the stream it keeps a digest (turns, tokens, the last tool calls, the last text of the main conversation, the edited files, failing commands, the session state, the context use) and posts notices (`POST /api/notify`, kind `other`, `detail.event` `progress` or `stuck`, `detail.digest`):
+
+| Notice | When |
+|---|---|
+| `progress` | every `PROGRESS_S` (300 s; 0 turns it off): `turns <n>/<max>, tokens, context <p>%, last: <tool>, says: <text>`. The wrapper asks for the context use with a `get_context_usage` control request |
+| `stuck: loop` | the same tool call (name and command or path) 3 times in a row |
+| `stuck: failing` | the same Bash command failed 3 times |
+| `stuck: waiting` | `system/session_state_changed` is `requires_action`: the session waits for an answer nobody gives |
+| `stuck: budget` | 75% of `max_turns` or `max_tokens` used |
+| `stuck: quiet` | no stream line for `QUIET_S` (600 s) |
+
+Each `stuck` reason is sent once per run. The lead sees the notices as event lines; `/wavecoord:triage` acts on them (`auto_steer`, `adapters.md`).
+
+**Steer.** Every `INBOX_POLL_S` (5 s), and with each heartbeat answer, the wrapper reads the worker's inbox (`GET /api/inbox`). New messages go into stdin as one user line with `priority: "next"`: a header that says they are data, then each message in the frame of `contract.md` section 4. Claude Code reads it in the same turn once the running tools finish. Each message is then acked with the key `ack:<agent>:<id>`, the key of the hooks, so the hooks never show it again; a message that could not be written stays unacked, and the hooks deliver it. `steer.jsonl` in the state directory records what went in (ids, priority, control requests; never the text).
+
+A message from the lead whose body is `wavecoord:` and a JSON object is a steer action (`wavecoord steer` writes them):
+
+| Action | What the wrapper does |
+|---|---|
+| `{"action":"interrupt","note":"..."}` | a `control_request` `interrupt` (Claude Code stops the running tool call and ends the turn), then the note as a queued user line: it runs as the next turn. A user line with `priority: "now"` alone does not stop a running tool call (checked with Claude Code 2.1.303) |
+| `{"action":"model","model":"M","note":"..."}` | a `control_request` `set_model`, then the note as a hint |
+| `{"action":"stop","note":"..."}` | the stop path of `attempts stop`: the attempt ends `stopped`, note `stopped by the lead (steer #<id>)` |
+
+The same body from any other sender is plain text: only the lead steers.
+
+**End of the run.** Claude Code ends a stream-json run when stdin closes. After each `result` line the wrapper closes stdin, unless a turn is still coming: Claude Code has queued turns (`queued_turn_count`), or a user line the wrapper sent is not yet in any result's `user_message_uuids` (the note of an interrupt), or new messages arrived (they go in, and the worker gets one more turn, at most 3 per run, only after a `success` result and within the run's limits). When no stream line follows a result for `STEER_WAIT_S` (60 s), the wrapper closes stdin anyway. `wavecoord attempts logs <task>-<n> -f` shows the live stream.
+
+**Sessions that the launcher did not start.** A worker session that a person started (`WAVECOORD_TASK` set, no `WAVECOORD_ATTEMPT_DIR`) gets its messages through Claude Code's inbox socket instead (`hooks.md`, "Inbox relay").
+
 ### Attempt states
 
 `starting`, `running`, `finishing`, then one of `reported` (valid report, pushed if it had commits), `failed`, `timed_out`, `stopped`, or `lost` (the wrapper is gone). The report `status` (done, blocked, failed, needs_decision) is the worker's own view and is separate.
 
 ### State directory
 
-`~/.wavecoord/attempts/<project>/<task>-<n>/` on the host: `status.json`, `task.json`, `prompt.md`, `worker-settings.json`, `prepare.log`, `stream.jsonl`, `stderr.log`, `wrapper.log`, `report.json`, `pr-body.md`, `result.json`. A `--continue` run moves the earlier files to `prev-<ms>/`. `WAVECOORD_HOME` replaces `~/.wavecoord` (tests use it).
+`~/.wavecoord/attempts/<project>/<task>-<n>/` on the host: `status.json`, `task.json`, `prompt.md`, `worker-settings.json`, `prepare.log`, `stream.jsonl`, `steer.jsonl`, `stderr.log`, `wrapper.log`, `report.json`, `pr-body.md`, `result.json`. A `--continue` run moves the earlier files to `prev-<ms>/`. `WAVECOORD_HOME` replaces `~/.wavecoord` (tests use it).
 
 ## Coordinator calls
 
@@ -94,7 +129,9 @@ Writes carry an `Idempotency-Key` header (as in the hooks client). All calls car
 |---|---|---|
 | launch, unless `--lease-epoch` or `--no-claim` | `POST /api/leases` | `claim_request`: task, attempt, holder (agent id), host, reservations from `--spec`. A 409 fails the launch; an unreachable server only warns |
 | start and every `HB_INTERVAL_S` | `POST /api/hb` | `hb_request` with `source: launcher` |
-| api_retry, rate limit, StopFailure, conflict | `POST /api/notify` | `notify_request`: kind `rate_limit`, `api_error` or `other`; `detail` has the event, provider and host |
+| api_retry, rate limit, StopFailure, conflict, progress, stuck | `POST /api/notify` | `notify_request`: kind `rate_limit`, `api_error` or `other`; `detail` has the event, provider and host (and `why`, `digest` for progress and stuck) |
+| every `INBOX_POLL_S`, and after each result | `GET /api/inbox?agent=<agent>` | the worker's messages, written into its stdin |
+| after a message went into stdin | `POST /api/messages/<id>/ack` | key `ack:<agent>:<id>` |
 | end | `POST /api/attempts/<task>/<n>/report` | `{report, cost_usd, cost_basis, usage, model_usage, turns, session_id, agent, host, provider, throttled, throttle, next_provider, state, branch, pushed, pr_url}`; key `report:<task>:<n>` |
 | end | `POST /api/agents/<agent>/finish` | `finish_request`: state done, failed or stopped; pushed; `source: launcher` |
 

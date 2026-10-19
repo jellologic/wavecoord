@@ -125,6 +125,11 @@ def cmd_channel(args):
     return channel.main(args)
 
 
+def cmd_inbox_relay(args):
+    from wavecoord import relay
+    return relay.main()
+
+
 def _stub(name):
     def run(_args):
         sys.stderr.write("wavecoord %s: not implemented in P0\n" % name)
@@ -165,6 +170,10 @@ def build_parser():
 
     sp = sub.add_parser("channel", help="stdio MCP channel that pushes lead events into the session")
     sp.set_defaults(func=cmd_channel)
+
+    sp = sub.add_parser("inbox-relay", help="internal: push a worker session's messages into its Claude Code"
+                                            " inbox socket (started by the SessionStart hook)")
+    sp.set_defaults(func=cmd_inbox_relay)
 
     corecli.register(sub)
     from wavecoord import fencecli

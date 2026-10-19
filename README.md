@@ -57,6 +57,7 @@ The full walk-through is [docs/quickstart.md](docs/quickstart.md). In short, in 
 5. **Plan.** `/wavecoord:wave-plan add token rotation to the auth service`. Review and merge the plan PR.
 6. **Run.** `/wavecoord:wave-run` dispatches the ready, non-overlapping tasks and arms a Monitor on `wavecoord events --follow --for lead`, so reports, conflicts and notices reach the session while you work.
 7. **Triage.** `/wavecoord:triage` turns each event into the next action: open PRs, merge through the refinery, resolve conflicts, retry, revise the plan. For an unattended run: `/loop 10m /wavecoord:triage`.
+8. **Steer.** Running workers send `progress` and `stuck` lines. `wavecoord hint <task> "<text>"` reaches a running worker within seconds, and `wavecoord steer <task> interrupt|model <m>|stop` changes its course ([launcher.md](docs/launcher.md), "Listen and steer").
 
 ## Lead skills
 

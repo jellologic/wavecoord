@@ -20,6 +20,7 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__propose
   - mcp__plugin_wavecoord_wavecoord__config
   - Bash(wavecoord *)
+  - Agent
 ---
 
 # Triage
@@ -56,6 +57,8 @@ Details and the retry rules: [actions.md](actions.md).
 | Notice `rate_limit` | Do not retry on the same provider now; use `provider_fallback` or wait |
 | Notice `waiting_on_you` | A worker waits for a prompt it cannot answer: tell the user which one |
 | Notice `handoff` | Note it; act only when the attempt then fails |
+| Notice `progress` (a running worker's digest) | Nothing, unless it shows the worker off its task: then steer (actions.md, "Steer a running worker") |
+| Notice `stuck` (`loop`, `failing`, `waiting`, `budget`, `quiet`) | Steer by `auto_steer` of `config` (actions.md, "Steer a running worker") |
 | `lease.stale` (by `watchdog` or TTL) | The worker is idle. Check `attempt_get`; send a message, or steal and redispatch after you tell the user |
 | Conflict | `/wavecoord:resolve` |
 | Proposal, `proposals` or `plan_feedback` in a report | `/wavecoord:revise` |
@@ -76,4 +79,5 @@ With `--unattended`, or when this skill runs from `/loop` (for example `/loop 10
 - Do every safe action: merge what the refinery accepts, retry within the limits of actions.md, answer from the spec, dispatch the next ready tasks.
 - Never wait on a question. Put it in the summary list and continue with the other items; a blocked task stays blocked.
 - Never approve a hold, raise a budget over the plan, steal a lease, or merge a protected path. These wait for the user.
+- Steer only as `auto_steer` allows: with `hints`, send the steerer's plain-text hint; never interrupt, switch a model or stop a worker unattended.
 - Stop the loop when no attempts are in flight, nothing is ready, and only user questions remain. Say so.

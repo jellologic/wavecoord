@@ -30,6 +30,9 @@ DEFAULTS = {
     "WATCHDOG_S": 60,
     "WATCHDOG_NUDGE_S": 1200,
     "WATCHDOG_STALE_S": 600,
+    "INBOX_POLL_S": 5,
+    "PROGRESS_S": 300,
+    "QUIET_S": 600,
 }
 
 API_VERSION = 1

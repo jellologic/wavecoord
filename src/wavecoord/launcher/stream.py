@@ -4,6 +4,11 @@
 stream while the worker runs. It records the session, turns, cost, API retries,
 rate-limit events, the last tool and the final result with its
 `structured_output`. Unknown line types are counted and otherwise ignored.
+
+It also keeps a small digest for the lead (the last tool calls, the last text,
+the edited files, failing commands) and finds signs that a worker is stuck
+(`stuck` events): the same tool call again and again, the same command failing,
+or a session that waits for an answer nobody gives.
 """
 
 import json
@@ -12,6 +17,10 @@ import re
 # api_retry error categories that mean the account or the API is throttled.
 THROTTLE_ERRORS = ("rate_limit", "overloaded")
 THROTTLE_RE = re.compile(r"rate.?limit|overloaded|\b(429|529)\b", re.I)
+LOOP_N = 3  # the same tool call this many times in a row is a loop
+FAIL_N = 3  # the same command failing this many times
+TEXT_MAX = 200
+EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
 
 class StreamStats(object):
@@ -35,9 +44,22 @@ class StreamStats(object):
         self.lines = 0
         self.bad_lines = 0
         self.other = {}
+        self.results = 0  # result lines (a steered run has one per turn)
+        self.tools = []  # the last tool calls (summaries), newest last
+        self._tool_ids = {}  # tool_use_id -> summary
+        self.last_text = None
+        self.edited = []
+        self.failures = {}  # failing command -> count
+        self.session_state = None
+        self.controls = {}  # request_id -> control response
+        self.context_pct = None
+        self.queued_turns = 0
+        self.answered = set()  # uuids of user lines that a result answered (user_message_uuids)
+        self.lists_answered = False  # this Claude Code reports user_message_uuids
+        self._stuck_sent = set()
 
     def feed(self, line):
-        """Parse one line. -> a list of notable events: ('api_retry'|'rate_limit', dict)."""
+        """Parse one line. -> a list of notable events: ('api_retry'|'rate_limit'|'stop_failure'|'stuck', dict)."""
         line = line.strip()
         if not line:
             return []
@@ -69,6 +91,17 @@ class StreamStats(object):
                 ev = {"hook": e.get("hook_name")}
                 self.stop_failures.append(ev)
                 notable.append(("stop_failure", ev))
+        elif t == "system" and st == "session_state_changed":
+            self.session_state = e.get("state")
+            if self.session_state == "requires_action":
+                notable += self._stuck("waiting", "", "the session waits for an answer (requires_action)")
+        elif t == "control_response":
+            r = e.get("response") or {}
+            if r.get("request_id"):
+                self.controls[r["request_id"]] = r
+                body = r.get("response") or {}
+                if isinstance(body.get("percentage"), (int, float)):
+                    self.context_pct = body["percentage"]
         elif t == "rate_limit_event":
             info = e.get("rate_limit_info") or {}
             ev = {k: info.get(k) for k in ("status", "resetsAt", "rateLimitType", "utilization",
@@ -80,11 +113,31 @@ class StreamStats(object):
             if e.get("parent_tool_use_id") is None:
                 self.turns += 1
                 self._count_tokens(e.get("message") or {})
+            main = e.get("parent_tool_use_id") is None
             for block in ((e.get("message") or {}).get("content") or []):
-                if isinstance(block, dict) and block.get("type") == "tool_use":
+                if not isinstance(block, dict):
+                    continue
+                if block.get("type") == "tool_use":
                     self.last_tool = _tool_summary(block)
+                    if main:
+                        notable += self._tool(block)
+                elif block.get("type") == "text" and main and (block.get("text") or "").strip():
+                    self.last_text = " ".join(block["text"].split())[:TEXT_MAX]
+        elif t == "user":
+            for block in ((e.get("message") or {}).get("content") or []):
+                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error"):
+                    cmd = self._tool_ids.get(block.get("tool_use_id"))
+                    if cmd and cmd.startswith("Bash: "):
+                        n = self.failures[cmd] = self.failures.get(cmd, 0) + 1
+                        if n >= FAIL_N:
+                            notable += self._stuck("failing", cmd, "%s failed %d times" % (cmd, n))
         elif t == "result":
             self.result = e
+            self.results += 1
+            self.queued_turns = e.get("queued_turn_count") or 0
+            if isinstance(e.get("user_message_uuids"), list):
+                self.lists_answered = True
+                self.answered |= {u for u in e["user_message_uuids"] if isinstance(u, str)}
             self.session_id = e.get("session_id") or self.session_id
             self.cost_usd = e.get("total_cost_usd")
             self.num_turns = e.get("num_turns")
@@ -92,6 +145,34 @@ class StreamStats(object):
             key = "%s/%s" % (t, st) if st else str(t)
             self.other[key] = self.other.get(key, 0) + 1
         return notable
+
+    def _tool(self, block):
+        s = _tool_summary(block)
+        if block.get("id"):
+            self._tool_ids[block["id"]] = s
+        if block.get("name") in EDIT_TOOLS:
+            path = (block.get("input") or {}).get("file_path")
+            if isinstance(path, str) and path not in self.edited:
+                self.edited = (self.edited + [path])[-50:]
+        self.tools = (self.tools + [s])[-20:]
+        last = self.tools[-LOOP_N:]
+        if len(last) == LOOP_N and len(set(last)) == 1:
+            return self._stuck("loop", s, "the same tool call %d times in a row: %s" % (LOOP_N, s))
+        return []
+
+    def _stuck(self, why, key, text):
+        """A `stuck` event once per (why, key)."""
+        if (why, key) in self._stuck_sent:
+            return []
+        self._stuck_sent.add((why, key))
+        return [("stuck", {"why": why, "text": text[:400]})]
+
+    def digest(self):
+        """A small picture of the run for the lead."""
+        return {"turns": self.turns, "tokens": self.tokens, "last_tool": self.last_tool, "last_text": self.last_text,
+                "tools": self.tools[-5:], "edited": self.edited[-10:], "failing": sorted(
+                    [c for c, n in self.failures.items() if n >= 2])[:5], "state": self.session_state,
+                "context_pct": self.context_pct}
 
     def _count_tokens(self, msg):
         """One message id can come in several lines (one per content block): count its latest usage once."""

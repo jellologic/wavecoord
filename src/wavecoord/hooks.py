@@ -287,8 +287,17 @@ class Hook(object):
             msgs = as_list(resp.get("messages")) if status == 200 and isinstance(resp, dict) else []
             lost = []
         shown = set(self.state.get("shown", []))
+        if self.relayed():
+            from wavecoord import relay
+            shown |= relay.read_pushed(self.env, self.id.agent)  # the relay pushed them; its ack may be late
         fresh = [m for m in msgs if isinstance(m, dict) and m.get("id") not in shown and not m.get("acked")]
         return fresh, lost
+
+    def relayed(self):
+        """A worker session that wavecoord did not launch, with a Claude Code inbox socket: the
+        inbox relay pushes its messages (relay.py). A launched worker gets them on stdin."""
+        return (self.id.kind in ("worker", "resolver") and not self.env.get("WAVECOORD_ATTEMPT_DIR")
+                and bool(self.env.get("CLAUDE_CODE_MESSAGING_SOCKET")))
 
     def mark_shown(self, msgs):
         """Remember and ack the messages that the model has now seen."""
@@ -375,6 +384,10 @@ class Hook(object):
         if text:
             lines += ["Inbox:", text]
         self.mark_shown(msgs)
+        if self.relayed():
+            from wavecoord import relay
+            relay.start(self.env, self.id.agent, self.env["CLAUDE_CODE_MESSAGING_SOCKET"],
+                        self.env.get("CLAUDE_CODE_MESSAGING_TOKEN"), os.getppid())
         return context_output("SessionStart", "\n".join(lines))
 
     def worker_summary(self, live):

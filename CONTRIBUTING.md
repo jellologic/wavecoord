@@ -17,6 +17,12 @@
    claude plugin validate . --strict
    ```
    The suite includes the localhost end-to-end test `tests/e2e/test_wave.py` (about a minute): a real server, MCP calls as Claude makes them, and the fake `claude` steered per task by `FAKE_CLAUDE_MODES` (see `tests/fake-claude/claude`). Run it alone with `cd tests && python3 -m unittest e2e.test_wave`.
+   A change to how the launcher talks to `claude` (stdin, the stream, hooks, the inbox socket) also gets the live smoke test, a manual release check that calls a real model (a few cents on haiku, about 5 minutes):
+   ```bash
+   python3 scripts/smoke-live.py                     # this host
+   python3 scripts/smoke-live.py --ssh build-1=build-1.lan:wc-smoke --origin <a remote both can push>
+   ```
+   It prints a table to paste into the PR, with the Claude Code version of each host.
 5. Open a PR. CI (`.github/workflows/ci.yml`) runs the tests and the zipapp check on Ubuntu and macOS with Python 3.9 and 3.12. A PR merges after review and green CI.
 
 ## Rules

@@ -367,6 +367,8 @@ def cmd_tokens(args):
         principal = "host:" + args.host
     else:
         principal = args.role
+    if args.out and os.path.dirname(os.path.abspath(args.out)):
+        os.makedirs(os.path.dirname(os.path.abspath(args.out)), mode=0o700, exist_ok=True)  # ~/.wavecoord/hosts/
     token = provision_token(args.tokens or default_tokens_file(), args.role, principal)
     if args.out:
         fd = os.open(args.out, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)

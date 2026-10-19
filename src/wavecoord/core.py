@@ -88,6 +88,7 @@ def effective_config(repo, cfg):
         "protected_paths_cmd": None,
         "branch_prefix": "wave",
         "auto_resolve": False,
+        "auto_steer": "draft",
     }
     out.update({k: v for k, v in cfg.items() if k != "$schema"})
     if "wip_cap" not in out:

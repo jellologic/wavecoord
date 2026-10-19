@@ -231,8 +231,10 @@ def expand_env_value(v):
     return os.path.expanduser(os.path.expandvars(str(v)))
 
 
-# Environment variables of a parent Claude Code session that must not leak into a worker.
-STRIP_ENV = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT")
+# Environment variables of a parent Claude Code session that must not leak into a worker. The
+# messaging pair is the parent session's own inbox (a worker binds its own).
+STRIP_ENV = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_MESSAGING_SOCKET",
+             "CLAUDE_CODE_MESSAGING_TOKEN")
 
 
 def host_env(host_cfg, extra=None):

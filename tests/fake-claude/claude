@@ -9,8 +9,8 @@ same shapes as Claude Code:
   --output-format json         one result object
   --output-format text         the result text (default)
 
-Flags it honors: -p/--print, --output-format, --session-id (must be a UUID),
---model. --json-schema is accepted but not read: structured_output is always
+Flags it honors: -p/--print, --output-format, --input-format, --session-id (must
+be a UUID), --model. --json-schema is accepted but not read: structured_output is always
 the report below. The launcher's other flags (--effort, --settings,
 ...) are accepted and ignored; other unknown flags are ignored too.
 
@@ -69,6 +69,17 @@ Environment:
                            found", also when the transcript exists
   FAKE_CLAUDE_RESUME_REPORTS_NEW_ID=1  on a --resume, report a new random session id in the stream
                            while the transcript stays under the resumed id
+  FAKE_CLAUDE_STDIN_LOG=<p>  with --input-format stream-json: append every stdin line after the prompt
+
+--input-format stream-json (as the launcher runs workers): the first stdin line is the prompt, a
+user message. Later lines are read in a thread while the run goes on: a control_request gets a
+control_response on stdout (get_context_usage answers percentage 42); a user message is "read".
+Modes that use it:
+  "wait_steer": <n>     wait (at most 120 s) until n user messages came after the prompt
+  "echo_steer": true    add the user messages read during the run to the report's risks_hit
+  "mark_result": "<p>"  create the file <p> just before the first result line
+After the result, each new user message gives one more turn (an assistant line and a result);
+the run ends when stdin closes.
 """
 
 import argparse
@@ -78,6 +89,7 @@ import os
 import re
 import subprocess
 import sys
+import threading
 import time
 import uuid
 
@@ -96,8 +108,9 @@ def parse(argv):
     # flags with a value that the fake ignores (so the value is never read as the prompt)
     for flag in ("--effort", "--max-turns", "--max-budget-usd", "--fallback-model", "--plugin-dir",
                  "--settings", "--append-system-prompt", "--append-system-prompt-file", "--resume", "-r",
-                 "--permission-mode", "--allowedTools", "--disallowedTools", "--input-format", "--mcp-config"):
+                 "--permission-mode", "--allowedTools", "--disallowedTools", "--mcp-config"):
         ap.add_argument(flag)
+    ap.add_argument("--input-format", default="text", choices=["text", "stream-json"])
     ap.add_argument("--include-hook-events", action="store_true")
     ap.add_argument("--fork-session", action="store_true")
     ap.add_argument("prompt", nargs="?")
@@ -262,6 +275,68 @@ def report_for(prompt, session_id, mode=None):
     return rep
 
 
+OUT_LOCK = threading.Lock()
+
+
+def emit(obj):
+    with OUT_LOCK:
+        sys.stdout.write(json.dumps(obj) + "\n")
+        sys.stdout.flush()
+
+
+def user_text(obj):
+    c = (obj.get("message") or {}).get("content")
+    if isinstance(c, list):
+        return "".join(b.get("text", "") for b in c if isinstance(b, dict))
+    return c if isinstance(c, str) else ""
+
+
+class StdinReader(object):
+    """Reads stream-json stdin after the prompt: answers control requests, keeps user messages."""
+
+    def __init__(self):
+        self.users = []  # user texts, in order
+        self.uuids = []  # their uuids
+        self.cond = threading.Condition()
+        self.eof = False
+        self.thread = threading.Thread(target=self.run, daemon=True)
+        self.thread.start()
+
+    def run(self):
+        log = os.environ.get("FAKE_CLAUDE_STDIN_LOG")
+        for line in sys.stdin:
+            if not line.strip():
+                continue
+            if log:
+                with open(log, "a", encoding="utf-8") as f:
+                    f.write(line.rstrip("\n") + "\n")
+            try:
+                obj = json.loads(line)
+            except ValueError:
+                continue
+            if obj.get("type") == "control_request":
+                req = obj.get("request") or {}
+                body = {"percentage": 42} if req.get("subtype") == "get_context_usage" else {}
+                emit({"type": "control_response", "response": {"subtype": "success",
+                                                                "request_id": obj.get("request_id"),
+                                                                "response": body}})
+            elif obj.get("type") == "user":
+                with self.cond:
+                    self.users.append(user_text(obj))
+                    self.uuids.append(obj.get("uuid"))
+                    self.cond.notify_all()
+        with self.cond:
+            self.eof = True
+            self.cond.notify_all()
+
+    def wait_users(self, n, timeout):
+        end = time.time() + timeout
+        with self.cond:
+            while len(self.users) < n and not self.eof and time.time() < end:
+                self.cond.wait(0.1)
+            return len(self.users)
+
+
 DECISION_ORDER = ("deny", "defer", "ask", "allow")
 
 
@@ -355,7 +430,15 @@ def main(argv):
             session_id = str(uuid.uuid4())
 
     prompt = args.prompt if args.prompt is not None else ""
-    if not sys.stdin.isatty():
+    reader = None
+    if args.input_format == "stream-json":
+        first = sys.stdin.readline()
+        try:
+            prompt = user_text(json.loads(first))
+        except ValueError:
+            prompt = ""
+        reader = StdinReader()
+    elif not sys.stdin.isatty():
         data = sys.stdin.read()
         prompt = (prompt + "\n" + data) if prompt else data
 
@@ -407,6 +490,8 @@ def main(argv):
         end = time.time() + 120
         while not os.path.exists(mode["wait_for"]) and time.time() < end:
             time.sleep(0.1)
+    if mode.get("wait_steer") and reader is not None:
+        reader.wait_users(int(mode["wait_steer"]), 120)
     sleep = mode.get("sleep") or os.environ.get("FAKE_CLAUDE_SLEEP")
     if sleep:
         time.sleep(float(sleep))
@@ -422,6 +507,8 @@ def main(argv):
                 f.write("edited by fake claude\n")
         tool_event = {"type": "fake_tool", "tool": "Edit", "path": target, "decision": decision, "reasons": reasons}
     structured = report_for(prompt, session_id, mode)
+    if mode.get("echo_steer") and reader is not None and reader.users:
+        structured["risks_hit"] = list(structured.get("risks_hit") or []) + ["steer: " + u[:1000] for u in reader.users]
     text = str(structured.get("summary") or "fake claude done")
     usage = {"input_tokens": len(prompt.split()), "output_tokens": len(text.split()),
              "cache_creation_input_tokens": 0, "cache_read_input_tokens": 0}
@@ -464,10 +551,26 @@ def main(argv):
         if mode.get("rate_limit"):
             lines.append({"type": "rate_limit_event", "session_id": session_id,
                           "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"}})
+        if reader is not None:
+            result["user_message_uuids"] = [u for u in reader.uuids if u]
         lines.append(result)
+        if mode.get("mark_result"):
+            open(mode["mark_result"], "w").close()
         for obj in lines:
-            out.write(json.dumps(obj) + "\n")
-            out.flush()
+            emit(obj)
+        if reader is not None and exit_code == 0 and result["subtype"] == "success":
+            seen = len(reader.users)
+            turn = 1
+            while True:  # one more turn per new user message, until stdin closes
+                if reader.wait_users(seen + 1, 600) <= seen:
+                    break
+                prev, seen = seen, len(reader.users)
+                turn += 1
+                emit({"type": "assistant", "session_id": session_id, "parent_tool_use_id": None,
+                      "message": {"id": "msg_fake_%s_%d" % (session_id[:8], turn), "type": "message",
+                                  "role": "assistant", "model": args.model, "stop_reason": "end_turn", "usage": usage,
+                                  "content": [{"type": "text", "text": "read: " + reader.users[-1][:200]}]}})
+                emit(dict(result, num_turns=turn, user_message_uuids=[u for u in reader.uuids[prev:seen] if u]))
     elif args.output_format == "json":
         out.write(json.dumps(result) + "\n")
     else:

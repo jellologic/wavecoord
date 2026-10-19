@@ -278,7 +278,7 @@ Each point is `off`, `advisory` (check, warn, count "would deny"; today's P2 beh
 
 **A config change is a lead decision (0.1.4).** The fence modes and the other lead config change only in a plan or config PR that the lead makes. A task PR must not change them. A task PR is a PR from a worker attempt: its body has the `Task:`, `Attempt:` and `Lease:` lines. Plan PRs (`plan/<n>` branches from `plan_edit`) and lead PRs do not have these lines, so this rule does not apply to them. The branch name is not used, because it does not identify the author. The lead config is:
 
-- in `.claude/wavecoord.json`: `fence`, `merge_cmd`, `check_cmd`, `protected_paths_cmd`, `providers`, and `claude_flags` and `env` of each entry in `hosts` (by `name`);
+- in `.claude/wavecoord.json`: `fence`, `merge_cmd`, `check_cmd`, `protected_paths_cmd`, `providers`, `auto_steer` (0.1.6), and `claude_flags` and `env` of each entry in `hosts` (by `name`);
 - in `.claude/settings.json` and `.claude/settings.local.json`: `hooks`, `disableAllHooks`, `enabledPlugins`, `extraKnownMarketplaces` and `env`;
 - each file `hooks/hooks.json` (the plugin hooks), at any depth.
 

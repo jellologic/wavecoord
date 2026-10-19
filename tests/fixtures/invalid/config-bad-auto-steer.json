@@ -1,0 +1,7 @@
+{
+  "schema": "config",
+  "doc": {
+    "project": "demo",
+    "auto_steer": "always"
+  }
+}
