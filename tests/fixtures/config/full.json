@@ -102,5 +102,13 @@
     "push": "enforce",
     "merge": "enforce",
     "lead": "ask"
+  },
+  "spec": {
+    "dir": "docs/specs",
+    "verify_at_merge": true,
+    "verify_env": [
+      "CARGO_HOME",
+      "RUSTUP_HOME"
+    ]
   }
 }

@@ -39,10 +39,16 @@ TASK_RE = re.compile(r"^Task:[ \t]*([A-Za-z0-9][A-Za-z0-9._-]{0,63})[ \t]*$", re
 ATTEMPT_RE = re.compile(r"^Attempt:[ \t]*([0-9]+)[ \t]*$", re.M)
 
 
-# The lead's config: a change to these is a lead decision in a plan or config PR, never in a task PR.
+# The lead's config: a change to these is a lead decision in a plan or config PR, never in a task PR. It is
+# every key that the lead or a host runs, or that decides where things run, connect or merge. WORKER_KEYS are
+# the only other keys of config.schema.json (a test checks that each schema key is in one of the lists).
 CONFIG_PATH = ".claude/wavecoord.json"
-CONFIG_KEYS = ("fence", "merge_cmd", "check_cmd", "protected_paths_cmd", "providers", "auto_steer", "spec", "plan")
-HOST_KEYS = ("claude_flags", "env")
+CONFIG_KEYS = ("fence", "merge_cmd", "check_cmd", "protected_paths_cmd", "providers", "auto_steer", "spec", "plan",
+               "pr_cmd", "pr_state_cmd", "coord_url", "project", "log_branch", "default_provider", "auto_resolve",
+               "branch_prefix")
+HOST_KEYS = ("claude_flags", "env", "ssh", "repo_path", "prepare_cmd", "providers", "labels", "dispatch")
+WORKER_KEYS = ("$schema", "wip_cap")
+WORKER_HOST_KEYS = ("name", "slots")
 SETTINGS_PATHS = (".claude/settings.json", ".claude/settings.local.json")
 SETTINGS_KEYS = ("hooks", "disableAllHooks", "enabledPlugins", "extraKnownMarketplaces", "env")
 HOOKS_FILE = "hooks/hooks.json"
@@ -100,13 +106,17 @@ def is_hooks_file(path):
     return path == HOOKS_FILE or path.endswith("/" + HOOKS_FILE)
 
 
-def config_changes(repo, base, head, paths):
-    """The lead-config changes of the net diff base...head (`paths` is that diff). -> [violation]."""
+def merge_base(repo, base, head):
     rc = subprocess.run(["git", "merge-base", base, head], cwd=repo, stdin=subprocess.DEVNULL,
                         stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=120)
     if rc.returncode != 0 or not rc.stdout.strip():
         raise GateError("git merge-base %s %s failed: %s" % (base, head, rc.stderr.strip()[-300:]))
-    mb = rc.stdout.strip()
+    return rc.stdout.strip()
+
+
+def config_changes(repo, base, head, paths):
+    """The lead-config changes of the net diff base...head (`paths` is that diff). -> [violation]."""
+    mb = merge_base(repo, base, head)
     out = []
     if CONFIG_PATH in paths:
         out += _key_changes(CONFIG_PATH, _load(_show(repo, mb, CONFIG_PATH)), _load(_show(repo, head, CONFIG_PATH)),
@@ -120,18 +130,63 @@ def config_changes(repo, base, head, paths):
 
 
 def spec_dir_at(repo, rev):
-    """The spec tree's folder in the config at `rev` (default specs)."""
+    """The spec tree's folder in the config at `rev` (default specs), normalized (specs/source.py, norm_dir)."""
+    from wavecoord.specs.source import norm_dir
     cfg = _load(_show(repo, rev, CONFIG_PATH))
     spec = cfg.get("spec") if isinstance(cfg, dict) else None
-    d = spec.get("dir") if isinstance(spec, dict) else None
-    return str(d or "specs").strip("/")
+    return norm_dir(spec.get("dir") if isinstance(spec, dict) else None)
+
+
+def spec_tree_used(repo, rev, d):
+    """Does the repo at `rev` use the spec tree in folder `d`? As the lead picks its plan (lead/base.py, plan):
+    plan.adapter "specs", or no plan adapter and a file under `d`. When in doubt (git fails, the config does
+    not parse) yes."""
+    cfg = _load(_show(repo, rev, CONFIG_PATH))
+    if cfg is _BAD:
+        return True
+    plan = cfg.get("plan")
+    adapter = plan.get("adapter") if isinstance(plan, dict) else None
+    if adapter is not None:
+        return adapter == "specs"
+    try:
+        p = subprocess.run(["git", "ls-tree", "-r", "-z", "--name-only", "--full-tree", rev, "--", d + "/"], cwd=repo,
+                           stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return True
+    if p.returncode != 0:
+        return True
+    for path in p.stdout.decode("utf-8", "replace").split("\0"):
+        rel = path[len(d) + 1:] if path.startswith(d + "/") else ""
+        if rel and not any(seg.startswith(".") for seg in rel.split("/")):
+            return True
+    return False
+
+
+def spec_dirs(repo, revs):
+    """The spec tree folders in use at any of `revs`."""
+    out = []
+    for rev in revs:
+        d = spec_dir_at(repo, rev)
+        if d not in out and spec_tree_used(repo, rev, d):
+            out.append(d)
+    return out
 
 
 def spec_changes(repo, base, head, paths):
     """The spec tree files that a task PR changes (edit-fence.md, section 8.1): requirements and plans are lead
-    decisions, and status belongs to the coordinator. The folder comes from the config on the base side."""
-    d = spec_dir_at(repo, base) + "/"
-    return [{"kind": "spec_change", "path": p, "key": "the spec tree (%s)" % p} for p in paths if p.startswith(d)]
+    decisions, and status belongs to the coordinator. The folders come from the config on the base side and at
+    the merge base (a tree that moved on the base side is still the tree), only when the repo uses the spec tree
+    there. Paths compare case-insensitively (false hits are fine here, misses are not)."""
+    if not paths:
+        return []
+    dirs = spec_dirs(repo, [base, merge_base(repo, base, head)])
+    return [{"kind": "spec_change", "path": p, "key": "the spec tree (%s)" % p} for p in paths
+            if any(under_dir(p, d) for d in dirs)]
+
+
+def under_dir(path, d):
+    """Is `path` under folder `d`? Case-insensitive: SPECS/x lands in specs/ on a case-insensitive checkout."""
+    return path.lower().startswith(d.lower() + "/")
 
 
 def base_merge_mode(repo, base):
@@ -147,13 +202,14 @@ CONFIG_ADVICE = ("a task PR may not change the lead's config (fence modes, gate 
 
 
 def parse_body(text):
-    """-> {task, attempt, lease_task, epoch} from a PR body (missing keys are None)."""
-    out = {"task": None, "attempt": None, "lease_task": None, "epoch": None}
+    """-> {task, attempt, lease_task, epoch, error} from a PR body (missing keys are None). `error` names a body
+    that has more than one Lease: line; gate-check refuses it after the config and spec checks."""
+    out = {"task": None, "attempt": None, "lease_task": None, "epoch": None, "error": None}
     m = LEASE_RE.findall(text or "")
     if len(m) == 1:
         out["lease_task"], out["epoch"] = m[0][0], int(m[0][1])
     elif len(m) > 1:
-        raise GateError("the PR body has %d Lease: lines; it must have one" % len(m))
+        out["error"] = "the PR body has %d Lease: lines; it must have one" % len(m)
     t = TASK_RE.findall(text or "")
     out["task"] = t[0] if len(t) == 1 else None
     a = ATTEMPT_RE.findall(text or "")
@@ -250,7 +306,8 @@ def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None
     env = os.environ if env is None else env
     repo = os.path.abspath(repo or os.getcwd())
     res = {"verdict": "error", "exit": UNAVAILABLE_EXIT, "lease_ok": None, "task": None, "attempt": None, "epoch": None,
-           "paths": 0, "violations": [], "seq": None, "detail": None, "config_changes": [], "merge_mode": merge_mode}
+           "paths": 0, "violations": [], "seq": None, "detail": None, "config_changes": [], "merge_mode": merge_mode,
+           "config_checked": False}
 
     def done(code, verdict, detail=None):
         res.update(exit=code, verdict=verdict, detail=detail)
@@ -272,12 +329,36 @@ def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None
             with open(pr_body, encoding="utf-8") as f:
                 body_text = f.read()
         info = parse_body(body_text) if body_text is not None else {"task": None, "attempt": None,
-                                                                     "lease_task": None, "epoch": None}
+                                                                     "lease_task": None, "epoch": None, "error": None}
+        # 1. the config and spec checks: they do not depend on the Lease: line, so they run first, and a PR body
+        #    with no Lease: line or with two of them cannot skip them (edit-fence.md, section 8)
+        nr = net_range(rng or "origin/HEAD...HEAD")
+        paths = fence.diff_paths(repo, nr)
+        if paths is None:
+            raise GateError("git diff %s failed" % nr)
+        res["paths"] = len(paths)
+        base, head = nr.split("...", 1)
+        cfg = (config_changes(repo, base, head or "HEAD", paths) + spec_changes(repo, base, head or "HEAD", paths)
+               if paths else [])
+        if cfg and merge_mode is None:
+            merge_mode = base_merge_mode(repo, base)
+        res.update(config_changes=cfg, merge_mode=merge_mode, config_checked=True)
+        cfg_block = bool(cfg) and merge_mode != "off"
+        if cfg and not cfg_block:
+            err.write("wavecoord gate-check: note: %d config change(s), not refused because the fence merge mode is"
+                      " off: %s\n" % (len(cfg), ", ".join(v["key"] for v in cfg)))
+        if cfg_block:
+            res["violations"] = list(cfg)
+        # 2. the Lease: line; a missing or ambiguous one is never a pass (lease_ok false)
+        if info.get("error") and not lease:
+            res["lease_ok"] = False
+            raise GateError(info["error"])
         if lease:
             m = re.match(r"^([A-Za-z0-9][A-Za-z0-9._-]{0,63})@([0-9]+)$", lease)
             if not m:
                 raise GateError("--lease must be <task>@<epoch>")
             if info["epoch"] is not None and (info["lease_task"], info["epoch"]) != (m.group(1), int(m.group(2))):
+                res["lease_ok"] = False
                 return done(VIOLATION_EXIT, "fail", "--lease %s does not match the PR body's Lease: %s@%s"
                             % (lease, info["lease_task"], info["epoch"]))
             info["lease_task"], info["epoch"] = m.group(1), int(m.group(2))
@@ -285,27 +366,13 @@ def run(target=None, task=None, attempt=None, rng=None, pr_body=None, lease=None
         attempt = int(attempt) if attempt else info["attempt"]
         res.update(task=task, attempt=attempt, epoch=info["epoch"])
         if info["epoch"] is None:
+            res["lease_ok"] = False
             return done(VIOLATION_EXIT, "fail", "no Lease: <task>@<epoch> line (PR body, --pr-body or --lease)")
         if info["lease_task"] != task:
             res["lease_ok"] = False
             return done(VIOLATION_EXIT, "fail", "the Lease: line names task %s, not %s" % (info["lease_task"], task))
         if not attempt:
             raise GateError("no attempt number (--attempt or an Attempt: line)")
-        paths = fence.diff_paths(repo, net_range(rng or "origin/HEAD...HEAD"))
-        if paths is None:
-            raise GateError("git diff %s failed" % net_range(rng or "origin/HEAD...HEAD"))
-        res["paths"] = len(paths)
-        nr = net_range(rng or "origin/HEAD...HEAD")
-        base, head = nr.split("...", 1)
-        cfg = (config_changes(repo, base, head or "HEAD", paths) + spec_changes(repo, base, head or "HEAD", paths)
-               if paths else [])
-        if cfg and merge_mode is None:
-            merge_mode = base_merge_mode(repo, base)
-        res.update(config_changes=cfg, merge_mode=merge_mode)
-        cfg_block = bool(cfg) and merge_mode != "off"
-        if cfg and not cfg_block:
-            err.write("wavecoord gate-check: note: %d config change(s), not refused because the fence merge mode is"
-                      " off: %s\n" % (len(cfg), ", ".join(v["key"] for v in cfg)))
         client = None if check_fn else Client.from_env(agent=None, deadline=Deadline(BUDGET_S), env=env, cwd=repo)
         if client is None and check_fn is None:
             return done(UNAVAILABLE_EXIT, "unavailable", "no coordinator URL")

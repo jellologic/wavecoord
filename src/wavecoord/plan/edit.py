@@ -220,7 +220,7 @@ def spec_edit(repo, spec_dir, ops, branch=None, pr=None, title=None, body=None, 
     from wavecoord.specs.ops import OpsError, apply_ops
 
     branch, new, base_sha, default = plan_branch(repo, branch)
-    d = spec_dir.strip("/")
+    d = source.norm_dir(spec_dir)
     try:
         changes, moves, problems = apply_ops(source.read_ref(repo, base_sha, d), ops)
     except OpsError as e:

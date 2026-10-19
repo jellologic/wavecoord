@@ -104,10 +104,11 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
-        "dir": {"description": "The spec directory, relative to the repo root (default specs)", "type": "string", "pattern": "^(?!/)(?!.*(^|/)\\.\\.(/|$))[A-Za-z0-9._/-]+$"},
+        "dir": {"description": "The spec directory, relative to the repo root (default specs)", "type": "string", "pattern": "^(?!/)(?!.*//)(?!(.*/)?\\.{1,2}(/|$))[A-Za-z0-9._/-]+$"},
         "require_approved": {"type": "boolean", "default": true, "description": "A task is ready only when its requirement is approved and its ancestors are active"},
         "suspect": {"enum": ["warn", "refuse"], "default": "warn", "description": "refuse: a task whose requirement changed since its basis is not ready"},
-        "verify_at_merge": {"type": "boolean", "default": true, "description": "The refinery runs the task's Acceptance and its requirement's Verify, from the default branch, before a merge"},
+        "verify_at_merge": {"type": "boolean", "default": true, "description": "The refinery runs the task's Acceptance and its requirement's Verify, from the default branch, on the merge result, before a merge"},
+        "verify_env": {"type": "array", "items": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"}, "uniqueItems": true, "description": "Names of more environment variables that Verify and Acceptance get at merge (besides PATH, HOME, LANG, LC_*, TMPDIR, TERM, TZ, USER, LOGNAME, SHELL); WAVECOORD_*, GIT_* and tokens are never passed"},
         "status_commits": {"type": "boolean", "default": true, "description": "The coordinator writes task status into the spec tree"},
         "status_flush_s": {"type": "number", "minimum": 0, "default": 60, "description": "Seconds between status commits (a merge flushes at once)"},
         "status_author": {"type": "string", "minLength": 3, "description": "Author of the status commits, 'Name <email>'"}

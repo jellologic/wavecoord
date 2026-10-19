@@ -66,6 +66,11 @@ Each defect is a small patch (a monkeypatch of one function or constant) on the 
 | D23 | The override journal flush removes the whole batch on a deduplicated ack (the first send was logged, its answer lost, and the retry with the same key carries more entries) | override log, and the table test `journal_retry_check` (0.1.3) |
 | D24 | A task PR that changes the lead config (`fence`, `merge_cmd`, `providers`, `hosts[].claude_flags`, the settings hook keys, a `hooks/hooks.json`) passes the merge check | the table test `config_change_check` (0.1.4; design section 8) |
 | D25 | A task PR that changes the spec tree (`spec.dir`) passes the merge check | the table test `spec_change_check` (P8; design section 8.1) |
+| D26 | A PR body with two `Lease:` lines (or none) skips the config and spec checks | the table test `config_change_check` (0.2.1; design section 8) |
+| D27 | The 0.2.0 lead config keys: a task PR that changes `pr_cmd`, `coord_url`, `hosts[].prepare_cmd` or `hosts[].ssh` passes the merge check | the table test `config_change_check` (0.2.1; design section 8) |
+| D28 | `spec.dir` not normalized: with `./specs` no path is under the tree | the table test `spec_change_check` (0.2.1; design section 8.1) |
+| D29 | The spec dir only from the base side: an edit of a tree that the base side moved passes | the table test `spec_change_check` (0.2.1; design section 8.1) |
+| D30 | Spec paths compared case-sensitively: `SPECS/x` passes | the table test `spec_change_check` (0.2.1; design section 8.1) |
 
 ## 3. Table tests (`test_fence_points.py`)
 

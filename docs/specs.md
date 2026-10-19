@@ -94,8 +94,10 @@ Each task records `basis`, a fingerprint of its requirement. When the requiremen
 
 - A task runs only when its requirement is approved and its parents are active. Turn this off with `"require_approved": false`.
 - The worker's prompt holds its requirement, its inputs and outputs with their contracts, and the Verify commands.
-- A worker's PR may not change `specs/`. Workers propose spec changes in their report, and `/wavecoord:revise` turns the ones you accept into a plan PR.
-- The merge re-runs the task's Acceptance, taken from your default branch, and, with the last open task of a requirement, the requirement's Verify too; it blocks on a failure (`verify_failed`). Turn this off with `"verify_at_merge": false`.
+- A worker's PR may not change `specs/` (or your `spec.dir`, in any letter case). Workers propose spec changes in their report, and `/wavecoord:revise` turns the ones you accept into a plan PR. This rule applies only when the repo uses the spec tree: `plan.adapter` is `specs`, or there is no `plan` key and `spec.dir` has files on the default branch. With `"plan": {"adapter": "builtin"}`, a `specs/` folder of your own (an OpenAPI file, say) is just code.
+- The merge re-runs the task's Acceptance, taken from your default branch, and, with the last open task of a requirement, the requirement's Verify too (a `dropped` or `on_hold` sibling is not open). They run on the merge of your default branch and the PR, so sibling work merged earlier is there, and after the fence check. They get a scrubbed environment: add names with `"verify_env": ["CARGO_HOME"]` (`security.md`). A failure blocks (`verify_failed`). A task or requirement record that is missing or does not parse blocks too (`verify_unavailable`). Turn this off with `"verify_at_merge": false` in the config on your default branch; the lead's working tree copy does not count.
+- If you drop the last open task of a requirement after its siblings merged, no merge runs the requirement's Verify. Run it yourself, or in CI.
+- `spec.dir` is read as a clean relative path (`./specs/` is `specs`); the schema rejects `.`, `..` and `//` in it.
 - The PR body of a task ends with the trailers `Spec-Task:` and `Spec-Basis:`, so a squash merge carries them into `git log`.
 - When your default branch is protected, status commits go through one `wavecoord: status` PR instead.
 

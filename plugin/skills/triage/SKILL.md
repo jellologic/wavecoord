@@ -60,7 +60,8 @@ Details and the retry rules: [actions.md](actions.md).
 | Notice `progress` (a running worker's digest) | Nothing, unless it shows the worker off its task: then steer (actions.md, "Steer a running worker") |
 | Notice `stuck` (`loop`, `failing`, `waiting`, `budget`, `quiet`) | Steer by `auto_steer` of `config` (actions.md, "Steer a running worker") |
 | `lease.stale` (by `watchdog` or TTL) | The worker is idle. Check `attempt_get`; send a message, or steal and redispatch after you tell the user |
-| Refinery hold `verify_failed` (spec tree) | The task's Acceptance or its requirement's Verify, run from the default branch, failed on the PR head. Treat as `failed`; the requirement is not met yet |
+| Refinery hold `verify_failed` (spec tree) | The task's Acceptance or its requirement's Verify, run from the default branch, failed on the merge result. Treat as `failed`; the requirement is not met yet |
+| Refinery hold `verify_unavailable` (spec tree) | The task or its requirement is missing or does not parse on the default branch, so nothing could verify it. Fix the record in a plan PR (`/wavecoord:revise`), then merge again |
 | Refinery hold `spec_change` | A task PR changed the spec tree. Never merge it: the worker's change goes through `/wavecoord:revise` as a proposal; retry the task without it |
 | Event `spec.status_blocked` | The coordinator could not write task status into the spec tree (push refused, status PR not merged). Tell the user; the live status stays in the coordinator |
 | Conflict | `/wavecoord:resolve` |

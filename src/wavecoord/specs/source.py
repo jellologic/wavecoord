@@ -3,19 +3,35 @@
     files = read_tree(root, spec_dir)            # working tree: {relative path: text}
     files = read_ref(repo, "origin/main", spec_dir)   # a git ref, in two processes for any number of files
 
-Paths are relative to the spec directory, with "/" separators.
+Paths are relative to the spec directory, with "/" separators. `norm_dir` is the
+one reading of the config value `spec.dir` (the lead, the CLI and gate-check use it).
 """
 
 import os
+import posixpath
 import subprocess
+
+DEFAULT_DIR = "specs"
 
 
 class SourceError(RuntimeError):
     pass
 
 
+def norm_dir(d):
+    """`spec.dir` as a clean repo-relative path ("./specs", "specs/.", "docs//specs" -> "specs", "docs/specs").
+    An empty, absolute or escaping value, or the repo root itself, gives the default "specs"."""
+    d = str(d or "").replace("\\", "/").strip()
+    if not d or d.startswith("/"):
+        return DEFAULT_DIR
+    n = posixpath.normpath(d)
+    if n in (".", "..") or n.startswith("../") or n.startswith("/"):
+        return DEFAULT_DIR
+    return n
+
+
 def read_tree(root, spec_dir):
-    base = os.path.join(root, spec_dir)
+    base = os.path.join(root, norm_dir(spec_dir))
     out = {}
     if not os.path.isdir(base):
         return out
@@ -43,7 +59,7 @@ def _git(repo, args, data=None):
 
 
 def read_ref(repo, ref, spec_dir):
-    prefix = spec_dir.strip("/") + "/"
+    prefix = norm_dir(spec_dir) + "/"
     listing = _git(repo, ["ls-tree", "-r", "-z", "--full-tree", ref, "--", prefix])
     blobs = []
     for entry in listing.split(b"\0"):
@@ -53,7 +69,10 @@ def read_ref(repo, ref, spec_dir):
         parts = meta.split()
         if len(parts) != 3 or parts[1] != b"blob":
             continue
-        rel = path.decode("utf-8", "replace")[len(prefix):]
+        path = path.decode("utf-8", "replace")
+        if not path.startswith(prefix):
+            continue
+        rel = path[len(prefix):]
         if any(seg.startswith(".") for seg in rel.split("/")):
             continue
         blobs.append((rel, parts[2].decode()))
