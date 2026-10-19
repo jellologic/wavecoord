@@ -11,7 +11,14 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__spec_waves
   - mcp__plugin_wavecoord_wavecoord__spec_check
   - mcp__plugin_wavecoord_wavecoord__spec_edit
-  - Bash(wavecoord spec *)
+  - Bash(wavecoord spec tree *)
+  - Bash(wavecoord spec show *)
+  - Bash(wavecoord spec query *)
+  - Bash(wavecoord spec check *)
+  - Bash(wavecoord spec lint *)
+  - Bash(wavecoord spec waves *)
+  - Bash(wavecoord spec trace *)
+  - Bash(wavecoord spec suspect *)
   - Bash(git log *)
   - Bash(git ls-files *)
   - Read
@@ -28,7 +35,7 @@ The result is **one plan PR** that adds or changes records of the spec tree (`do
 
 ## 1. Read what exists
 
-1. `config` (the `spec` keys) and `spec_tree`: the capabilities and features that exist, their status and progress.
+1. `config` (the `spec` and `plan` keys) and `spec_tree`: the capabilities and features that exist, their status and progress. When `plan.adapter` is set to anything but `specs` (`spec_tree` then answers with a `plan_note`), the lead does not plan from the tree: tell the user to remove `plan.adapter` or set it to `specs` before tasks are planned. When `plan.selected_by` says the lead plans from `plan/tasks` and that store has tasks, the first records you add switch the lead to the tree when they merge: the user runs `wavecoord spec migrate-plan` in the same PR (`spec_edit` warns with `switch:`).
 2. `spec_query` for the area, for example `under=auth kind=requirement`, and `spec_get` for the records you may change. `spec_trace` shows what depends on a requirement before you change it.
 3. Read the code the area touches (`Glob`, `Grep`, `Read`, `git log --oneline -20 -- <dir>`): the entry points, the interfaces other code calls, the tests and the test command.
 
@@ -55,13 +62,13 @@ For each requirement (templates in [spec-templates.md](spec-templates.md)):
 
 ## 4. Check with a reviewer
 
-Run `wavecoord spec apply - --dry-run` with your ops as JSON on stdin to see the diff, or check them in your head against [spec-templates.md](spec-templates.md). Then start one `wavecoord:reviewer` subagent in spec mode with the records and the user's goal. Fix every `must` finding.
+Run `wavecoord spec apply - --dry-run --ref origin/<default>` (or `--ref origin/<plan branch>` when you add to a plan branch) with your ops as JSON on stdin to see the diff against what `spec_edit` will change, or check them in your head against [spec-templates.md](spec-templates.md). Then start one `wavecoord:reviewer` subagent in spec mode with the records and the user's goal. Fix every `must` finding.
 
 ## 5. Open the plan PR
 
 1. Write the change as ops (`create`, `set`, `set_status`, `set_section`, `add`, `set_artifact`, `set_scenario`, `mv`, `supersede`) and call `spec_edit` once, or several times with the `branch` of the first call: all of it goes into one PR. `spec_edit` refuses a change that leaves the tree invalid; read its error, fix the ops, call again.
 2. New records start as `draft`. **Ask the user before** you set a requirement to `approved` or a capability or feature to `active`, and before you deprecate or supersede anything: tasks under a draft requirement do not run.
-3. After the PR is open, `spec_check` on the branch's result is in the PR body; tell the user about each warning.
+3. After the PR is open, `spec_check` on the branch's result is in the PR body (a later call on the branch rewrites the body for the whole branch); tell the user about each warning.
 
 ## 6. Report
 

@@ -126,12 +126,25 @@ def _report(probs, n_records, as_json):
     return 1 if errs else 0
 
 
+def _messages(root, base, head):
+    """The messages of the commits in base..head ('' when git cannot list them)."""
+    import subprocess
+    try:
+        p = subprocess.run(["git", "log", "--format=%B", "%s..%s" % (base, head)], cwd=root, stdin=subprocess.DEVNULL,
+                           stdout=subprocess.PIPE, stderr=subprocess.PIPE, timeout=120)
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    return p.stdout.decode("utf-8", "replace") if p.returncode == 0 else ""
+
+
 def r_check(args):
     root, d, files = load(args)
     tree = Tree(files)
     probs = checkmod.check(tree) if args.action == "check" else checkmod.lint(tree)
     if getattr(args, "base", None):  # a plan change: the statuses it sets (section 7.1)
-        probs = sorted(probs + checkmod.plan_change_problems(Tree(source.read_ref(root, args.base, d)), tree),
+        trailers = checkmod.status_trailers(_messages(root, args.base, getattr(args, "ref", None) or "HEAD"))
+        probs = sorted(probs + checkmod.plan_change_problems(Tree(source.read_ref(root, args.base, d)), tree,
+                                                             ci=True, trailers=trailers),
                        key=lambda p: (p.path or "", p.rule, p.msg))
     return _report(probs, len(tree.nodes) + len(tree.decisions), args.json)
 
@@ -245,9 +258,10 @@ def _prune(base, rel):
 
 
 def run_ops(args, ops, coordinator=False):
-    """Apply ops to the working tree, or print the diff (--dry-run). `coordinator` only for migrate-plan."""
-    if getattr(args, "ref", None):
-        raise CliError("writes change the working tree, not --ref")
+    """Apply ops to the working tree, or print the diff (--dry-run; with --ref, against that ref, for example
+    origin/main or a plan branch). `coordinator` only for migrate-plan."""
+    if getattr(args, "ref", None) and not args.dry_run:
+        raise CliError("writes change the working tree, not --ref (--dry-run checks against a ref)")
     root, d, files = load(args)
     changes, moves, problems = apply_ops(files, ops, coordinator=coordinator)
     base = os.path.join(root, d)

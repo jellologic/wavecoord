@@ -91,6 +91,21 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - MCP `tools/call` checks the arguments against the tool's `inputSchema`; `conflicts` with `globs` as a string no longer answers "no conflicts".
 - With a wildcard bind and no `coord_url`, workers get the first `allow_hosts` name (or loopback), not `http://0.0.0.0:<port>`.
 - A lead line quotes a value with a trailing newline instead of breaking the line.
+- **The refinery merges only what should merge.** It merges an attempt only when its report is `done` (`failed`, `blocked` and `needs_decision` block with `report_not_done`) and its task is not `dropped`, `on_hold` or `draft` on the default branch (`held`). One item whose check cannot run (git, `protected_paths_cmd`, the plan) blocks with `unavailable`; the loop goes on, and the merged items' status is flushed. Requirement Verify follows a sibling's aliases (a moved task merged under its old id counts as done), and a sibling record that does not parse blocks with `verify_unavailable`.
+- **Resolvers.** The refinery starts a resolver only with `auto_resolve`, and `MAX_RESOLVES` counts resolver runs per attempt (a new conflict id per round no longer resets it). `resolve` is refused while a run of the attempt is in flight, and a resolver resumes the parked lease instead of stealing a live one. `resolve` takes `brief`, the user's decision, which the resolver reads first.
+- **Rate-limit fallback.** `collect` starts the fallback attempt through the normal readiness check (no `force`), so a task dropped, held or merged meanwhile is not started again; the provider comes from the lead's chain, not the host's result. A rate-limited resolver keeps the attempt `reported` with its PR and runs the resolver again on the next provider, instead of a new full attempt.
+- **Status commits.** `wavecoord spec check --base` passes the status PR (status lines only, each named by a `Wavecoord-Status:` line) and the output of `migrate-plan` (new tasks with a flat id alias), so the documented CI check no longer refuses them. After a restart the writer adopts its open status PR instead of failing on a second one. `spec.status_blocked` is logged under the `status-writer` actor, so it reaches the lead's feed.
+- **Spec tree in the lead.** `SpecTreePlan.get` resolves a migrated flat id with dots before a node with the same path. A read error of the default branch fails closed (`unavailable`) instead of planning from `plan/tasks`. `spec_tree` and `spec_waves` say when `plan.adapter` keeps the tree from being dispatched (`plan_note`). `spec_edit` refuses a new task under the id of a deleted task that the coordinator merged or runs, warns (`switch:`) when its PR adds the first spec records while `plan/tasks` has tasks, and rewrites the PR body for the whole branch on a later call. `wavecoord spec apply - --dry-run --ref <ref>` checks ops against a ref.
+- `plan_graph` and plan validation no longer hit the recursion limit on a long needs chain (`plan/graph.py` cycles and critical path are iterative).
+- Skills: triage and wave-run call `collect` (PRs now open in the plugin workflow); triage names a retry path for an attempt that has a PR (continue it, or close the PR and `collect`) and the new holds; wave-plan and the planner create tasks `planned`; the spec, wave-plan and wave-run skills check `plan.selected_by`; the resolve skill and its template match the real resolver (same branch, `brief`).
+
+### Changed
+
+- `refinery_merge` refuses `approved_protected` without `pr`: an approval covers one PR the user saw.
+- Skills pre-approve only read-only `wavecoord` commands (`status`, `events`, `hint`, `attempts logs`, `spec` reads); `launch`, `steer`, `refinery`, `revert`, `rebuild`, `tokens`, `gc` and `spec apply` ask each time.
+- The README and quickstart config no longer set `"plan": {"adapter": "builtin"}`, which kept the spec tree from being dispatched.
+- The default `pr_state_cmd` also asks for `url`.
+- The plugin option `project` is gone: nothing read it, and the project comes from `.claude/wavecoord.json`.
 
 ## 0.2.0
 

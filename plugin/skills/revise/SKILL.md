@@ -18,7 +18,9 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__propose
   - mcp__plugin_wavecoord_wavecoord__inbox
   - mcp__plugin_wavecoord_wavecoord__config
-  - Bash(wavecoord *)
+  - Bash(wavecoord spec suspect *)
+  - Bash(wavecoord spec waves *)
+  - Bash(wavecoord spec check *)
   - Bash(git log *)
   - Read
   - Grep
@@ -66,7 +68,7 @@ Tasks and requirements are records of the spec tree (`docs/specs.md`). Change th
 
 ## 4. Open one plan PR
 
-Read the `plan_edit` (or, with a spec tree, `spec_edit`) input schema. Put all edits of this revision in **one** plan PR (one call with a list, or calls that name the same plan branch or PR). The PR body lists each proposal, the decision and the reason. A new spec is an edit with `op: create`. After the PR is open, record each decision with `proposal_decide` (`done` for an accepted proposal in the PR, `rejected` with the reason as `note`).
+Read the `plan_edit` (or, with a spec tree, `spec_edit`) input schema. Put all edits of this revision in **one** plan PR (one call with a list, or calls that name the same plan branch or PR; with `spec_edit`, a later call on the branch rewrites the PR body for the whole branch). A `spec_edit` that creates a task under the id of a deleted task the coordinator merged or runs is refused: pick a new name. The PR body lists each proposal, the decision and the reason. A new spec is an edit with `op: create`. After the PR is open, record each decision with `proposal_decide` (`done` for an accepted proposal in the PR, `rejected` with the reason as `note`).
 
 ## 5. Report
 

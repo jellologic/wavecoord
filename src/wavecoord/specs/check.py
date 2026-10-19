@@ -164,10 +164,71 @@ def lead_transition(old, new):
     return None
 
 
-def plan_change_problems(before, after):
+WRITER_STATUSES = ("planned", "in_progress", "in_review", "done")  # what the status writer writes over and to
+
+
+def _status_only(old, new):
+    """Whether record text `new` differs from `old` in its frontmatter `status:` line only."""
+    a, b = (old or "").split("\n"), (new or "").split("\n")
+    if len(a) != len(b):
+        return False
+    diff = [(x, y) for x, y in zip(a, b) if x != y]
+    return len(diff) == 1 and all(l.rstrip("\r").startswith("status:") for l in diff[0])
+
+
+STATUS_TRAILER_RE = re.compile(r"^Wavecoord-Status: (\S+) (\S+) (\S+)\s*$", re.M)
+
+
+def status_trailers(messages):
+    """{(coordinator task id, from, to)} of the `Wavecoord-Status:` lines in commit messages (the status writer
+    puts one per change in its commit)."""
+    return set(STATUS_TRAILER_RE.findall(messages or ""))
+
+
+def status_commit(before, after, trailers=()):
+    """Whether the change from tree `before` to tree `after` is a status commit of the coordinator (section 7.2):
+    no record added, removed or moved, every changed record a task whose `status:` line alone changed, each from
+    and to a status the writer writes (planned, in_progress, in_review, done), and each change named by a
+    `Wavecoord-Status:` trailer in `trailers` (status_trailers). That is what the status writer pushes, or carries
+    on its `wavecoord/status` PR; a hand edit has no trailer."""
+    if set(before.nodes) != set(after.nodes) or set(before.decisions) != set(after.decisions):
+        return False
+    trailers = set(trailers or ())
+    changed = 0
+    for nid, n in list(after.nodes.items()) + list(after.decisions.items()):
+        old = before.nodes.get(nid) or before.decisions.get(nid)
+        if old.text == n.text:
+            continue
+        if n.kind != "task" or not _status_only(old.text, n.text):
+            return False
+        if old.status not in WRITER_STATUSES or n.status not in WRITER_STATUSES:
+            return False
+        if (nid.replace("/", "."), old.status, n.status) not in trailers:
+            return False
+        changed += 1
+    return changed > 0
+
+
+def _flat_alias(n, before):
+    """The flat plan id (no `/`) that a new task carries in `aliases`, which no node of `before` holds: the mark
+    of a task that `wavecoord spec migrate-plan` moved from plan/tasks, or None."""
+    aliases = (n.rec or n.raw or {}).get("aliases")
+    for a in aliases if isinstance(aliases, list) else []:
+        if isinstance(a, str) and "/" not in a and a not in before.nodes and a.replace(".", "/") not in before.nodes:
+            return a
+    return None
+
+
+def plan_change_problems(before, after, ci=False, trailers=()):
     """Errors (rule `status`) for the task statuses that a plan change sets against section 7.1, from the
-    tree before and the tree after. A moved task is compared with its old id (an alias)."""
+    tree before and the tree after. A moved task is compared with its old id (an alias).
+
+    `ci` (`wavecoord spec check --base`, which sees whole PRs): a status commit of the coordinator (status_commit,
+    with the commits' `trailers`) is no plan change, and a new task migrated from the flat plan (an alias with no `/`) may carry the status
+    migrate-plan gave it from the coordinator. The op API never gets these exemptions."""
     out = []
+    if ci and status_commit(before, after, trailers):
+        return out
     for nid, n in sorted(after.nodes.items()):
         if n.kind != "task" or n.status is None:
             continue
@@ -180,6 +241,8 @@ def plan_change_problems(before, after):
                     break
         was = old.status if old is not None else None
         if was == n.status:
+            continue
+        if ci and old is None and n.status in WRITER_STATUSES and _flat_alias(n, before):
             continue
         why = lead_transition(was, n.status)
         if why:

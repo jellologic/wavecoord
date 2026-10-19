@@ -26,7 +26,6 @@ Commit `.claude/wavecoord.json` (no secrets in it; schema: `schemas/config.schem
 ```json
 {
   "project": "myapp",
-  "plan": {"adapter": "builtin", "dir": "plan/tasks"},
   "hosts": [
     {"name": "local", "slots": 3, "repo_path": ".",
      "claude_flags": ["--permission-mode", "acceptEdits",
@@ -39,6 +38,7 @@ Commit `.claude/wavecoord.json` (no secrets in it; schema: `schemas/config.schem
 
 - Workers run `claude -p` unattended, so `claude_flags` must allow what they need: edits, `git add`, `git commit` and your test command. Workers never push; the launcher does.
 - Worktrees go to `<repo_path>/../wt/<task>-<n>`.
+- There is no `plan` key: the lead plans from the spec tree (`specs/`, `/wavecoord:spec`) once the default branch has spec records, else from the task files in `plan/tasks`. `"plan": {"adapter": "builtin"}` would pin `plan/tasks`, and the spec tree would then never be dispatched (`adapters.md`).
 - `wavecoord plan validate` checks the spec files offline (for CI).
 
 ## 3. Make tokens
@@ -109,12 +109,12 @@ The hooks also add new events to your next prompt, so nothing is lost when the M
 /wavecoord:triage
 ```
 
-For each event it picks the next action:
+It starts with `collect`, then picks the next action for each event:
 
-- `collect` opens the PR of each finished attempt on your machine (`pr_cmd`), or records a merge-tree conflict instead.
+- `collect` opens the PR of each finished attempt on your machine (`pr_cmd`), or records a merge-tree conflict instead. Without it no PR opens. `wavecoord dispatch --loop` also runs it on each tick.
 - A conflict goes to `resolve`: a resolver agent continues the same branch, merges the default branch and keeps both intents.
-- `refinery_merge` merges in funnel order (tasks that unblock the most work first). Before each merge it re-checks the merge-tree against the current default branch, runs `check_cmd`, and merges with `merge_cmd` pinned to the checked sha. A protected path waits for your approval in the session.
-- A rate-limited attempt is started again on the next provider of `exec.provider_fallback` (`providers.md`).
+- `refinery_merge` merges in funnel order (tasks that unblock the most work first). It merges only attempts whose report is `done`, of tasks the plan still wants. Before each merge it re-checks the merge-tree against the current default branch, runs `check_cmd`, and merges with `merge_cmd` pinned to the checked sha. A protected path waits for your approval in the session, for that one PR.
+- A rate-limited attempt is started again on the next provider of `exec.provider_fallback` (`providers.md`), when the task is still ready.
 - Proposals in reports go to `/wavecoord:revise`, which turns the accepted ones into one plan PR.
 
 To let it run while you are away: `/loop 10m /wavecoord:triage`. In a loop it never approves a protected path, raises a budget or steals a lease; your questions collect in its summary.

@@ -30,11 +30,6 @@
       "description": "Bearer token for the wavecoord server. Stored in secure storage, never in git.",
       "sensitive": true
     },
-    "project": {
-      "type": "string",
-      "title": "Project",
-      "description": "Project name on the coordinator. Empty means the name from .claude/wavecoord.json in the repo."
-    },
     "lead": {
       "type": "boolean",
       "title": "Lead session",

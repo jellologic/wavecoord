@@ -184,15 +184,27 @@ class LeadBase(object):
         p = self.cfg().raw.get("plan") or {}
         if p.get("adapter") in ("commands", "specs", "builtin"):
             return p["adapter"], "plan.adapter"
+        if not self.has_remote_default():
+            return "builtin", "no default branch of origin: no spec tree"
         try:
             files = self.spec_files()
         except ApiError as e:
-            return "builtin", "no spec tree (%s)" % e.message
+            return "unavailable", "cannot read %s/ on the default branch (%s); set plan.adapter to choose" % (
+                self.spec_dir(), e.message)
         if self.has_records(files):
             return "specs", "%s/ has spec records on the default branch" % self.spec_dir()
         if files:
             return "builtin", "%s/ has no spec records on the default branch; its files are ignored" % self.spec_dir()
         return "builtin", "no %s/ on the default branch" % self.spec_dir()
+
+    def has_remote_default(self):
+        """Whether origin has a default branch to read (a repo without one has no spec tree there: the flat plan
+        in the working tree). A read error after this is not "no tree": plan() fails closed on it."""
+        try:
+            self.default_branch()
+            return True
+        except ApiError:
+            return False
 
     def spec_plan(self, files=None):
         from wavecoord.specs.plan import SpecTreePlan
@@ -208,11 +220,15 @@ class LeadBase(object):
             return CommandPlan(p.get("commands"), self.root())
         if p.get("adapter") == "specs":
             return self.spec_plan()
-        if p.get("adapter") is None:  # no adapter named: the spec tree when it has records (docs/adapters.md)
+        if p.get("adapter") is None and self.has_remote_default():
+            # no adapter named: the spec tree when it has records on the default branch (docs/adapters.md)
             try:
                 files = self.spec_files()
-            except ApiError:
-                files = {}
+            except ApiError as e:
+                # fail closed: a read error is not "no spec tree" (the flat plan would dispatch, and the refinery
+                # would merge without the tree's Acceptance and Verify)
+                raise ApiError("unavailable", "cannot choose the plan store: %s; set plan.adapter (specs or builtin)"
+                                              " to choose it without reading the default branch" % e.message)
             if self.has_records(files):
                 return self.spec_plan(files)
         d = plan_dir(p)
@@ -301,12 +317,34 @@ class LeadBase(object):
         """The tree's graph, with the coordinator's states over the status in the files (through aliases)."""
         return self.spec_plan()._graph(self.states())
 
+    def plan_note(self):
+        """None when the lead plans from the spec tree; else why its tasks are not dispatched (a plan.adapter
+        other than specs), for the spec tools' answers."""
+        from wavecoord.specs.plan import SpecTreePlan
+        p = self.cfg().raw.get("plan") or {}
+        if p.get("adapter") in (None, "specs"):
+            try:
+                if isinstance(self.plan(), SpecTreePlan):
+                    return None
+            except ApiError as e:
+                return e.message
+            return "the spec tree has no records on the default branch yet: the lead plans from %s" % plan_dir(p)
+        return ("plan.adapter is %s in .claude/wavecoord.json: the lead plans and dispatches from that store, not"
+                " from this spec tree (plan_ready, dispatch, status commits and Verify at merge ignore it); remove"
+                " plan.adapter, or set it to specs" % p.get("adapter"))
+
+    def _noted(self, out):
+        note = self.plan_note()
+        if note:
+            out = dict(out, plan_note=note)
+        return out
+
     def spec_tree(self, node=None):
         from wavecoord.specs import query
         gr = self._graph()
         if node and node not in gr.t.nodes:
             raise ApiError("not_found", "no node %s" % node)
-        return {"tree": query.tree_view(gr.t, node, status=gr.override)[0]}
+        return self._noted({"tree": query.tree_view(gr.t, node, status=gr.override)[0]})
 
     def spec_get(self, node):
         from wavecoord.specs import query
@@ -326,7 +364,7 @@ class LeadBase(object):
 
     def spec_waves(self, node=None):
         try:
-            return self._graph().waves(node)
+            return self._noted(self._graph().waves(node))
         except KeyError:
             raise ApiError("not_found", "no node %s" % node)
 
@@ -375,6 +413,29 @@ class LeadBase(object):
         st, merged_at, err = self.pr_state(branch, branch)
         return ("MERGED" if merged_at else st), err
 
+    def used_ids(self):
+        """{coordinator task id: its state} for the ids the coordinator holds a merge, a live attempt or a PR for: a
+        new task may not take one, or it would inherit that state (a merge would make it done for good)."""
+        return {t: st for t, st in self.states().items() if st in ("done", "active", "review")}
+
+    def first_tree_note(self):
+        """A warning for a plan PR that adds the first spec records while the lead plans from plan/tasks: the
+        merge switches the plan store (docs/adapters.md), so migrate the flat tasks first."""
+        p = self.cfg().raw.get("plan") or {}
+        if p.get("adapter") is not None:
+            return None
+        try:
+            if self.has_records(self.spec_files()):
+                return None
+            names = GitSource(self.repo, "refs/remotes/origin/%s" % self.default_branch(), plan_dir(p)).names()
+        except (ApiError, PlanError, LauncherError):
+            return None
+        if not names:
+            return None
+        return ("switch: this PR adds the first records of the spec tree; once it merges the lead plans from the"
+                " tree, not from %s (%d task(s)). Run `wavecoord spec migrate-plan` first (in this PR), or set"
+                " plan.adapter" % (plan_dir(p), len(names)))
+
     def spec_edit(self, ops, branch=None, title=None, body=None):
         """Spec tree ops on a plan/<n> branch, one commit, and a PR on a new branch (like plan_edit)."""
         from wavecoord.launcher.client import run_pr_cmd
@@ -384,9 +445,22 @@ class LeadBase(object):
         def pr(br, base, t, b):
             return run_pr_cmd(cfg, br, base, t, b, os.path.join(L.index_dir(), br.replace("/", "-") + ".pr-body.md"))
 
+        def pr_body(br, b):
+            from wavecoord.gatecheck import GateError, _run
+            path = os.path.join(L.index_dir(), br.replace("/", "-") + ".pr-body.md")
+            try:
+                with open(path, "w", encoding="utf-8") as f:
+                    f.write(b)
+                _run(["gh", "pr", "edit", br, "--body-file", path], self.root())
+                return None
+            except (GateError, OSError) as e:
+                return str(e)
+
+        note = self.first_tree_note()
         try:
             out = git_spec_edit(self.repo, self.spec_dir(), ops, branch=branch, pr=pr, title=title, body=body,
-                                wt_root=os.path.join(L.index_dir(), "plan-wt"), pr_state=self.plan_pr_state)
+                                wt_root=os.path.join(L.index_dir(), "plan-wt"), pr_state=self.plan_pr_state,
+                                used_ids=self.used_ids(), notes=[note] if note else (), pr_body=pr_body)
         except EditError as e:
             raise ApiError("bad_request", str(e))
         except LauncherError as e:
@@ -479,13 +553,15 @@ class LeadBase(object):
         return {"task": task, "hosts": hosts, "provider": provider, "provider_fallback": fallback, "reason": reason,
                 "placement_avoid": avoid}
 
-    def _claim(self, steal, holder):
+    def _claim(self, resume, holder):
+        """The lease claim of a launch. A --continue run (a resolver) resumes the attempt's parked lease, never
+        steals a live one: a run of the attempt that is still going keeps its lease."""
         def claim(task, attempt, agent, host, reservations):
             body = {"task": task, "attempt": attempt, "holder": agent, "host": host}
             if reservations:
                 body["reservations"] = reservations
-            if steal:
-                body["steal"] = True
+            if resume:
+                body["resume"] = True
             try:
                 out = self.coord.claim(self.ctx, body)
             except ApiError as e:
@@ -518,7 +594,7 @@ class LeadBase(object):
         if t:  # trailers of the PR body (and of a squash merge): `git log` alone can trace a merge to the tree
             opts["trailers"] = [["Spec-Task", t["id"]]] + ([["Spec-Basis", t["basis"]]] if t.get("basis") else [])
         holder = {}
-        opts["claim"] = self._claim(steal=cont, holder=holder)
+        opts["claim"] = self._claim(resume=cont, holder=holder)
         try:
             rec = self.launcher().launch(opts)
         except LauncherError as e:

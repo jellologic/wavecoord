@@ -34,6 +34,7 @@ from .plan import coord_id, task_states
 from .tree import Tree
 
 STATUS_BRANCH = "wavecoord/status"
+WRITER_AGENT = "status-writer"  # the actor of spec.status and spec.status_blocked: not the lead's tool call
 FROM_COORD = {"active": "in_progress", "review": "in_review", "done": "done"}
 WRITABLE = ("planned", "in_progress", "in_review")
 LEAD_STATUSES = ("draft", "on_hold", "dropped")
@@ -275,8 +276,11 @@ class StatusWriter(object):
                             lease=lease)
 
     def _record(self, kind, payload):
+        """Log under the writer's own actor: a flush runs in the background too, so a block is not something the
+        lead saw in a tool result (feedback.md routes it to the lead)."""
+        from wavecoord.core import Ctx
         try:
-            self.lead.coord.record(self.lead.ctx, kind, payload)
+            self.lead.coord.record(Ctx("lead", WRITER_AGENT, agent=WRITER_AGENT), kind, payload)
         except Exception:  # noqa: BLE001 - the log is best effort here; the files carry the status
             pass
 
@@ -296,6 +300,20 @@ class StatusWriter(object):
         st, merged_at, err = fn(self.pr_url, STATUS_BRANCH)
         return "MERGED" if merged_at else st
 
+    def _open_status_pr(self):
+        """The URL of the open PR of the status branch, found by pr_state_cmd with the branch as {pr} (the writer
+        keeps its PR in memory only), or None. A command that prints no URL: the branch name, which `gh` takes."""
+        fn = getattr(self.lead, "pr_view", None)
+        if fn is None:
+            return None
+        try:
+            st, merged_at, url, err = fn(STATUS_BRANCH, STATUS_BRANCH)
+        except Exception:  # noqa: BLE001 - no answer: open a PR as before
+            return None
+        if err or merged_at or st != "OPEN":
+            return None
+        return url or STATUS_BRANCH
+
     def _via_pr(self, push_error, reset):
         """The default branch refused the push: the status commit goes through one PR (section 7.2)."""
         from wavecoord.launcher.client import run_pr_cmd
@@ -313,12 +331,18 @@ class StatusWriter(object):
             sha = self._commit(STATUS_BRANCH, base, changes, files, lease=remote)
             self.pr_key, self.pr_sha = key, sha
         if not self.pr_url:
+            self.pr_url = self._open_status_pr()  # one left open before a restart: adopt it
+        if not self.pr_url:
             body = "Status commits of the spec tree (docs/specs.md); the default branch refused a direct push:\n\n" + \
                    push_error[-300:]
             path = os.path.join(self.lead.launcher().index_dir(), "status-pr-body.md")
             url, err = run_pr_cmd(self.lead.cfg(), STATUS_BRANCH, default, "wavecoord: status", body, path)
             if not url:
-                return self._blocked("status PR: %s" % err)
+                # `gh pr create` names the open PR of the branch when there is one
+                m = re.search(r"already exists[^\n]*\n?\s*(https?://\S+/pull/\d+)", err or "")
+                if not m:
+                    return self._blocked("status PR: %s" % err)
+                url = m.group(1)
             self.pr_url = url
         ok, detail = self._merge_status_pr(sha, default)
         payload = {"sha": sha, "via": "pr", "pr_url": self.pr_url, "merged": ok,

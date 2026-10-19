@@ -283,7 +283,7 @@ def _routes():
             bool((b or {}).get("dry_run")), (b or {}).get("attempt")))),
         ("POST", r"/api/resolve", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.resolve(
             (b or {}).get("attempt"), (b or {}).get("branch"), (b or {}).get("conflict"),
-            bool((b or {}).get("dry_run"))))),
+            bool((b or {}).get("dry_run")), (b or {}).get("brief")))),
         ("GET", r"/api/refinery", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.refinery_status())),
         ("POST", r"/api/refinery/merge", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.refinery_merge(
             (b or {}).get("pr"), bool((b or {}).get("approved_protected"))))),

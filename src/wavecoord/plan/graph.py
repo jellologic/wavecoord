@@ -33,14 +33,24 @@ def missing_needs(nodes, edges):
 
 
 def cycles(nodes, edges):
-    """Each cycle once, as a list of ids, in a stable order."""
+    """Each cycle once, as a list of ids, in a stable order. Iterative: a long needs chain cannot hit the
+    recursion limit."""
     needs = needs_map(nodes, edges)
     color, stack, out, seen = {}, [], [], set()
-
-    def visit(n):
-        color[n] = 1
-        stack.append(n)
-        for m in needs.get(n, []):
+    for root in sorted(needs):
+        if color.get(root) is not None:
+            continue
+        color[root] = 1
+        stack.append(root)
+        todo = [(root, iter(needs.get(root, [])))]
+        while todo:
+            n, it = todo[-1]
+            m = next(it, None)
+            if m is None:
+                todo.pop()
+                stack.pop()
+                color[n] = 2
+                continue
             if m not in needs:
                 continue
             if color.get(m) == 1:
@@ -50,13 +60,9 @@ def cycles(nodes, edges):
                     seen.add(key)
                     out.append(list(cyc))
             elif color.get(m) is None:
-                visit(m)
-        stack.pop()
-        color[n] = 2
-
-    for n in sorted(needs):
-        if color.get(n) is None:
-            visit(n)
+                color[m] = 1
+                stack.append(m)
+                todo.append((m, iter(needs.get(m, []))))
     return out
 
 
@@ -100,19 +106,33 @@ def analyze(nodes, edges):
         m = dict(n)
         m["unblocks"] = len([d for d in deps[n["id"]] if d in open_])
         out_nodes.append(m)
-    # longest weighted path over open, acyclic nodes
+    # longest weighted path over open, acyclic nodes (iterative, post-order: no recursion limit)
     best = {}
 
-    def longest(i, depth=0):
-        if i in best:
-            return best[i]
-        if depth > len(by) or i in in_cycle:
-            return (0, [])
-        w = SIZE_WEIGHT.get(by[i].get("size"), 1)
-        sub = [longest(j, depth + 1) for j in sorted(needs.get(i, [])) if j in open_ and j in by]
-        top = max(sub, key=lambda x: x[0]) if sub else (0, [])
-        best[i] = (top[0] + w, top[1] + [i])
-        return best[i]
+    def kids(i):
+        return [j for j in sorted(needs.get(i, [])) if j in open_ and j in by]
+
+    def longest(start):
+        if start in best or start in in_cycle:
+            return best.get(start, (0, []))
+        busy = set()
+        todo = [(start, False)]
+        while todo:
+            i, expanded = todo.pop()
+            if i in best or (not expanded and i in busy):
+                continue
+            if not expanded:
+                busy.add(i)
+                todo.append((i, True))
+                todo.extend((j, False) for j in reversed(kids(i))
+                            if j not in best and j not in in_cycle and j not in busy)
+                continue
+            # a need still on the path (a cycle the scan did not list) or in a cycle counts as nothing
+            sub = [best.get(j, (0, [])) for j in kids(i)]
+            top = max(sub, key=lambda x: x[0]) if sub else (0, [])
+            best[i] = (top[0] + SIZE_WEIGHT.get(by[i].get("size"), 1), top[1] + [i])
+            busy.discard(i)
+        return best[start]
 
     crit = (0, [])
     for i in sorted(open_):

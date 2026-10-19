@@ -281,41 +281,116 @@ def plan_edit(repo, plan_dir, edits, branch=None, pr=None, title=None, body=None
             "base": default, "new_branch": new}
 
 
-def spec_edit(repo, spec_dir, ops, branch=None, pr=None, title=None, body=None, wt_root=None, pr_state=None):
+def reused_ids(before, after, used_ids, created=()):
+    """Tasks of tree `after` that are new (not in `before`, or `created` by an op) under a coordinator id with
+    history (`used_ids`, {coordinator id: state}): a deleted task's id taken again, or a move onto it. Its own old
+    ids (aliases) do not count. -> ["<tree id>: ..."]."""
+    from wavecoord.specs.plan import coord_id
+    out = []
+    for nid, n in sorted(after.nodes.items()):
+        if n.kind != "task" or (nid in before.nodes and nid not in created):
+            continue
+        cid = coord_id(nid)
+        own = [coord_id(a) for a in ((n.rec or n.raw or {}).get("aliases") or []) if isinstance(a, str)]
+        if cid in (used_ids or {}) and cid not in own:
+            out.append("%s: the coordinator id %s belongs to an earlier task (%s); a new task with this id would "
+                       "inherit its state. Pick another name" % (nid, cid, used_ids[cid]))
+    return out
+
+
+def branch_body(repo, d, branch, default, text, notes=()):
+    """The PR body of a plan branch as a whole (every spec_edit call on it): the files it changes against the
+    default branch, the spec check of its tree and the warnings."""
+    from wavecoord.launcher.common import git_run
+    from wavecoord.launcher.worktrees import REMOTE
+    from wavecoord.specs import source
+    from wavecoord.specs.check import check
+    from wavecoord.specs.tree import Tree
+    base, head = "refs/remotes/%s/%s" % (REMOTE, default), "refs/remotes/%s/%s" % (REMOTE, branch)
+    rc, out, _ = git_run(["diff", "-M", "--name-status", "%s...%s" % (base, head), "--", d], repo, timeout=120)
+    rows = []
+    for line in out.splitlines() if rc == 0 else []:
+        parts = line.split("\t")
+        if parts[0].startswith("R") and len(parts) == 3:
+            rows.append("- `%s` -> `%s`" % (parts[1], parts[2]))
+        elif len(parts) == 2:
+            rows.append("- `%s`%s" % (parts[1], " (deleted)" if parts[0] == "D" else ""))
+    probs = check(Tree(source.read_ref(repo, head, d)))
+    return _body(text, rows, [], probs, default, notes)
+
+
+def _body(text, rows, mv, problems, default, notes=()):
+    warnings = ["%s %s: %s" % (p.rule, p.path, p.msg) for p in problems if p.level == "warning"]
+    errors = ["%s %s: %s" % (p.rule, p.path, p.msg) for p in problems if p.level == "error"]
+    out = text
+    if notes:
+        out += "\n\n" + "\n".join("**%s**" % n for n in notes)
+    out += "\n\nFiles:\n" + "\n".join(rows)
+    if mv:
+        out += "\n\nMoves:\n" + "\n".join("- `%s` -> `%s`" % m for m in mv)
+    if errors:  # the ops add none (apply_ops refuses that); these are on the base already
+        out += "\n\n`wavecoord spec check`: %d error%s, already on %s:\n" % (
+            len(errors), "" if len(errors) == 1 else "s", default) + "\n".join("- " + e for e in errors[:30])
+    else:
+        out += "\n\n`wavecoord spec check`: no errors"
+    out += ("\n\nWarnings:\n" + "\n".join("- " + w for w in warnings[:30]) if warnings else "") + "\n"
+    return out
+
+
+def spec_edit(repo, spec_dir, ops, branch=None, pr=None, title=None, body=None, wt_root=None, pr_state=None,
+              used_ids=None, notes=(), pr_body=None):
     """Apply spec tree ops (specs/ops.py) on a plan branch, commit (moves as `git mv`), push, and open a PR on a
-    new branch. The ops read the tree as it is on that branch, so several calls with one branch build one PR."""
+    new branch. The ops read the tree as it is on that branch, so several calls with one branch build one PR; on
+    a reused branch with an open PR, `pr_body(branch, text)` sets the PR body to cover the whole branch.
+
+    used_ids: {coordinator id: state} with history in the coordinator; a new task may not take one (reused_ids).
+    notes: lines for the top of the PR body and the result's warnings (a switch of the plan store)."""
     from wavecoord.specs import source
     from wavecoord.specs.ops import OpsError, apply_ops
+    from wavecoord.specs.tree import Tree
 
     branch, new, base_sha, default = plan_branch(repo, branch)
     open_pr = new or reuse_check(repo, branch, default, pr_state)
     d = source.norm_dir(spec_dir)
+    before = source.read_ref(repo, base_sha, d)
     try:
-        changes, moves, problems = apply_ops(source.read_ref(repo, base_sha, d), ops)
+        changes, moves, problems = apply_ops(before, ops)
     except OpsError as e:
         raise EditError("; ".join(e.errors[:8]))
+    after = dict(before)
+    for rel, text in changes.items():
+        if text is None:
+            after.pop(rel, None)
+        else:
+            after[rel] = text
+    created = set(op.get("id") for op in ops if isinstance(op, dict) and op.get("op") == "create")
+    taken = reused_ids(Tree(before), Tree(after), used_ids, created)
+    if taken:
+        raise EditError("; ".join(taken[:8]))
     files = {"%s/%s" % (d, p): t for p, t in changes.items()}
     mv = [("%s/%s" % (d, a), "%s/%s" % (d, b)) for a, b in moves]
     for _, b in mv:
         files.setdefault(b, None)  # moved, then deleted (or moved on) in the same batch: not in the tree
     msg = title or "spec: %s" % ", ".join(sorted({op.get("id") or op.get("from") or op.get("task") or op.get("new")
                                                   for op in ops}))[:90]
-    warnings = ["%s %s: %s" % (p.rule, p.path, p.msg) for p in problems if p.level == "warning"]
+    warnings = list(notes or ()) + ["%s %s: %s" % (p.rule, p.path, p.msg) for p in problems if p.level == "warning"]
     errors = ["%s %s: %s" % (p.rule, p.path, p.msg) for p in problems if p.level == "error"]
     text = body or "Spec tree change by wavecoord spec_edit."
     commit = commit_files(repo, base_sha, branch, files, msg, text, wt_root, moves=mv)
-    url, perr = None, None
+    url, perr, body_err = None, None, None
     if open_pr and pr is not None:
-        pr_body = text + "\n\nFiles:\n" + "\n".join("- `%s`%s" % (p, " (deleted)" if t is None else "")
-                                                    for p, t in sorted(files.items()))
-        if mv:
-            pr_body += "\n\nMoves:\n" + "\n".join("- `%s` -> `%s`" % m for m in mv)
-        if errors:  # the ops add none (apply_ops refuses that); these are on the base already
-            pr_body += "\n\n`wavecoord spec check`: %d error%s, already on %s:\n" % (
-                len(errors), "" if len(errors) == 1 else "s", default) + "\n".join("- " + e for e in errors[:30])
-        else:
-            pr_body += "\n\n`wavecoord spec check`: no errors"
-        pr_body += ("\n\nWarnings:\n" + "\n".join("- " + w for w in warnings[:30]) if warnings else "") + "\n"
-        url, perr = pr(branch, default, msg[:100], pr_body)
-    return {"branch": branch, "commit": commit, "pr": url, "pr_error": perr, "files": sorted(files),
-            "moves": mv, "warnings": warnings, "errors": errors, "base": default, "new_branch": new}
+        rows = ["- `%s`%s" % (p, " (deleted)" if t is None else "") for p, t in sorted(files.items())]
+        url, perr = pr(branch, default, msg[:100], _body(text, rows, mv, problems, default, notes))
+    elif pr_body is not None:
+        # a later call on the branch: the open PR's body covers the whole branch, not only the first call
+        from wavecoord.launcher.worktrees import fetch
+        try:
+            fetch(repo)
+            body_err = pr_body(branch, branch_body(repo, d, branch, default, text, notes))
+        except Exception as e:  # noqa: BLE001 - the commit is pushed; only the body is stale
+            body_err = "%s: %s" % (type(e).__name__, e)
+    out = {"branch": branch, "commit": commit, "pr": url, "pr_error": perr, "files": sorted(files),
+           "moves": mv, "warnings": warnings, "errors": errors, "base": default, "new_branch": new}
+    if not open_pr and pr_body is not None:
+        out["pr_body_error"] = body_err
+    return out
