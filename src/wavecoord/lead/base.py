@@ -325,7 +325,10 @@ class LeadBase(object):
             raise ApiError("bad_request", str(e))
 
     def spec_waves(self, node=None):
-        return self._graph().waves(node)
+        try:
+            return self._graph().waves(node)
+        except KeyError:
+            raise ApiError("not_found", "no node %s" % node)
 
     def spec_trace(self, node):
         out = self._graph().trace(node)

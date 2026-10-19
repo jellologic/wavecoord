@@ -150,5 +150,176 @@ class RandomTreeTest(unittest.TestCase):
                 self.assertIn("P", rules(clash), seed)
 
 
+IMPL_ID = "auth/sessions/token-rotation/rotate-impl"
+TESTS_ID = "auth/sessions/token-rotation/rotate-tests"
+STORE_ID = "auth/sessions/session-store/store-api"
+
+
+def planned_store():
+    return edit(files(), STORE, lambda r: r.update(status="planned"))
+
+
+class FailClosedTest(unittest.TestCase):
+    """A need that is invalid, does not resolve or stands for no task blocks (items 15, 20, 21, 46)."""
+
+    def test_baseline(self):
+        self.assertEqual(Graph(Tree(planned_store())).ready()["tasks"], [STORE_ID])
+
+    def test_unparsable_or_invalid_blocker_blocks(self):
+        corrupt = {
+            "extra section": lambda t: t + "\n## Extra\ntext\n",
+            "conflict markers": lambda t: t.replace("## Context", "<<<<<<< HEAD\n## Context"),
+            "scalar paths": lambda t: t.replace("paths:\n  - src/auth/store.py\n  - tests/test_store.py",
+                                                "paths: src/auth/store.py"),
+            "scalar exec": lambda t: t.replace("exec:\n  model: sonnet\n  effort: medium\n  max_turns: 40\n"
+                                               "  budget_usd: 2\n  timeout_min: 30", "exec: sonnet"),
+        }
+        for what, fn in corrupt.items():
+            with self.subTest(what=what):
+                fs = planned_store()
+                new = fn(fs[STORE])
+                self.assertNotEqual(new, fs[STORE])
+                fs[STORE] = new
+                g = Graph(Tree(fs))
+                r = g.ready()
+                self.assertNotIn(IMPL_ID, r["tasks"])
+                self.assertIn(STORE_ID, r["why_not"][IMPL_ID])
+                self.assertNotIn(IMPL_ID, [t for w in g.waves()["waves"] for t in w])
+                self.assertTrue([p for p in check(Tree(fs)) if p.level == "error" and p.id == STORE_ID])
+
+    def test_malformed_task_does_not_crash_the_plan(self):
+        for what, old, new in (("paths", "paths:\n  - src/auth/rotate.py", "paths: src/auth/rotate.py"),
+                               ("exec", "exec:\n  model: opus\n  effort: high\n  max_turns: 80\n  budget_usd: 5\n"
+                                        "  timeout_min: 60", "exec: opus")):
+            with self.subTest(what=what):
+                fs = files()
+                self.assertIn(old, fs[IMPL])
+                fs[IMPL] = fs[IMPL].replace(old, new)
+                probs = check(Tree(fs))
+                self.assertIn("schema", {p.rule for p in probs if p.id == IMPL_ID and p.level == "error"})
+                g = Graph(Tree(fs))
+                self.assertNotIn(IMPL_ID, g.ready()["tasks"])
+                self.assertIn(IMPL_ID, g.ready()["why_not"][TESTS_ID])
+                g.waves()
+
+    def test_unresolved_need_blocks(self):
+        fs = edit(files(), TESTS, lambda r: r["needs"].append("auth/sessions/token-rotation/rotate-imp"))
+        fs = edit(fs, IMPL, lambda r: r.update(status="done"))
+        r = Graph(Tree(fs)).ready()
+        self.assertNotIn(TESTS_ID, r["tasks"])
+        self.assertIn("rotate-imp", r["why_not"][TESTS_ID])
+
+    def test_need_on_a_node_with_no_tasks_blocks_and_warns(self):
+        fs = files()
+        del fs[STORE]
+        g = Graph(Tree(fs))
+        r = g.ready()
+        self.assertNotIn(IMPL_ID, r["tasks"])
+        self.assertIn("no tasks", r["why_not"][IMPL_ID])
+        warns = [p for p in check(Tree(fs)) if p.level == "warning" and p.rule == "needs"]
+        self.assertTrue([p for p in warns if "no task" in p.msg], [str(p) for p in warns])
+
+
+class DroppedTest(unittest.TestCase):
+    """Dropped tasks neither block nor produce (item 45)."""
+
+    def test_dropped_task_in_a_needed_subtree_does_not_block(self):
+        fs = files()
+        cache = STORE.replace("store-api", "store-cache")
+        fs[cache] = fs[STORE].replace("status: done", "status: dropped").replace(
+            "auth.session-store.api", "auth.session-store.cache").replace("src/auth/store.py", "src/auth/cache.py"
+            ).replace("tests/test_store.py", "tests/test_cache.py")
+        g = Graph(Tree(fs))
+        self.assertEqual(g.ready()["tasks"], [IMPL_ID])
+        self.assertEqual(g.waves()["unplaced"], [])
+
+    def test_dropped_producer_is_no_producer(self):
+        fs = edit(files(), IMPL, lambda r: r.update(status="dropped"))
+        errs = {p.rule for p in check(Tree(fs)) if p.level == "error"}
+        self.assertIn("A3", errs)
+        self.assertIn("A1", errs)
+        # a replacement with the same outputs is not a second producer
+        fs[IMPL.replace("rotate-impl", "rotate-impl2")] = files()[IMPL]
+        fs = edit(fs, TESTS, lambda r: r.update(needs=["auth/sessions/token-rotation/rotate-impl2"]) or
+                  r["inputs"][0].update({"from": "auth/sessions/token-rotation/rotate-impl2"}))
+        errs = {p.rule for p in check(Tree(fs)) if p.level == "error"}
+        self.assertFalse(errs & {"A1", "A2", "A3"}, errs)
+
+
+class SpecFirstTest(unittest.TestCase):
+    """A requirement written before its tasks (the /wavecoord:spec flow) only warns for A1 and A3 (item 6)."""
+
+    def test_no_tasks_yet(self):
+        fs = files()
+        for rel in (IMPL, TESTS, STORE):
+            del fs[rel]
+        probs = check(Tree(fs))
+        self.assertEqual([str(p) for p in probs if p.level == "error"], [])
+        self.assertTrue({"A1", "A3"} <= {p.rule for p in probs if p.level == "warning"})
+
+
+class ReadyRulesTest(unittest.TestCase):
+    def test_refuse_treats_missing_basis_as_suspect(self):
+        fs = edit(files(), IMPL, lambda r: r.pop("basis"))
+        g = Graph(Tree(fs))
+        self.assertEqual(g.ready("warn")["tasks"], [IMPL_ID])
+        self.assertIn("basis", g.ready("refuse")["why_not"][IMPL_ID])
+
+    def test_supersedes(self):
+        store_req = "auth/sessions/session-store/_node.md"
+        cases = {
+            "self": (ROT, lambda r: r.update(supersedes=["auth/sessions/token-rotation"])),
+            "mutual": (ROT, lambda r: r.update(supersedes=["auth/sessions/session-store"])),
+        }
+        fs = edit(files(), store_req, lambda r: r.update(supersedes=["auth/sessions/token-rotation"]))
+        self.assertIn("supersedes", rules(fs, "warning"))  # superseded but still approved
+        g = Graph(Tree(fs))
+        self.assertIn("superseded", g.ready()["why_not"][IMPL_ID])
+        self.assertEqual(g.trace("auth/sessions/token-rotation")["superseded_by"], ["auth/sessions/session-store"])
+        for what, (rel, fn) in cases.items():
+            with self.subTest(what=what):
+                self.assertIn("supersedes", rules(edit(dict(fs) if what == "mutual" else files(), rel, fn)))
+
+    def test_waves_hold_tasks_that_cannot_run(self):
+        fs = edit(files(), IMPL, lambda r: r.update(status="on_hold"))
+        w = Graph(Tree(fs)).waves()
+        self.assertEqual(w["waves"], [])
+        self.assertIn(IMPL_ID, w["held"])
+        self.assertEqual(w["unplaced"], [TESTS_ID])
+        fs = edit(files(), ROT, lambda r: r.update(status="draft"))
+        self.assertIn(IMPL_ID, Graph(Tree(fs)).waves()["held"])
+
+    def test_waves_root_resolves_and_must_exist(self):
+        g = Graph(Tree(files()))
+        self.assertEqual(g.waves("auth/sessions/token-rotation/")["waves"][0], [IMPL_ID])
+        with self.assertRaises(KeyError):
+            g.waves("auth/nope")
+
+    def test_a4_accepts_a_transitive_producer(self):
+        fs = files()
+        fs[TESTS.replace("rotate-tests", "docs")] = files()[TESTS]
+        fs = edit(fs, TESTS.replace("rotate-tests", "docs"), lambda r: r.update(
+            needs=[TESTS_ID], paths=["docs/rotate.md"], outputs=[{"id": "docs/rotate.md", "kind": "file"}]))
+        self.assertNotIn("A4", rules(fs))
+
+    def test_long_needs_chain(self):
+        fs = files()
+        req = "auth/sessions/token-rotation"
+        n = 1500
+        for i in range(n):
+            rel = "%s/tasks/c%d.md" % (req, i)
+            fs[rel] = files()[TESTS]
+            fs = edit(fs, rel, lambda r, i=i: r.update(needs=["%s/c%d" % (req, i + 1)] if i + 1 < n else [],
+                                                        inputs=[], outputs=[], paths=["chain/c%d.py" % i]))
+        g = Graph(Tree(fs))
+        self.assertEqual(len(g.waves()["waves"]), n)
+
+    def test_non_canonical_paths(self):
+        fs = edit(files(), TESTS, lambda r: r.update(needs=[], inputs=[], paths=["./src/auth/rotate.py"], outputs=[]))
+        self.assertIn("paths", rules(fs))
+        g = Graph(Tree(fs))
+        self.assertFalse(g.parallel_ok(IMPL_ID, TESTS_ID))
+
+
 if __name__ == "__main__":
     unittest.main()

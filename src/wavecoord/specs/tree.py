@@ -7,31 +7,57 @@
 
 The path is the ID and the folder is the parent: the parent is never read from
 a field. A file that does not parse keeps `rec = None` and its error in
-`parse_errors`; the rest of the tree is still built.
+`parse_errors`; the rest of the tree is still built. A file that parses but
+breaks the record schema (a kind that is not the path's, a scalar where a list
+belongs, an unknown key) keeps the parsed record in `raw`, its errors in
+`invalid`, and `rec = None` too: the graph treats it like a file that does not
+parse (it blocks what needs it), and `check` reports it.
+
+A symlink, or anything else that is not a regular file, is a layout error
+(source.py reads it as SYMLINK).
 """
 
 import datetime
 
+from wavecoord import schemaload
 from wavecoord.plan.spec import SpecError
 
 from . import doc
 from .model import DATE_SLUG_RE, DECISIONS_DIR, DEPTH_KIND, NAME_RE, NODE_FILE, RESERVED, TASKS_DIR
+from .source import SYMLINK
 
 
 class Node(object):
-    __slots__ = ("id", "kind", "path", "rec", "text", "parent", "depth")
+    __slots__ = ("id", "kind", "path", "rec", "raw", "invalid", "text", "parent", "depth")
 
     def __init__(self, nid, kind, path, text, parent, depth):
         self.id, self.kind, self.path, self.text, self.parent, self.depth = nid, kind, path, text, parent, depth
-        self.rec = None
+        self.rec = None  # the record, when it parses and fits its schema
+        self.raw = None  # the parsed record, valid or not
+        self.invalid = []  # schema errors of raw
+
+    def _key(self, key):
+        v = (self.rec or self.raw or {}).get(key)
+        return v if isinstance(v, str) else None
 
     @property
     def status(self):
-        return (self.rec or {}).get("status")
+        return self._key("status")
 
     @property
     def title(self):
-        return (self.rec or {}).get("title")
+        return self._key("title")
+
+
+def record_errors(rec, kind):
+    """The schema errors of one parsed record: the kind against the path, spec-record.schema.json and,
+    for a task, its exec against task-spec.schema.json."""
+    if rec.get("kind") != kind:
+        return ["the path makes this a %s, but kind is %r" % (kind, rec.get("kind"))]
+    errs = list(schemaload.errors(rec, "spec-record", "#/definitions/" + kind))
+    if kind == "task" and isinstance(rec.get("exec"), dict):
+        errs += ["exec: " + e for e in schemaload.errors(rec["exec"], "task-spec", "#/definitions/exec")]
+    return errs
 
 
 def _names_ok(names):
@@ -84,15 +110,21 @@ class Tree(object):
         self._children = {}
         for rel in sorted(files):
             try:
+                if files[rel] == SYMLINK:
+                    raise ValueError("a symlink or special file: records are regular files")
                 kind, nid, parent, depth = classify(rel)
             except ValueError as e:
                 self.layout_errors.append((rel, str(e)))
                 continue
             n = Node(nid, kind, rel, files[rel], parent, depth)
             try:
-                n.rec = doc.parse(files[rel], kind)
+                n.raw = doc.parse(files[rel], kind)
             except SpecError as e:
                 self.parse_errors[nid] = e.errors
+            else:
+                n.invalid = record_errors(n.raw, kind)
+                if not n.invalid:
+                    n.rec = n.raw
             if kind == "decision":
                 self.decisions[nid] = n
             else:
@@ -102,7 +134,10 @@ class Tree(object):
         self.aliases = {}  # old id -> node id
         self.alias_errors = []  # (path, message)
         for nid, n in sorted(self.nodes.items()):
-            for old in (n.rec or {}).get("aliases") or []:
+            olds = (n.rec or n.raw or {}).get("aliases")
+            for old in olds if isinstance(olds, list) else []:
+                if not isinstance(old, str):
+                    continue
                 if old in self.nodes:
                     self.alias_errors.append((n.path, "alias %s is the id of a live node" % old))
                 elif old in self.aliases:

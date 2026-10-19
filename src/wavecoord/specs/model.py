@@ -8,6 +8,8 @@ The JSON shape is checked against schemas/spec-record.schema.json.
 
 import re
 
+from wavecoord.plan.spec import SpecError
+
 SCHEMA_VERSION = 1
 NAME_RE = re.compile(r"^[a-z0-9][a-z0-9-]{0,62}$")
 DATE_SLUG_RE = re.compile(r"^([0-9]{4})-([0-9]{2})-([0-9]{2})-([a-z0-9][a-z0-9-]{0,62})$")
@@ -88,8 +90,47 @@ CLOSED = ("done", "dropped")
 STEP_WORDS = ("Given", "When", "Then", "And", "But")
 
 
+def _scalar_value(v):
+    return v is None or isinstance(v, (str, int, float, bool))
+
+
+def shape_errors(rec, kind=None):
+    """What keeps a record from being written back whole: a kind that is unknown or not the path's (`kind`),
+    keys the kind does not have, and list or map keys that hold something else. `render` refuses such a
+    record rather than lose data (the schema check in check.py reports the rest)."""
+    k = rec.get("kind")
+    if kind is not None and k != kind:
+        return ["the path makes this a %s, but kind is %r" % (kind, k)]
+    if k not in KINDS:
+        return ["kind %r is not one of %s" % (k, ", ".join(sorted(KINDS)))]
+    errs = []
+    known = set(FRAME) | set(KINDS[k].keys) | {"sections"}
+    for key in sorted(x for x in rec if x not in known):
+        errs.append("unknown key %s (a %s has: %s)" % (key, k, ", ".join(KINDS[k].keys)))
+    for key in SORTED_LISTS:
+        v = rec.get(key)
+        if v is not None and not (isinstance(v, list) and all(isinstance(x, str) for x in v)):
+            errs.append("%s is a block list of text items" % key)
+    for key in ARTIFACT_LISTS:
+        v = rec.get(key)
+        if v is not None and not (isinstance(v, list) and all(
+                isinstance(a, dict) and all(_scalar_value(x) for x in a.values()) for a in v)):
+            errs.append("%s is a block list of artifacts (`- id: ...` with one key per line)" % key)
+    v = rec.get("exec")
+    if v is not None and not (isinstance(v, dict) and all(
+            _scalar_value(x) or (isinstance(x, list) and all(_scalar_value(y) for y in x)) for x in v.values())):
+        errs.append("exec is a map of `key: value` lines")
+    if not isinstance(rec.get("sections", {}), dict):
+        errs.append("sections is a map")
+    return errs
+
+
 def normalize(rec):
-    """The canonical model of a record: empty lists and sections dropped, unordered lists sorted."""
+    """The canonical model of a record: empty lists and sections dropped, unordered lists sorted.
+    Raises SpecError when the record cannot be written back whole (shape_errors)."""
+    errs = shape_errors(rec)
+    if errs:
+        raise SpecError(errs)
     kind = KINDS[rec["kind"]]
     out = {}
     for k, v in rec.items():

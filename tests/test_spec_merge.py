@@ -165,7 +165,7 @@ class CaseTest(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         task = specsim.tasks_of(self.base, self.req)[0]
         rc, _ = self.merge(_edit(self.base, [{"op": "set_status", "id": task, "status": "on_hold"}]),
-                           _edit(self.base, [{"op": "set_status", "id": task, "status": "dropped"}]))
+                           _edit(self.base, [{"op": "set_status", "id": task, "status": "draft"}]))
         self.assertNotEqual(rc, 0)
 
     def test_p4_status_and_other_keys_merge(self):

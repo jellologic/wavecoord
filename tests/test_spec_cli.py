@@ -196,6 +196,75 @@ class CliTest(Repo):
         self.assertEqual(source.read_ref(self.repo, "main", "nothing-here"), {})
 
 
+class CliRobustTest(Repo):
+    """fmt never loses data; symlinks; clean errors (items 0, 10, 11, 41, 54, 62, 24/67)."""
+
+    def write(self, rel, text):
+        with open(self.path(rel), "w") as f:
+            f.write(text)
+
+    def read(self, rel):
+        with open(self.path(rel)) as f:
+            return f.read()
+
+    def test_fmt_refuses_and_leaves_the_file(self):
+        canon = self.read(ROT)
+        for what, text in (("kind", canon.replace("kind: requirement", "kind: feature")),
+                           ("typo", canon.replace("kind: requirement", "kind: requirment")),
+                           ("scalar needs", canon.replace("needs:\n  - auth/sessions/session-store",
+                                                          "needs: auth/sessions/session-store")),
+                           ("unknown key", canon.replace("title: Token", "owner: alice\ntitle: Token"))):
+            with self.subTest(what=what):
+                self.assertNotEqual(text, canon)
+                self.write(ROT, text)
+                out = run("fmt", cwd=self.repo)
+                self.assertEqual(out.returncode, 1, out.stdout + out.stderr)
+                self.assertIn("cannot format specs/" + ROT, out.stdout)
+                self.assertNotIn("Traceback", out.stderr)
+                self.assertEqual(self.read(ROT), text)
+                self.assertEqual(run("check", cwd=self.repo).returncode, 1)
+        self.write(ROT, canon)
+
+    def test_symlinks_are_layout_errors_in_both_readers(self):
+        other = os.path.join(self.repo, "other")
+        os.makedirs(other)
+        shutil.move(self.path("auth/_node.md"), os.path.join(other, "cap.md"))
+        os.symlink(os.path.join("..", "..", "other", "cap.md"), self.path("auth/_node.md"))
+        git(self.repo, "add", "-A")
+        git(self.repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m", "link")
+        self.assertEqual(source.read_tree(self.repo, "specs"), source.read_ref(self.repo, "HEAD", "specs"))
+        for args in (("check",), ("check", "--ref", "HEAD")):
+            with self.subTest(args=args):
+                out = run(*args, cwd=self.repo)
+                self.assertEqual(out.returncode, 1)
+                self.assertIn("symlink", out.stdout)
+        with open(os.path.join(other, "cap.md")) as f:
+            before = f.read()
+        with open(os.path.join(other, "cap.md"), "w") as f:
+            f.write(before.replace("status: active\nkind: capability\n", "kind: capability\nstatus: active\n"))
+        run("fmt", cwd=self.repo)
+        with open(os.path.join(other, "cap.md")) as f:
+            self.assertNotEqual(f.read(), before)  # not rewritten through the link
+
+    def test_query_and_op_errors_are_clean(self):
+        out = run("query", 'title="Rotate', cwd=self.repo)
+        self.assertEqual(out.returncode, 2)
+        self.assertNotIn("Traceback", out.stderr)
+        out = run("scenario", "auth/sessions/token-rotation", "n", "Given", cwd=self.repo)
+        self.assertEqual(out.returncode, 1)
+        self.assertNotIn("Traceback", out.stderr)
+        out = run("waves", "auth/nope", cwd=self.repo)
+        self.assertEqual(out.returncode, 2)
+        self.assertIn("no node", out.stderr)
+
+    def test_check_base_flags_coordinator_statuses(self):
+        self.write(IMPL, self.read(IMPL).replace("status: planned", "status: done"))
+        self.assertEqual(run("check", cwd=self.repo).returncode, 0)
+        out = run("check", "--base", "main", cwd=self.repo)
+        self.assertEqual(out.returncode, 1)
+        self.assertIn("written by the coordinator", out.stdout)
+
+
 @unittest.skipUnless(os.environ.get("WAVECOORD_PERF"), "WAVECOORD_PERF=1 runs the perf test")
 class PerfTest(Repo):
     def test_2000_records_from_a_ref_under_a_second(self):

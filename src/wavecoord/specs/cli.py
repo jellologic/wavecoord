@@ -58,7 +58,7 @@ def cmd(args):
     except (source.SourceError, query.QueryError, CliError) as e:
         sys.stderr.write("wavecoord spec: %s\n" % e)
         return 2
-    except OpsError as e:
+    except (OpsError, SpecError) as e:
         for m in e.errors:
             sys.stderr.write("wavecoord spec: %s\n" % m)
         return 1
@@ -127,16 +127,22 @@ def _report(probs, n_records, as_json):
 
 
 def r_check(args):
-    _, _, files = load(args)
+    root, d, files = load(args)
     tree = Tree(files)
     probs = checkmod.check(tree) if args.action == "check" else checkmod.lint(tree)
+    if getattr(args, "base", None):  # a plan change: the statuses it sets (section 7.1)
+        probs = sorted(probs + checkmod.plan_change_problems(Tree(source.read_ref(root, args.base, d)), tree),
+                       key=lambda p: (p.path or "", p.rule, p.msg))
     return _report(probs, len(tree.nodes) + len(tree.decisions), args.json)
 
 
 def r_waves(args):
     _, _, files = load(args)
     g = Graph(Tree(files))
-    out = g.waves(args.id)
+    try:
+        out = g.waves(args.id)
+    except KeyError:
+        raise CliError("no node %s" % args.id)
     if args.json:
         _print(out)
         return 0
@@ -238,12 +244,12 @@ def _prune(base, rel):
         d = os.path.dirname(d)
 
 
-def run_ops(args, ops):
-    """Apply ops to the working tree, or print the diff (--dry-run)."""
+def run_ops(args, ops, coordinator=False):
+    """Apply ops to the working tree, or print the diff (--dry-run). `coordinator` only for migrate-plan."""
     if getattr(args, "ref", None):
         raise CliError("writes change the working tree, not --ref")
     root, d, files = load(args)
-    changes, moves, problems = apply_ops(files, ops)
+    changes, moves, problems = apply_ops(files, ops, coordinator=coordinator)
     base = os.path.join(root, d)
     if args.dry_run:
         for rel in sorted(changes):
@@ -377,7 +383,7 @@ def w_migrate(args):
         ops, ids = migrate.plan_ops(specs, args.into, states=states, taken_ids=Tree(files).nodes)
     except migrate.MigrateError as e:
         raise CliError(str(e))
-    rc = run_ops(args, ops)
+    rc = run_ops(args, ops, coordinator=True)  # a done task stays done
     if rc == 0 and not args.dry_run:
         pdir = os.path.join(root, plan_dir(cfg_plan))
         if not args.keep:
@@ -450,7 +456,9 @@ def register(sub):
     p.add_argument("id")
     p = add("query", r_query, "records that match: key=value key!=value key~glob key !key under=<id>")
     p.add_argument("expr", nargs="?")
-    add("check", r_check, "every rule; exit 1 on an error")
+    p = add("check", r_check, "every rule; exit 1 on an error")
+    p.add_argument("--base", help="also check the task statuses this change sets against a base ref, as for a"
+                                  " plan PR (for example origin/main)")
     add("lint", r_check, "style warnings")
     p = add("fmt", r_fmt, "write every record in canonical form")
     p.add_argument("--check", action="store_true", help="change nothing; exit 1 when a file is not canonical")
@@ -480,7 +488,8 @@ def register(sub):
                                ("mv", "move or rename a node (keeps the old id as an alias)", ("key",)),
                                ("rebase-basis", "record that a task still fits its requirement", ()),
                                ("supersede", "the second requirement supersedes the first", ("key",)),
-                               ("delete", "delete a record (refused while referenced)", ())):
+                               ("delete", "delete a record (refused while referenced; --force also deletes"
+                                          " its children)", ())):
         p = add(name, w_simple, help_, write=True)
         p.add_argument("id")
         for a in args_:

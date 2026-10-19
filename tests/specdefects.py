@@ -81,6 +81,22 @@ def _drop_rule(rule):
     return _alignment
 
 
+def _fail_open_expand(self, nid):
+    """The 0.2.0 expansion: only valid tasks, so an invalid blocker drops out of needs."""
+    return [x for x in self.t.subtree(nid) if self.t.nodes[x].kind == "task" and x in self.recs]
+
+
+@contextlib.contextmanager
+def _plan_may_set_done():
+    with patch(ops, "lead_transition", lambda old, new: None):
+        with patch(ops, "plan_change_problems", lambda before, after: []):
+            yield
+
+
+def _artifact_with_from(a):
+    return {k: (fingerprint.norm(v) if isinstance(v, str) else v) for k, v in sorted(a.items())}
+
+
 DEFECTS = {
     "S01": ("render writes flow lists", lambda: patch(doc, "render", _flow_render(doc.render)),
             ["test_spec_merge.CaseTest.test_p2_sorted_inserts_merge"]),
@@ -105,4 +121,15 @@ DEFECTS = {
             ["test_spec_graph.RandomTreeTest.test_p9_injected_misalignment"]),
     "S11": ("waves and P ignore paths overlap", lambda: patch(graph.Graph, "_paths_clash", lambda self, a, b: None),
             ["test_spec_graph.RuleTest.test_rules"]),
+    "S12": ("an invalid or unparsable blocker drops out of needs (fail open)",
+            lambda: patch(graph.Graph, "expand", _fail_open_expand),
+            ["test_spec_graph.FailClosedTest.test_unparsable_or_invalid_blocker_blocks"]),
+    "S13": ("a plan change may set a coordinator status", _plan_may_set_done,
+            ["test_spec_ops.OpsTest.test_coordinator_status_is_never_a_plan_change",
+             "test_spec_ops.OpsTest.test_lead_status_transitions"]),
+    "S14": ("the fingerprint includes an input's from", lambda: patch(fingerprint, "_artifact", _artifact_with_from),
+            ["test_spec_ops.OpsTest.test_mv_keeps_every_basis"]),
+    "S15": ("fmt renders a record under a kind other than its path's",
+            lambda: patch(doc, "shape_errors", lambda rec, kind=None: []),
+            ["test_spec_doc.NoDataLossTest.test_kind_mismatch_and_unknown_kind"]),
 }

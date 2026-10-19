@@ -68,7 +68,9 @@ title: Rotate refresh tokens
 
 - **Line order is fixed.** `status` is the first line of the frontmatter, then `kind` and `schema`, which never change, then the other keys in the order of the kind's schema. Because `status` changes often (section 7) and `kind` and `schema` never do, a status commit and an edit of any other key always have an unchanged line between them, and git merges them (rule M13).
 - **`schema`** is the version of the record format for that kind. `wavecoord spec migrate` upgrades files when it changes.
-- **The YAML subset** is the one of task specs (`docs/task-spec.md`) with two additions: block lists of scalars, and block lists of flat maps (section 3.6). Unknown keys are errors.
+- **The YAML subset** is the one of task specs (`docs/task-spec.md`) with two additions: block lists of scalars, and block lists of flat maps (section 3.6). Unknown keys are errors. A record that does not fit its kind's schema (a `kind` that is not the path's, an unknown key, a scalar where a list belongs) is invalid: `check` reports it, the graph treats it like a file that does not parse (what needs it waits), and `fmt` and the ops refuse to rewrite it, so no tool drops data.
+- **Regular files only.** A symlink or special file under `spec.dir` is a layout error, in the working tree and in a git ref alike; no tool reads or writes through it.
+- **Code fences** follow Markdown: ``` or ~~~, three or more, closed by the same character at least as long; a ``` line with a backquote in its info string is inline code. A `## ` line inside a fence is text.
 - **The body** has only the sections that the kind declares, in its order. Each section has a type (section 3.7). Unknown `## ` sections are errors.
 
 ### 3.2 Keys common to all nodes
@@ -225,7 +227,7 @@ fp = sha256(b"wavecoord-req-fp/1\n" + canonical_json({
         "outputs":   sorted(canonical artifact maps)}))[:8 hex]
 ```
 
-`norm`: Unicode NFC, strip one pair of backquotes around a command, collapse whitespace. Canonical JSON: sorted keys, no spaces, UTF-8. In: what a task builds against. Out: title, status, tags, aliases, Rationale, Notes and the path, so a reflow, a reorder, a status change or a move does not make tasks suspect. The prefix versions the algorithm. Eight hex digits are enough to notice an accidental change; this is not a security check.
+`norm`: Unicode NFC, strip one pair of backquotes around a command, collapse whitespace. Canonical JSON: sorted keys, no spaces, UTF-8. In: what a task builds against. Out: title, status, tags, aliases, Rationale, Notes, the path and each input's `from` (a path, which a move rewrites), so a reflow, a reorder, a status change or a move does not make tasks suspect. The prefix versions the algorithm. Eight hex digits are enough to notice an accidental change; this is not a security check.
 
 ## 4. Inputs, outputs and alignment
 
@@ -233,19 +235,20 @@ Every level declares its public inputs and outputs. Capabilities, features and r
 
 | Rule | Check |
 |---|---|
-| A1 | Every output of a non-task node is produced by **exactly one** task in its subtree (same `id` and `kind`; the node's `contract` equals the task's) |
+| A1 | Every output of a non-task node is produced by **exactly one** task in its subtree (same `id` and `kind`; the node's `contract` equals the task's). A warning while no task file exists under the node yet (requirements are written before their tasks) |
 | A2 | Every output of a task is unique in the whole tree: no two tasks produce the same artifact |
-| A3 | Every input of a node either has `from` naming a node whose subtree produces that artifact, or is `external: true`, or is an input of one of the node's ancestors (an input passes down the tree) |
+| A3 | Every input of a node either has `from` naming a node whose subtree produces that artifact, or is `external: true`, or is an input of one of the node's ancestors (an input passes down the tree). A warning while no task file exists under `from` yet |
 | A4 | A node whose input has `from: X` must reach X through `needs` (its own `needs` or an ancestor's, after expansion, section 5): every consumed artifact is produced before it is used |
 | A5 | Every `kind: file` output of a task lies inside its `paths`; `kind: files` lies inside its `paths` as a glob |
 | A6 | A task's `paths` that no output covers get a warning: a task should say what it hands over |
 | A7 | Every output of a node is either an output of its parent or consumed by an input somewhere in the tree, or is a task's `file` output; otherwise a warning ("orphan output") |
 
-A1 and A3 make a requirement's contract and its tasks line up. A2 and A5, with the fence's leases, keep parallel tasks from writing the same thing. A4 ties the contracts to the blockers.
+A dropped task produces nothing for A1 to A3: a replacement task may take over its outputs, and dropping the only producer of a consumed artifact is an error. A1 and A3 make a requirement's contract and its tasks line up. A2 and A5, with the fence's leases, keep parallel tasks from writing the same thing. A4 ties the contracts to the blockers.
 
 ## 5. Blockers: `needs`
 
-- `needs` lists node IDs at any level. A node ID that is not a task stands for **every task in its subtree** ("after the whole session-store feature").
+- `needs` lists node IDs at any level. A node ID that is not a task stands for **every task in its subtree** that is not dropped ("after the whole session-store feature").
+- **Fail closed.** A need is never met when it does not resolve, when it names (or its subtree holds) a task record that does not parse or is invalid, or when it names a node with no task files yet (check warns "stands for no task yet"). A task named directly that is dropped never becomes done either (check warns).
 - A node inherits its ancestors' `needs`: a task waits for what its requirement, feature and capability need.
 - **Expansion:** the task graph is every task, with an edge to each task of each expanded `needs` of the task and of its ancestors.
 - Validate rejects, on the expanded graph: a cycle; a `needs` on the node's own ancestor or descendant; a `needs` that does not resolve (directly or by alias).
@@ -255,7 +258,7 @@ A1 and A3 make a requirement's contract and its tasks line up. A2 and A5, with t
 
 | Computed | Meaning |
 |---|---|
-| `ready` | a task with `status: planned`, every expanded need `done`, and no live lease on its paths (as today) |
+| `ready` | a task with `status: planned`, every expanded need `done`, its requirement not superseded (and approved, section 9.4), not suspect under `suspect: refuse` (a task without `basis` counts as suspect), and no live lease on its paths (as today) |
 | `blocked` | a task with `status: planned` and a need that is not `done`; `why_not` names it |
 | progress | for a non-task node: done tasks / all tasks in the subtree, and the first unmet need |
 
@@ -268,7 +271,7 @@ Two tasks may run at the same time exactly when **all** of these hold (predicate
 3. their outputs are disjoint (A2 already makes this true in a valid tree);
 4. neither names the other, or an ancestor of the other, in `conflicts_with`.
 
-`wavecoord spec waves [node]` prints the tasks in waves: wave 1 is every ready task, wave n+1 the tasks whose needs are all in earlier waves, and inside a wave the greedy largest set that satisfies P pairwise. It also prints the critical path and the maximum width.
+`wavecoord spec waves [node]` prints the tasks in waves: wave 1 is every ready (or running) task, wave n+1 the tasks whose needs are all in earlier waves, and inside a wave the greedy largest set that satisfies P pairwise. A task that cannot run for another reason (a status other than planned, an unapproved requirement, superseded, suspect under `refuse`) is `held` with the reason, and what waits for it is `unplaced`. It also prints the critical path and the maximum width. The node resolves through aliases; an unknown node is an error. `paths` compare after removing `./` and repeated `/`, and check reports such spellings as errors.
 
 `wavecoord spec check` reports, as errors, two tasks that P would let run together but that both write one path (an overlap in `paths` between tasks with no `needs` between them): the author adds a `needs`, or splits the file. So a valid tree **is** a safe parallel plan: the dispatcher can take any set of ready tasks that P allows, and the fence's leases agree with it.
 
@@ -296,7 +299,9 @@ draft -> planned -> in_progress -> in_review -> done
 planned <-> on_hold;  any non-done -> dropped
 ```
 
-The coordinator writes only its three values and the return to `planned`. The lead writes the others. A plan PR that sets `in_progress`, `in_review` or `done` is refused by validate.
+The coordinator writes only its three values and the return to `planned`. The lead writes the others, among `draft`, `planned`, `on_hold` and `dropped`. A plan change may not set `in_progress`, `in_review` or `done` (also not on a new task), may not change a `done` task's status, and may only drop an `in_progress` or `in_review` task. The op API refuses such a change (there is no flag to bypass it in `spec_edit`, REST or the CLI; only `migrate-plan` keeps a migrated `done`), and `wavecoord spec check --base <ref>` reports a hand edit that does it (rule `status`; a moved task is compared under its alias).
+
+A requirement named in another's `supersedes` is **superseded**: check warns while it is not `deprecated`, its tasks are not ready, and `trace` shows `superseded_by`. A node cannot supersede itself, and `supersedes` has no cycles (requirements and decisions).
 
 ### 7.2 Status commits
 
@@ -366,11 +371,11 @@ The kind schemas are the definitions of one file, `schemas/spec-record.schema.js
 | Command | Answers |
 |---|---|
 | `tree [node] [--offline]` | The tree with status, roll-up progress and the first unmet need per node; with the coordinator, live attempts too |
-| `show <id> [--diff]` | One record as text or JSON; `--diff` for a suspect task shows how its requirement changed since `basis` |
-| `check [node]` | Every rule of sections 3 to 8; exit 1 on an error |
+| `show <id>` | One record as text or JSON (for a suspect task, `git log -p` of its requirement shows what changed) |
+| `check [--base <ref>]` | Every rule of sections 3 to 8; with `--base`, also the statuses the change sets (section 7.1); exit 1 on an error |
 | `waves [node]` | Section 6: waves, critical path, width |
 | `ready` | Ready tasks with `why_not` for the others |
-| `trace <id>` | For any node: ancestors, children, needs (direct and expanded), who needs it, producers and consumers of its artifacts, decisions, PRs and merged commits of its tasks (from `git log` trailers) |
+| `trace <id>` | For any node: ancestors, children, needs (direct and expanded), who needs it, what supersedes it, producers and consumers of its artifacts, decisions |
 | `artifacts [--id x]` | The artifact index: each artifact, its producer, its consumers |
 | `suspect` | Tasks whose `basis` differs from their requirement's fingerprint |
 | `query '<expr>'` | Records that match, e.g. `kind=task status=planned paths~src/auth/*`, `kind=requirement status=approved !outputs` |
@@ -387,13 +392,15 @@ Every read takes `--json`; the JSON shapes are in `spec-ops.schema.json`. **Quer
 | `create` | `id, kind, fields, sections` | A new record; the parent must exist (except a capability) |
 | `set` | `id, key, value` | A scalar key (status goes through `set_status`) |
 | `set_status` | `id, status` | Lead statuses only; checked against section 7.1 |
-| `set_section` | `id, section, value` | A section; prose is split into sentences |
+| `set_section` | `id, section, value` | A section; prose is split into sentences (not inside code, lists, numbered lists or indented lines, and not after an abbreviation such as `e.g.` or `approx.`); the Statement is never split |
 | `add`, `remove` | `id, key, value` | A list item, in sorted position (artifacts as maps) |
 | `set_artifact`, `remove_artifact` | `id, list, artifact` | One input or output by its `id` |
-| `mv` | `from, to` | Move or rename a subtree (`git mv`), rewrite references, add aliases |
+| `mv` | `from, to` | Move or rename a subtree (`git mv`), rewrite references, add aliases; moving back to an old id drops that alias. Refused when the subtree holds a file that is not a valid record |
 | `rebase_basis` | `task` | Set `basis` to the requirement's current fingerprint |
 | `supersede` | `old, new` | `new.supersedes += old`, `old.status = deprecated` |
-| `delete` | `id, force?` | Refused while a reference names it or it has children, unless `force`; prefer `dropped` or `deprecated` |
+| `delete` | `id, force?` | Refused while it has children, unless `force`, and always while a reference names it (change those first); prefer `dropped` or `deprecated` |
+
+A task created without `basis` gets the fingerprint of its requirement as the whole batch leaves it, so later ops on the requirement in the same batch do not make it suspect. A value that is written on one line (a scalar, a list item, a scenario name or step, a risk field, an artifact key) may not hold a line break.
 
 **CLI** (offline, changes the working tree; you commit): `wavecoord spec new|set|status|section|add|rm|artifact|mv|rebase-basis|supersede|delete ...` and `wavecoord spec apply <ops.json>`. Every write takes `--dry-run` and prints a unified diff.
 
@@ -413,7 +420,7 @@ Every read takes `--json`; the JSON shapes are in `spec-ops.schema.json`. **Quer
 - **Worker prompt.** It gets, after Context: the requirement's Statement and Scenarios, the task's inputs (with their contracts and producers) and outputs (with their contracts), and "Also run" with the requirement's Verify. Only the task's own requirement goes in.
 - **Leases.** A dispatched task claims its `paths` (exclusive) and `shared_paths` (shared), as today.
 - **Gate-check.** `spec_change` (7.3): predicate S, kind `spec_change`, blocks in `advisory` and `enforce` like `config_change`, reported in `off`; `spec.dir` from the base-side config. A fence change: section 8.1 of `edit-fence.md`, seeded defect D25 and a table check. `spec` joins `gatecheck.CONFIG_KEYS`.
-- **Worker proposals.** Workers never edit `spec.dir`. The report's `proposals` get the kinds `requirement_gap` (missing behavior) and `spec_change` (a statement or contract is wrong), each with `node` and optional suggested `ops` (the op API's shape, as data). `/wavecoord:revise` turns the accepted ones into one plan PR through `spec_edit`; the lead decides. Suggested ops are never applied without the lead.
+- **Worker proposals.** Workers never edit `spec.dir`. The report's `proposals` get the kinds `requirement_gap` (missing behavior) and `spec_change` (a statement or contract is wrong); `task` names the task and `detail` the node and the suggested change, as text (the report schema has no `node` or `ops` field). `/wavecoord:revise` turns the accepted ones into one plan PR through `spec_edit`; the lead decides. Suggested ops are never applied without the lead.
 - **Merge.** The requirement's Verify describes the finished requirement, so it runs with the merge of the last open task under the requirement; the merge of an earlier task runs only that task's Acceptance and records the tasks still pending. With `spec.verify_at_merge` (on by default), the refinery runs the task's Acceptance and its requirement's Verify, both from the default branch, after `check_cmd`; a failure blocks with `verify_failed`. A merge commit gets the trailer `Task: <task id>` (and `Spec-Basis: <fp>`), so `trace` works from `git log` alone.
 - **Events.** `attempt.start` and `refinery.merge` carry `basis`; new kinds `spec.status` (a flushed status commit: sha and changes) and `spec.status_blocked`.
 - **Config.**
@@ -430,7 +437,7 @@ Every read takes `--json`; the JSON shapes are in `spec-ops.schema.json`. **Quer
 | Part | Change |
 |---|---|
 | `/wavecoord:spec` (new) | Builds and revises the tree with the user: capability, features, requirements with EARS statements, contracts as inputs and outputs, Verify commands. Runs `spec_check` until clean, the reviewer in spec mode, then one plan PR. Asks the user before approving or deprecating |
-| `wave-plan` | Plans tasks under requirements: each task's outputs cover its requirement's (A1), its inputs come from `needs` (A4), `paths` are disjoint where P must hold; shows `spec_waves` in the PR body. Replaces the flat task output |
+| `wave-plan` | Plans tasks under requirements: each task's outputs cover its requirement's (A1), its inputs come from `needs` (A4), `paths` are disjoint where P must hold, Acceptance holds the task's own checks (the requirement's Verify runs at the last task's merge); reports the waves of the plan branch (`wavecoord spec waves --ref <commit>`). Replaces the flat task output |
 | `revise` | Handles suspect tasks (read the diff, then rebase the basis or edit the task) and worker proposals, as `spec_edit` ops in one plan PR |
 | `planner` | Drafts tasks for one requirement or feature, with artifacts and `needs` |
 | `reviewer` | Spec mode: EARS, testable scenarios, Verify that fails without the work, contracts on every interface output, A1-A7 clean, no derived data |
@@ -485,6 +492,10 @@ Every read takes `--json`; the JSON shapes are in `spec-ops.schema.json`. **Quer
 | S09 | `needs` on a feature does not expand to its subtree | P8 |
 | S10 | `check` skips A1 | P9 |
 | S11 | Waves ignore `paths` overlap | P8 |
+| S12 | An invalid or unparsable blocker drops out of `needs` (fail open) | `test_spec_graph` FailClosedTest |
+| S13 | A plan change may set a coordinator status | `test_spec_ops` status tests |
+| S14 | The fingerprint includes an input's `from` | `test_spec_ops` mv keeps every basis |
+| S15 | `fmt` renders a record under a kind other than its path's | `test_spec_doc` NoDataLossTest |
 
 Live: `scripts/smoke-live.py` gets a `spec` check: a two-wave tree, the worker prompts hold their requirement and contracts, the status commits appear on the default branch in order, and the merge of the second wave finds the first wave's output.
 

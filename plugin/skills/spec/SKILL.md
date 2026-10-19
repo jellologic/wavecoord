@@ -50,12 +50,12 @@ For each requirement (templates in [spec-templates.md](spec-templates.md)):
 - **Statement**: one sentence in EARS form with `shall` once ([ears.md](ears.md)).
 - **Scenarios**: Given/When/Then, one step per line; at least one for the main path and one for the failure path.
 - **Verify**: commands that run from the repo root without secrets or network and **fail when the requirement is not met**. Prefer a test the task will add over a broad suite.
-- **Outputs**: what the requirement hands over, each with a kind and, for an interface, api, schema or event, a one-line `contract` that a consumer may rely on. **Inputs**: what it uses, `from` the node that produces it (and add that node to `needs`), or `external: true` with the assumed contract.
+- **Outputs**: what the requirement hands over, each with a kind and, for an interface, api, schema or event, a one-line `contract` that a consumer may rely on. **Inputs**: what it uses, `from` the node that produces it (and add that node to `needs`), or `external: true` with the assumed contract. Until `/wavecoord:wave-plan` plans the tasks, `spec_check` warns that no task produces an output yet (A1, A3): that is expected, and `spec_edit` accepts it. What needs a node with no tasks waits.
 - A design choice that others should not reopen is a **decision** record (`<node>/decisions/<YYYY-MM-DD>-<slug>`), with Context, Decision and Consequences.
 
 ## 4. Check with a reviewer
 
-Run `wavecoord spec apply --dry-run` on your ops to see the diff, or check them in your head against [spec-templates.md](spec-templates.md). Then start one `wavecoord:reviewer` subagent in spec mode with the records and the user's goal. Fix every `must` finding.
+Run `wavecoord spec apply - --dry-run` with your ops as JSON on stdin to see the diff, or check them in your head against [spec-templates.md](spec-templates.md). Then start one `wavecoord:reviewer` subagent in spec mode with the records and the user's goal. Fix every `must` finding.
 
 ## 5. Open the plan PR
 

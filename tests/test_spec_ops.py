@@ -22,8 +22,8 @@ def files():
     return source.read_tree(_paths.FIXTURES, "specs")
 
 
-def after(fs, ops):
-    changes, moves, problems = apply_ops(fs, ops)
+def after(fs, ops, **kw):
+    changes, moves, problems = apply_ops(fs, ops, **kw)
     out = dict(fs)
     for p, t in changes.items():
         if t is None:
@@ -48,7 +48,7 @@ class OpsTest(unittest.TestCase):
              "sections": {"Context": "None yet.", "Prompt": "Add it."}}])
         r = rec(fs, "auth/sessions/revoke/_node.md")
         self.assertEqual((r["status"], r["sections"]["statement"]),
-                         ("draft", "If a token is revoked, then the service shall reject it.\nIt stays revoked."))
+                         ("draft", "If a token is revoked, then the service shall reject it. It stays revoked."))  # never split
         t = rec(fs, "auth/sessions/revoke/tasks/check.md")
         self.assertEqual(t["basis"], fingerprint(r))
         self.assertEqual(sorted(changes), ["auth/sessions/revoke/_node.md", "auth/sessions/revoke/tasks/check.md"])
@@ -82,11 +82,117 @@ class OpsTest(unittest.TestCase):
         self.assertEqual(rec(fs, ROT + "/_node.md")["sections"]["scenarios"][-1]["steps"][0],
                          ["Given", "an expired token"])
 
-    def test_coordinator_status_needs_the_coordinator(self):
+    def test_coordinator_status_is_never_a_plan_change(self):
         with self.assertRaises(OpsError) as cm:
             apply_ops(files(), [{"op": "set_status", "id": IMPL, "status": "in_progress"}])
         self.assertIn("coordinator", str(cm.exception))
-        apply_ops(files(), [{"op": "set_status", "id": IMPL, "status": "in_progress", "coordinator": True}])
+        # the flag is not part of the public op API (MCP spec_edit, REST, the CLI)
+        with self.assertRaises(OpsError):
+            apply_ops(files(), [{"op": "set_status", "id": IMPL, "status": "done", "coordinator": True}])
+        with self.assertRaises(OpsError) as cm:
+            apply_ops(files(), [{"op": "create", "id": ROT + "/fake", "fields": {
+                "status": "done", "title": "Fake", "paths": ["src/fake.py"], "class": "B", "size": "S",
+                "exec": EXEC, "outputs": [{"id": "src/fake.py", "kind": "file"}]},
+                "sections": {"Context": "None.", "Prompt": "Nothing."}}])
+        self.assertIn("coordinator", str(cm.exception))
+        # migrate-plan keeps done tasks done: an internal caller only
+        apply_ops(files(), [{"op": "set_status", "id": IMPL, "status": "done"}], coordinator=True)
+
+    def test_lead_status_transitions(self):
+        done = "auth/sessions/session-store/store-api"  # status done in the fixture
+        for st in ("planned", "draft", "dropped", "on_hold"):
+            with self.subTest(frm="done", to=st):
+                with self.assertRaises(OpsError):
+                    apply_ops(files(), [{"op": "set_status", "id": done, "status": st}])
+        live = after(files(), [{"op": "set_status", "id": IMPL, "status": "in_progress"}], coordinator=True)[0]
+        with self.assertRaises(OpsError):
+            apply_ops(live, [{"op": "set_status", "id": IMPL, "status": "on_hold"}])
+        with self.assertRaises(OpsError):
+            apply_ops(live, [{"op": "set_status", "id": IMPL, "status": "planned"}])
+        after(live, [{"op": "set", "id": IMPL, "key": "title", "value": "Still live"}])  # other keys may change
+        # a done task may move: its status stays
+        after(files(), [{"op": "mv", "from": "auth/sessions/session-store", "to": "auth/sessions/storage"}])
+
+    def test_plan_change_problems_for_hand_edits(self):
+        from wavecoord.specs.check import plan_change_problems
+        from wavecoord.specs.tree import Tree
+        fs = files()
+        hand = dict(fs)
+        hand[ROT + "/tasks/rotate-impl.md"] = fs[ROT + "/tasks/rotate-impl.md"].replace("status: planned", "status: done")
+        probs = plan_change_problems(Tree(fs), Tree(hand))
+        self.assertEqual([p.rule for p in probs], ["status"])
+        self.assertEqual(plan_change_problems(Tree(fs), Tree(fs)), [])
+
+    def test_newlines_in_values_are_refused(self):
+        bad = [
+            {"op": "set_scenario", "id": ROT, "name": "n\n- Then evil", "steps": [["Given", "x"]]},
+            {"op": "set_scenario", "id": ROT, "name": "n", "steps": [["Given", "x\n- Then y"]]},
+            {"op": "set", "id": IMPL, "key": "title", "value": "a\nb"},
+            {"op": "set_section", "id": IMPL, "section": "Risks",
+             "value": [{"risk": "r\nx", "mitigation": "m", "kind": "llm"}]},
+            {"op": "set_artifact", "id": IMPL, "list": "outputs",
+             "artifact": {"id": "src/auth/rotate.py", "kind": "file", "contract": "a\nb"}},
+        ]
+        for op in bad:
+            with self.subTest(op=op):
+                with self.assertRaises(OpsError):
+                    apply_ops(files(), [op])
+
+    def test_bad_steps_and_unparsable_subtrees_are_ops_errors(self):
+        for steps in ([["Given"]], [[1, "x"]], ["Given x"], [["Given", "x", "y"]]):
+            with self.subTest(steps=steps):
+                with self.assertRaises(OpsError):
+                    apply_ops(files(), [{"op": "set_scenario", "id": ROT, "name": "n", "steps": steps}])
+        fs = files()
+        fs["auth/README.md"] = "notes\n"
+        with self.assertRaises(OpsError):
+            apply_ops(fs, [{"op": "mv", "from": "auth", "to": "authn"}])
+        fs = files()
+        fs[ROT + "/tasks/rotate-tests.md"] += "\n## Bogus\nx\n"
+        with self.assertRaises(OpsError):
+            apply_ops(fs, [{"op": "mv", "from": ROT, "to": "auth/sessions/rotation"}])
+
+    def test_ops_refuse_records_they_cannot_write_back(self):
+        fs = files()
+        fs[ROT + "/_node.md"] = fs[ROT + "/_node.md"].replace("title: Token", "owner: alice\ntitle: Token")
+        with self.assertRaises(OpsError) as cm:
+            apply_ops(fs, [{"op": "add", "id": ROT, "key": "tags", "value": "x"}])
+        self.assertIn("owner", str(cm.exception))
+
+    def test_basis_of_tasks_created_in_the_batch_is_the_final_one(self):
+        task = {"op": "create", "id": ROT + "/docs", "fields": {
+            "status": "planned", "title": "Docs", "paths": ["docs/rotate.md"], "class": "C", "size": "S",
+            "exec": EXEC, "outputs": [{"id": "docs/rotate.md", "kind": "file"}]},
+            "sections": {"Context": "None.", "Prompt": "Write it."}}
+        fs, _, _, problems = after(files(), [task, {"op": "add", "id": ROT, "key": "Verify", "value": "true"},
+                                             {"op": "rebase_basis", "task": IMPL},
+                                             {"op": "rebase_basis", "task": ROT + "/rotate-tests"}])
+        self.assertEqual(rec(fs, ROT + "/tasks/docs.md")["basis"], fingerprint(rec(fs, ROT + "/_node.md")))
+        self.assertEqual([str(p) for p in problems if p.rule == "suspect"], [])
+
+    def test_mv_keeps_every_basis(self):
+        for frm, to in (("auth/sessions/session-store", "auth/sessions/storage"), ("auth/sessions", "auth/sess")):
+            with self.subTest(frm=frm):
+                fs, _, _, problems = after(files(), [{"op": "mv", "from": frm, "to": to}])
+                self.assertEqual([str(p) for p in problems if p.rule == "suspect"], [])
+                from wavecoord.specs.tree import Tree
+                self.assertEqual(Tree(fs).resolve(frm), to)
+
+    def test_mv_back_drops_the_alias(self):
+        fs, _, _, _ = after(files(), [{"op": "mv", "from": ROT + "/rotate-tests", "to": ROT + "/rotate-tests2"}])
+        fs, _, _, _ = after(fs, [{"op": "mv", "from": ROT + "/rotate-tests2", "to": ROT + "/rotate-tests"}])
+        t = rec(fs, ROT + "/tasks/rotate-tests.md")
+        self.assertEqual(t.get("aliases"), [ROT + "/rotate-tests2"])
+
+    def test_delete_force_message(self):
+        with self.assertRaises(OpsError) as cm:
+            apply_ops(files(), [{"op": "delete", "id": IMPL}])
+        self.assertNotIn("use force", str(cm.exception))
+        self.assertIn("change them first", str(cm.exception))
+
+    def test_supersede_itself_is_refused(self):
+        with self.assertRaises(OpsError):
+            apply_ops(files(), [{"op": "supersede", "old": ROT, "new": ROT}])
 
     def test_mv_rewrites_references_and_keeps_aliases(self):
         fs, changes, moves, _ = after(files(), [{"op": "mv", "from": ROT, "to": "auth/sessions/rotation"}])
@@ -128,6 +234,23 @@ class OpsTest(unittest.TestCase):
 
     def test_split_sentences(self):
         self.assertEqual(split_sentences("One. Two! Three? `x.` four.\n- a. B."), "One.\nTwo!\nThree?\n`x.` four.\n- a. B.")
+
+    def test_split_sentences_keeps_lists_code_and_abbreviations(self):
+        self.assertEqual(split_sentences("Steps:\n1. Write the tests first. Then implement.\n2. Run them.\n   Keep it small."),
+                         "Steps:\n1. Write the tests first. Then implement.\n2. Run them.\n   Keep it small.")
+        self.assertEqual(split_sentences("    code block line one. Two\n    more."), "    code block line one. Two\n    more.")
+        for one in ("The rate limiter shall allow approx. 100 requests per second.",
+                    "Use a store, e.g. Redis, for it.", "Keep v2. 0 too.", "Serve the U.S. Region first.",
+                    "Retry after 1.5 s, i.e. Twice."):
+            with self.subTest(one=one):
+                self.assertEqual(split_sentences(one), one)
+        self.assertEqual(split_sentences("~~~\nA. B. C.\n~~~"), "~~~\nA. B. C.\n~~~")
+
+    def test_statement_is_not_split(self):
+        fs, _, _, _ = after(files(), [{"op": "set_section", "id": ROT, "section": "Statement",
+                                       "value": "The service shall allow approx. 100 rotations per second."}])
+        self.assertEqual(rec(fs, ROT + "/_node.md")["sections"]["statement"],
+                         "The service shall allow approx. 100 rotations per second.")
 
 
 def run(*args, cwd, stdin=None):

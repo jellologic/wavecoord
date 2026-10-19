@@ -3,7 +3,7 @@ status: planned
 kind: task
 schema: 1
 title: Rotate refresh tokens
-basis: 75c3e429
+basis: a6f4586d
 needs:
   - auth/sessions/session-store/store-api
 inputs:

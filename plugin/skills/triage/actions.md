@@ -35,7 +35,7 @@ When `attempt_get` shows `continue_suggested: true`, the worker used its turns (
 
 - At most 2 attempts per task without the user. After the second failure, stop and ask with the two causes.
 - Each retry changes something (provider, host, spec, limits). An identical retry is allowed only for a flaky check or a hung tool, and only once.
-- A retry is `dispatch` with the task id (and a host when you need another host). A spec change goes through `plan_edit` first. Until the plan PR merges, say in the dispatch note what changed.
+- A retry is `dispatch` with the task id (and a host when you need another host). A spec change goes through `/wavecoord:revise` first: with a spec tree it is a `spec_edit` op on the task record (never `plan_edit`, which writes the flat plan); with the flat plan it is a `plan_edit`. Until the plan PR merges, say in the dispatch note what changed.
 
 ## Answers to workers
 

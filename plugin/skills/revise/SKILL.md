@@ -19,6 +19,7 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__inbox
   - mcp__plugin_wavecoord_wavecoord__config
   - Bash(wavecoord *)
+  - Bash(git log *)
   - Read
   - Grep
   - Glob
@@ -61,7 +62,7 @@ Reject a proposal that widens scope past the goal, moves a protected path into `
 
 Tasks and requirements are records of the spec tree (`docs/specs.md`). Change them with `spec_edit` ops (`set`, `set_section`, `add`, `set_artifact`, `create`, `mv`), not anchored edits; `spec_get` shows each record.
 
-**Suspect tasks** (`spec_query` with `kind=task`, then `wavecoord spec suspect`): the requirement changed since the task was planned. For each, read the change (`wavecoord spec show <task> --diff` or `spec_get` on the requirement) and either keep the task as it is (`rebase_basis`) or change it to fit, then `rebase_basis`, in the same PR.
+**Suspect tasks** (`spec_query` with `kind=task`, then `wavecoord spec suspect`): the requirement changed since the task was planned. For each, read the change (`spec_get` on the requirement, and `git log -p -- <spec dir>/<requirement>/_node.md` for what changed since the task was planned) and either keep the task as it is (`rebase_basis`) or change it to fit, then `rebase_basis`, in the same PR.
 
 ## 4. Open one plan PR
 

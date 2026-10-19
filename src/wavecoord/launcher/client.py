@@ -537,7 +537,10 @@ def prompt_from_spec(spec):
         if t.get("outputs"):
             parts += ["## Outputs (hand these over, as promised)", "\n".join(_artifact_line(a) for a in t["outputs"])]
         if t.get("verify"):
-            parts += ["## Also run (the requirement's checks)", "\n".join("- `%s`" % c for c in t["verify"])]
+            parts += ["## Also run (the requirement's checks)",
+                      "\n".join(["They tell you where the requirement stands. They may fail until every task of"
+                                 " the requirement has merged; your Acceptance is what must pass."] +
+                                ["- `%s`" % c for c in t["verify"]])]
     if s.get("acceptance"):
         parts += ["## Acceptance", "\n".join("- `%s`" % a for a in s["acceptance"])]
     if spec.get("paths"):

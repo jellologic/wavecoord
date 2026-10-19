@@ -194,5 +194,87 @@ class ErrorTest(unittest.TestCase):
         self.assertEqual(doc.parse(doc.render(rec))["sections"]["design"], rec["sections"]["design"])
 
 
+class NoDataLossTest(unittest.TestCase):
+    """fmt and render refuse a record they cannot write back whole (items 0, 10, 11)."""
+
+    def test_kind_mismatch_and_unknown_kind(self):
+        base = fixtures()["auth/sessions/token-rotation/_node.md"]
+        for what, text in (("feature", base.replace("kind: requirement", "kind: feature")),
+                           ("typo", base.replace("kind: requirement", "kind: requirment"))):
+            with self.subTest(what=what):
+                with self.assertRaises(SpecError) as cm:
+                    doc.fmt(text, "requirement")
+                self.assertIn("kind", str(cm.exception))
+
+    def test_list_keys_hold_lists(self):
+        base = fixtures()["auth/sessions/token-rotation/_node.md"]
+        cases = {
+            "scalar needs": base.replace("needs:\n  - auth/sessions/session-store", "needs: auth/sessions/session-store"),
+            "mixed tags": base.replace("tags:\n  - security", "tags: [1, security]"),
+            "scalar inputs": base.replace("inputs:\n  - id: auth.session-store.api\n    kind: interface\n"
+                                          "    from: auth/sessions/session-store", "inputs:\n  - foo"),
+        }
+        for what, text in cases.items():
+            with self.subTest(what=what):
+                self.assertNotEqual(text, base)
+                with self.assertRaises(SpecError):
+                    doc.fmt(text, "requirement")
+        task = fixtures()["auth/sessions/token-rotation/tasks/rotate-impl.md"]
+        bad = task.replace("exec:\n  model: opus\n  effort: high\n  max_turns: 80\n  budget_usd: 5\n  timeout_min: 60",
+                           "exec: opus")
+        self.assertNotEqual(bad, task)
+        with self.assertRaises(SpecError):
+            doc.fmt(bad, "task")
+
+    def test_unknown_keys_are_refused(self):
+        base = fixtures()["auth/sessions/token-rotation/_node.md"]
+        text = base.replace("title: Token rotation on expiry\n", "title: Token rotation on expiry\nowner: alice\n")
+        with self.assertRaises(SpecError) as cm:
+            doc.fmt(text, "requirement")
+        self.assertIn("owner", str(cm.exception))
+        rec = doc.parse(base)
+        rec["need"] = ["a/b"]
+        with self.assertRaises(SpecError):
+            doc.render(rec)
+
+
+class FenceTest(unittest.TestCase):
+    """Code fences follow Markdown: ``` or ~~~, closed by the same character at least as long (item 39)."""
+
+    def test_inline_triple_backticks_do_not_open_a_fence(self):
+        base = fixtures()["auth/sessions/token-rotation/_node.md"]
+        text = base.replace("When an access token", "```x``` When an access token")
+        rec = doc.parse(text)
+        self.assertTrue(rec["sections"]["statement"].startswith("```x```"))
+        self.assertIn("scenarios", rec["sections"])
+        self.assertIn("verify", rec["sections"])
+
+    def test_tilde_and_long_fences(self):
+        rec = doc.parse(fixtures()["auth/_node.md"])
+        for design in ("Example:\n~~~md\n## Open questions\n- x\n~~~",
+                       "Example:\n````\n```\n## Open questions\n````",
+                       "Example:\n```\n~~~\n## Open questions\n```"):
+            with self.subTest(design=design):
+                rec["sections"]["design"] = design
+                back = doc.parse(doc.render(rec))
+                self.assertEqual(back["sections"]["design"], design)
+                self.assertNotIn("open_questions", back["sections"])
+
+
+class ScalarRoundTripTest(unittest.TestCase):
+    """render writes scalars that read back as the same value (item 40)."""
+
+    def test_control_characters_flow_items_and_floats(self):
+        rec = doc.parse(fixtures()["auth/sessions/token-rotation/tasks/rotate-impl.md"])
+        rec["title"] = "a\tb"
+        rec["exec"] = dict(rec["exec"], host_needs=["gpu, large", "x]"], budget_usd=0.00001)
+        text = doc.render(rec)
+        back = doc.parse(text)
+        self.assertEqual(back["title"], "a\tb")
+        self.assertEqual(back["exec"]["host_needs"], ["gpu, large", "x]"])
+        self.assertEqual(back["exec"]["budget_usd"], 0.00001)
+        self.assertEqual(doc.render(back), text)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -37,7 +37,7 @@ Call `plan_ready`. The server already removes tasks that overlap active leases. 
 - skip a task with an open conflict or a failed attempt that triage did not handle yet;
 - stop at the free slots.
 
-With a spec tree (`docs/specs.md`), also call `spec_waves`: it proves which tasks can run together (no needs between them, disjoint paths and outputs) and shows the critical path. Prefer the tasks on the critical path when the slots are fewer than the wave. `plan_ready` already leaves out tasks whose requirement is not approved.
+With a spec tree (`docs/specs.md`), also call `spec_waves`: it proves which tasks can run together (no needs between them, disjoint paths and outputs) and shows the critical path. Prefer the tasks on the critical path when the slots are fewer than the wave. `plan_ready` already leaves out tasks whose requirement is not approved; `spec_waves` lists them under `held` with the reason. `spec_waves` names a task by its tree id (`auth/sessions/token-rotation/rotate-impl`); `plan_ready`, `dispatch` and `dispatch_wave` take the coordinator id, the same path with `.` for `/` (`auth.sessions.token-rotation.rotate-impl`). Convert before you compare or dispatch.
 
 Show the picked set as a table (task, size, model, budget, host need) with the skipped tasks and why. With `--dry-run`, stop here.
 

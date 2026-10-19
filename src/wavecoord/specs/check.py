@@ -11,14 +11,18 @@ graph.py; `check` runs both.
 
 import re
 
-from wavecoord import schemaload
-
 from . import doc
-from .model import FRAME, KINDS, SCHEMA_VERSION
+from .model import COORDINATOR_STATUSES, FRAME, KINDS, SCHEMA_VERSION
 
 CONTRACT_KINDS = ("interface", "api", "schema", "event")
 SENTENCE_RE = re.compile(r"[a-z0-9)\]\"'][.!?] +[A-Z]")
 EARS_RE = re.compile(r"\bshall\b", re.I)
+
+
+def canonical_glob(g):
+    """A path or glob with `./` segments and repeated `/` removed: `./src//a.py` -> `src/a.py`."""
+    parts = [p for p in str(g).split("/") if p not in ("", ".")]
+    return "/".join(parts) + ("/" if str(g).endswith("/") and parts else "")
 
 
 class Problem(object):
@@ -56,7 +60,7 @@ def check_record(n):
     def err(rule, msg, level="error"):
         out.append(Problem(level, rule, n.id, n.path, msg))
 
-    rec = n.rec
+    rec = n.raw
     if rec is None:
         return out
     kind = KINDS[n.kind]
@@ -66,11 +70,15 @@ def check_record(n):
     if rec.get("schema") != SCHEMA_VERSION:
         err("schema", "schema %r is not supported (this wavecoord reads schema %d)" % (rec.get("schema"),
                                                                                          SCHEMA_VERSION))
-    for e in schemaload.errors(rec, "spec-record", "#/definitions/" + n.kind):
+    for e in n.invalid:  # spec-record.schema.json and exec, from tree.record_errors
         err("schema", e)
-    if n.kind == "task" and isinstance(rec.get("exec"), dict):
-        for e in schemaload.errors(rec["exec"], "task-spec", "#/definitions/exec"):
-            err("schema", "exec: " + e)
+    if out:
+        return out  # the rules below read the record's fields as the schema types them
+    for key in ("paths", "shared_paths"):
+        for g in rec.get(key) or []:
+            if canonical_glob(g) != g:
+                err("paths", "%s %s: write it as %s (no ./, // or /./), so overlaps and leases compare it"
+                    % (key, g, canonical_glob(g)))
     for s in kind.sections:
         if s.required and not rec["sections"].get(s.key):
             err("section", "the section %s is required for a %s" % (s.title, n.kind))
@@ -143,6 +151,42 @@ def check(tree, graph=None):
     return sorted(out, key=lambda p: (p.path or "", p.rule, p.msg))
 
 
+def lead_transition(old, new):
+    """Why a plan change (an op, a hand edit in a plan PR) may not move a task from status `old` to `new`, or
+    None (section 7.1). The coordinator writes in_progress, in_review and done; done is final; a live task
+    (in_progress, in_review) may only be dropped. `old` is None for a new task."""
+    if new in COORDINATOR_STATUSES:
+        return "%s is written by the coordinator, not in a plan change" % new
+    if old == "done":
+        return "done is final: a plan change does not undo it (plan a new task instead)"
+    if old in ("in_progress", "in_review") and new != "dropped":
+        return "the task is %s: a plan change may only drop it" % old
+    return None
+
+
+def plan_change_problems(before, after):
+    """Errors (rule `status`) for the task statuses that a plan change sets against section 7.1, from the
+    tree before and the tree after. A moved task is compared with its old id (an alias)."""
+    out = []
+    for nid, n in sorted(after.nodes.items()):
+        if n.kind != "task" or n.status is None:
+            continue
+        old = before.nodes.get(nid)
+        if old is None:
+            aliases = (n.rec or n.raw or {}).get("aliases")
+            for a in aliases if isinstance(aliases, list) else []:
+                if a in before.nodes:
+                    old = before.nodes[a]
+                    break
+        was = old.status if old is not None else None
+        if was == n.status:
+            continue
+        why = lead_transition(was, n.status)
+        if why:
+            out.append(Problem("error", "status", nid, n.path, "%s -> %s: %s" % (was or "(new)", n.status, why)))
+    return out
+
+
 def lint(tree):
     """Style warnings: several sentences on one line (M6), tables outside Design (M7)."""
     out = []
@@ -154,11 +198,9 @@ def lint(tree):
             v = n.rec["sections"].get(s.key)
             if s.type != "prose" or not v:
                 continue
-            fence = False
+            fstate = None
             for line in v.split("\n"):
-                if line.lstrip().startswith("```"):
-                    fence = not fence
-                    continue
+                fstate, fence = doc.fence(fstate, line)
                 if fence or line.lstrip().startswith(("-", "*", "|", "#", ">")) or line.startswith("    "):
                     if line.lstrip().startswith("|") and s.key != "design" and not fence:
                         out.append(Problem("warning", "table", n.id, n.path,

@@ -8,6 +8,11 @@ that the tree did not have before, nothing is returned but OpsError: the
 caller writes nothing. `changes` is {path: new text, or None to delete};
 `moves` lists (old path, new path) for `git mv`. Every record an op touches is
 rendered canonically (rule M8).
+
+A change is a plan change: it never writes a coordinator status (in_progress,
+in_review, done) and never moves a task out of done, or out of in_progress or
+in_review except to dropped (check.lead_transition). Only an internal caller
+(migrate-plan, which keeps done tasks done) passes `coordinator=True`.
 """
 
 import re
@@ -16,14 +21,19 @@ from wavecoord import schemaload
 from wavecoord.plan.spec import SpecError
 
 from . import doc
-from .check import check
+from .check import check, lead_transition, plan_change_problems
 from .fingerprint import fingerprint
 from .model import (ARTIFACT_LISTS, COORDINATOR_STATUSES, DECISIONS_DIR, KINDS, NODE_FILE, SCHEMA_VERSION,
-                    SORTED_LISTS, TASKS_DIR)
+                    SORTED_LISTS, STEP_WORDS, TASKS_DIR, shape_errors)
 from .tree import Tree
 
 SCALAR_KEYS = ("title", "basis", "class", "size")
-SENTENCE_SPLIT = re.compile(r"(?<=[.!?])\s+(?=[A-Z0-9\"'(`])")
+# a sentence ends at . ! or ? before a space and a capital, a digit, a quote or a backquote
+SENTENCE_END = re.compile(r"[.!?]\s+(?=[A-Z0-9\"'(`])")
+# words whose period does not end a sentence (besides words with an inner dot: e.g., i.e., U.S., v1.2)
+ABBREVIATIONS = {"approx", "ca", "cf", "dr", "esp", "etc", "excl", "fig", "incl", "inc", "jr", "ltd", "mr", "mrs",
+                 "ms", "nr", "resp", "sr", "viz", "vs"}
+NUMBERED = re.compile(r"^\s*[0-9]+[.)]\s")
 
 
 class OpsError(ValueError):
@@ -62,28 +72,69 @@ def id_of(rel):
     return rel[:-3]
 
 
+def _ends_sentence(chunk, nxt):
+    """Whether the period that ends `chunk` ends a sentence, given the character after the space."""
+    words = chunk[:-1].split()
+    w = words[-1].lstrip("(\"'`").lower() if words else ""
+    if not w or w in ABBREVIATIONS or "." in w:
+        return False
+    if nxt.isdigit() and any(c.isdigit() for c in w):
+        return False  # a number or a version: "v2. 0"
+    return True
+
+
+def _split_line(s):
+    out, start = [], 0
+    for m in SENTENCE_END.finditer(s):
+        end = m.start() + 1
+        if s[m.start()] == "." and not _ends_sentence(s[start:end], s[m.end()]):
+            continue
+        out.append(s[start:end].strip())
+        start = m.end()
+    out.append(s[start:].strip())
+    return [p for p in out if p]
+
+
 def split_sentences(text):
-    """One sentence per line (rule M6). Lines that are code, lists, tables or headings are kept as they are."""
-    out, fence = [], False
-    for line in (text or "").strip().split("\n"):
+    """One sentence per line (rule M6). Lines that are code (fenced or indented), lists (also numbered),
+    tables, headings or quotes are kept as they are; so is any indented line (a list item's continuation).
+    A period after an abbreviation (approx., etc.), after a word with an inner dot (e.g., U.S.) or between
+    numbers does not end a sentence."""
+    out, fstate = [], None
+    for line in (text or "").strip("\n").split("\n"):
         s = line.strip()
-        if s.startswith("```"):
-            fence = not fence
+        fstate, in_fence = doc.fence(fstate, line)
+        if (in_fence or not s or s.startswith(("-", "*", "+", "|", "#", ">")) or line[:1].isspace()
+                or NUMBERED.match(line)):
             out.append(line.rstrip())
             continue
-        if fence or not s or s.startswith(("-", "*", "|", "#", ">")) or line.startswith("    "):
-            out.append(line.rstrip())
-            continue
-        out.extend(p.strip() for p in SENTENCE_SPLIT.split(s) if p.strip())
+        out.extend(_split_line(s))
+    while out and not out[-1]:
+        out.pop()
     return "\n".join(out)
+
+
+def _one_line(v, what):
+    """Refuse a line break inside a value that is written on one line (rule M2)."""
+    if isinstance(v, str):
+        if "\n" in v or "\r" in v:
+            raise OpsError(["%s is one line: no line breaks" % what])
+    elif isinstance(v, list):
+        for x in v:
+            _one_line(x, what)
+    elif isinstance(v, dict):
+        for k, x in v.items():
+            _one_line(x, "%s.%s" % (what, k))
 
 
 # ------------------------------------------------------------------ the work area
 
 class Work(object):
-    def __init__(self, files):
+    def __init__(self, files, coordinator=False):
         self.files = dict(files)
         self.moves = []
+        self.coordinator = coordinator
+        self.created = []  # tasks created without a basis: theirs is set after the last op
 
     def has(self, nid):
         return rel_of(nid) in self.files
@@ -94,9 +145,13 @@ class Work(object):
             raise OpsError(["no record %s" % nid])
         k = kind or kind_of(nid)
         try:
-            return doc.parse(self.files[rel], k)
+            rec = doc.parse(self.files[rel], k)
         except SpecError as e:
             raise OpsError(["%s does not parse: %s" % (nid, "; ".join(e.errors[:3]))])
+        errs = shape_errors(rec, k)
+        if errs:  # writing it back would lose data: fix the file first
+            raise OpsError(["%s cannot be changed until it is fixed: %s" % (nid, "; ".join(errs[:3]))])
+        return rec
 
     def save(self, nid, rec):
         self.files[rel_of(nid)] = doc.render(rec)
@@ -111,10 +166,20 @@ def _section(kind, name):
     return s
 
 
+def _step(st):
+    if (not isinstance(st, list) or len(st) != 2 or not all(isinstance(x, str) for x in st)
+            or st[0].capitalize() not in STEP_WORDS or not st[1].strip()):
+        raise OpsError(["a step is [Given|When|Then|And|But, text], not %r" % (st,)])
+    _one_line(st[1], "a step")
+    return [st[0].capitalize(), st[1].strip()]
+
+
 def _section_value(sec, value):
     if sec.type == "prose":
         if not isinstance(value, str):
             raise OpsError(["%s is text" % sec.title])
+        if sec.key == "statement":  # one EARS sentence: never split, abbreviations or not
+            return "\n".join(l.rstrip() for l in value.strip().split("\n"))
         return split_sentences(value)
     if sec.type in ("list", "commands"):
         if isinstance(value, str):
@@ -123,13 +188,18 @@ def _section_value(sec, value):
             raise OpsError(["%s is a list of one-line items" % sec.title])
         return [v.strip() for v in value]
     if sec.type == "scenarios":
+        out = []
         for sc in value if isinstance(value, list) else [None]:
-            if not isinstance(sc, dict) or not sc.get("name") or not sc.get("steps"):
+            if (not isinstance(sc, dict) or not isinstance(sc.get("name"), str) or not sc["name"].strip()
+                    or not isinstance(sc.get("steps"), list) or not sc["steps"]):
                 raise OpsError(["%s is a list of {name, steps: [[Given|When|Then|And|But, text]]}" % sec.title])
-        return [{"name": sc["name"], "steps": [[w.capitalize(), t] for w, t in sc["steps"]]} for sc in value]
+            _one_line(sc["name"], "a scenario name")
+            out.append({"name": sc["name"].strip(), "steps": [_step(st) for st in sc["steps"]]})
+        return out
     if sec.type == "risks":
         if not isinstance(value, list) or not all(isinstance(r, dict) and r.get("risk") for r in value):
             raise OpsError(["%s is a list of {risk, mitigation, kind}" % sec.title])
+        _one_line(value, "a risk")
         return value
     raise OpsError(["section type %s" % sec.type])
 
@@ -152,22 +222,23 @@ def op_create(w, op):
     for k, v in (op.get("fields") or {}).items():
         if k in ("kind", "schema", "sections"):
             raise OpsError(["%s: %s is not a field to set" % (nid, k)])
+        _one_line(v, k)
         rec[k] = v
+    if kind == "task" and rec.get("status") in COORDINATOR_STATUSES and not w.coordinator:
+        raise OpsError(["%s: %s is written by the coordinator, not in a plan change" % (nid, rec["status"])])
     rec["sections"] = {}
     for name, v in (op.get("sections") or {}).items():
         sec = _section(kind, name)
         rec["sections"][sec.key] = _section_value(sec, v)
     if kind == "task" and "basis" not in rec:
-        try:
-            rec["basis"] = fingerprint(w.load(parent))
-        except OpsError:
-            pass
+        w.created.append(nid)  # the basis is the requirement after the last op (apply_ops)
     w.save(nid, rec)
 
 
 def op_set(w, op):
     rec = w.load(op["id"])
     key, value = op["key"], op.get("value")
+    _one_line(value, key)
     if key.startswith("exec."):
         if rec["kind"] != "task":
             raise OpsError(["only a task has exec"])
@@ -193,8 +264,10 @@ def op_set_status(w, op):
     st = op["status"]
     if st not in KINDS[rec["kind"]].statuses:
         raise OpsError(["%s is not a status of a %s (%s)" % (st, rec["kind"], ", ".join(KINDS[rec["kind"]].statuses))])
-    if st in COORDINATOR_STATUSES and not op.get("coordinator"):
-        raise OpsError(["%s is written by the coordinator, not in a plan change" % st])
+    if rec["kind"] == "task" and not w.coordinator and st != rec.get("status"):
+        why = lead_transition(rec.get("status"), st)
+        if why:
+            raise OpsError(["%s: %s" % (op["id"], why)])
     rec["status"] = st
     w.save(op["id"], rec)
 
@@ -252,6 +325,7 @@ def op_set_artifact(w, op):
     if lst not in ARTIFACT_LISTS:
         raise OpsError(["list is inputs or outputs"])
     art = dict(op["artifact"])
+    _one_line(art, "artifact")
     cur = [a for a in rec.get(lst) or [] if a.get("id") != art.get("id")]
     rec[lst] = cur + [art]
     w.save(op["id"], rec)
@@ -344,17 +418,24 @@ def op_mv(w, op):
     if "/" in new and not w.has(new.rsplit("/", 1)[0]):
         raise OpsError(["the new parent %s does not exist" % new.rsplit("/", 1)[0]])
     rels = _subtree_rels(w, old)
-    moved = {}
+    moved, texts = {}, {}
     for rel in rels:
-        moved[rel] = rel_of(_map_id(id_of(rel), old, new))
+        try:
+            nid = id_of(rel)
+            if rel_of(nid) != rel:
+                raise OpsError([])
+        except OpsError:
+            raise OpsError(["%s is not a record of the spec tree: move or delete it first" % rel])
+        moved[rel] = rel_of(_map_id(nid, old, new))
+        if kind_of(nid) != "decision":
+            rec = w.load(nid)
+            # moving back to an old id: that id is no longer an alias (it is the node again)
+            keep = [a for a in rec.get("aliases") or [] if a != new and not a.startswith(new + "/")]
+            rec["aliases"] = sorted(set(keep + [nid]))
+            texts[rel] = doc.render(rec)
     for rel, nrel in moved.items():
         text = w.files.pop(rel)
-        oid = id_of(rel)
-        if kind_of(oid) != "decision":
-            rec = doc.parse(text, kind_of(oid))
-            rec["aliases"] = sorted(set((rec.get("aliases") or []) + [oid]))
-            text = doc.render(rec)
-        w.files[nrel] = text
+        w.files[nrel] = texts.get(rel, text)
         w.moves.append((rel, nrel))
     _rewrite_refs(w, old, new)
 
@@ -369,6 +450,8 @@ def op_rebase_basis(w, op):
 
 
 def op_supersede(w, op):
+    if op["old"] == op["new"]:
+        raise OpsError(["a requirement cannot supersede itself"])
     old, new = w.load(op["old"]), w.load(op["new"])
     if old["kind"] != "requirement" or new["kind"] != "requirement":
         raise OpsError(["supersede takes two requirements"])
@@ -400,33 +483,45 @@ def op_delete(w, op):
             if any(r == nid or r.startswith(nid + "/") for r in refs):
                 users.append(id_of(rel))
         if users:
-            raise OpsError(["%s is referenced by %s; use force, or change them first" % (nid, ", ".join(users[:5]))])
+            raise OpsError(["%s is referenced by %s; change them first (force deletes children, not references;"
+                            " prefer status dropped or deprecated)" % (nid, ", ".join(users[:5]))])
     for rel in rels:
         del w.files[rel]
 
 
-def _error_keys(files):
-    return {(p.rule, p.path, p.msg) for p in check(Tree(files)) if p.level == "error"}
-
-
-def apply_ops(files, ops):
-    """-> (changes, moves, problems after). Raises OpsError: nothing to write."""
+def apply_ops(files, ops, coordinator=False):
+    """-> (changes, moves, problems after). Raises OpsError: nothing to write.
+    `coordinator=True` is for internal callers only (migrate-plan): it allows coordinator statuses."""
     errs = []
+    if not isinstance(ops, list):
+        raise OpsError(["ops is a list of ops"])
     for i, op in enumerate(ops):
         for e in schemaload.errors(op, "spec-ops", "#/definitions/op"):
             errs.append("op %d: %s" % (i + 1, e))
     if errs:
         raise OpsError(errs)
-    w = Work(files)
+    w = Work(files, coordinator)
     for i, op in enumerate(ops):
         try:
             globals()["op_" + op["op"]](w, op)  # looked up at call time
         except OpsError as e:
             raise OpsError(["op %d (%s): %s" % (i + 1, op["op"], m) for m in e.errors])
-    before = _error_keys(files)
+        except (SpecError, ValueError, TypeError, KeyError, AttributeError, IndexError) as e:
+            msg = "; ".join(e.errors[:3]) if isinstance(e, SpecError) else "%s: %s" % (type(e).__name__, e)
+            raise OpsError(["op %d (%s): %s" % (i + 1, op["op"], msg)])
+    for nid in w.created:  # the basis of a new task is its requirement as the change leaves it
+        if w.has(nid) and w.has(nid.rsplit("/", 1)[0]):
+            rec = w.load(nid)
+            if "basis" not in rec:
+                rec["basis"] = fingerprint(w.load(nid.rsplit("/", 1)[0]))
+                w.save(nid, rec)
+    before_tree = Tree(files)
+    before = {(p.rule, p.path, p.msg) for p in check(before_tree) if p.level == "error"}
     tree = Tree(w.files)
     problems = check(tree)
     new = [p for p in problems if p.level == "error" and (p.rule, p.path, p.msg) not in before]
+    if not coordinator:
+        new += plan_change_problems(before_tree, tree)
     if new:
         raise OpsError(["the change leaves the tree invalid: %s" % p for p in new])
     changes = {rel: text for rel, text in w.files.items() if files.get(rel) != text}

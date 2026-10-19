@@ -58,22 +58,25 @@ When an access token is within 60 s of expiry, the auth service shall issue a ne
 
 - **`outputs`**: what the node hands over, each with a kind (`file`, `interface`, `api`, `schema`, `data`, `config`, `doc`, `event`) and, for an interface, a one-line contract.
 - **`inputs`**: what the node takes in, and `from` which node, or `external: true`.
-- **`needs`**: what must be done first. A node can need a task or a whole feature; a node also waits for whatever its parents need.
+- **`needs`**: what must be done first. A node can need a task or a whole feature; a node also waits for whatever its parents need. A need on a node counts its tasks that are not dropped. A need that does not resolve, on a record that is invalid, or on a node with no tasks yet is never met, so nothing starts early.
 - **`conflicts_with`**: what must not run at the same time for a reason the tree cannot see, such as a shared database.
 
 A task adds what a worker needs: `paths` it may change, `exec` (model, budget, turns), Context, Risks, Acceptance and Prompt, as in today's task specs.
 
 ## What `check` proves
 
-- Every output a requirement, feature or capability promises is produced by exactly one task under it.
-- Every input comes from a node the consumer `needs`, or is external.
-- No two tasks produce the same thing, and file outputs are inside the task's `paths`.
-- `needs` has no cycles, and every reference resolves.
-- The files are in canonical form.
+- Every output a requirement, feature or capability promises is produced by exactly one task under it. Before any task is planned under it, this is a warning, so you can write requirements first and plan tasks later.
+- Every input comes from a node the consumer reaches through `needs`, or is external.
+- No two tasks produce the same thing, and file outputs are inside the task's `paths`. A dropped task produces nothing.
+- `needs` and `supersedes` have no cycles, and every reference resolves.
+- Every record fits its schema: its kind matches its path, it has no unknown keys, and lists are lists. A record that does not is reported and left out, and what needs it waits.
+- `paths` are written plainly (`src/a.py`, not `./src/a.py` or `src//a.py`).
+- The files are in canonical form. `fmt` never drops data: it refuses a record it cannot write back whole and leaves the file as it is.
+- A symlink under `specs/` is an error: records are regular files.
 
 ## What can run at the same time
 
-You never write it. `wavecoord spec waves` computes it: two tasks can run together when neither needs the other, their paths do not overlap, and they do not conflict. It prints the waves, the critical path and the widest wave. If two tasks could run together but write the same file, `check` tells you to add a `needs` or split the file.
+You never write it. `wavecoord spec waves` computes it: two tasks can run together when neither needs the other, their paths do not overlap, and they do not conflict. It prints the waves, the critical path and the widest wave. Wave 1 is the tasks that can run now (or are running); a task that cannot run yet for another reason (its status, an unapproved requirement) is listed as held, with the reason. If two tasks could run together but write the same file, `check` tells you to add a `needs` or split the file.
 
 ## Status
 
@@ -84,7 +87,7 @@ You never write it. `wavecoord spec waves` computes it: two tasks can run togeth
 | task | `draft`, `planned`, `on_hold`, `dropped` | you, in a plan PR |
 | task | `in_progress`, `in_review`, `done` | wavecoord |
 
-wavecoord commits task status to your default branch as work moves: `in_progress` when a worker starts, `in_review` when its PR is open, `done` when it merges, and back to `planned` when an attempt ends without a merge. The coordinator reconciles: at each flush (every `spec.status_flush_s`, 60 s, and at once after a merge) it compares the files with what it knows and commits only the `status:` lines that differ, as `wavecoord: status (<n> tasks)` with one `Wavecoord-Status: <task> <from> <to>` line per change. It reads the files at one commit of the default branch and builds the status commit on that same commit, so it changes only `status:` lines. It writes only over `planned`, `in_progress` and `in_review`: it never changes `draft`, `on_hold` or `dropped`, and never undoes `done`. `in_review` needs an open PR; a finished attempt without one stays `in_progress`. `status` is always the first line of the frontmatter, so these commits do not conflict with your plan PRs. `ready`, `blocked` and progress are computed, never written.
+wavecoord commits task status to your default branch as work moves: `in_progress` when a worker starts, `in_review` when its PR is open, `done` when it merges, and back to `planned` when an attempt ends without a merge. The coordinator reconciles: at each flush (every `spec.status_flush_s`, 60 s, and at once after a merge) it compares the files with what it knows and commits only the `status:` lines that differ, as `wavecoord: status (<n> tasks)` with one `Wavecoord-Status: <task> <from> <to>` line per change. It reads the files at one commit of the default branch and builds the status commit on that same commit, so it changes only `status:` lines. It writes only over `planned`, `in_progress` and `in_review`: it never changes `draft`, `on_hold` or `dropped`, and never undoes `done`. A plan change cannot set `in_progress`, `in_review` or `done`, cannot change a `done` task's status, and can only drop a task that is `in_progress` or `in_review`: the op API refuses it, and `wavecoord spec check --base origin/main` reports it for a hand edit. `in_review` needs an open PR; a finished attempt without one stays `in_progress`. `status` is always the first line of the frontmatter, so these commits do not conflict with your plan PRs. `ready`, `blocked` and progress are computed, never written.
 
 If you hold, drop or draft a task while its attempt runs, your status stays in the file and the task is not dispatched again. The attempt is not stopped; use `wavecoord steer <task> stop`. `status-sync` lists such tasks under `held`.
 
@@ -118,7 +121,7 @@ Two branches that change different nodes never conflict. To keep it that way:
 - let the tools write, or run `wavecoord spec fmt`;
 - move nodes with `wavecoord spec mv`, which keeps the old ID as an alias.
 
-Put `wavecoord spec check && wavecoord spec fmt --check` in CI.
+Put `wavecoord spec check --base origin/main && wavecoord spec fmt --check` in CI.
 
 ## Commands
 
@@ -127,11 +130,12 @@ wavecoord spec tree [node]                       the tree with status and progre
 wavecoord spec waves [node]                      what can run together
 wavecoord spec query 'kind=task status=planned paths~src/auth/*'
 wavecoord spec show <id> [--json]
-wavecoord spec trace <id>                        parents, children, needs, producers, consumers, PRs
-wavecoord spec new requirement auth/sessions/token-rotation --title ...
+wavecoord spec trace <id>                        parents, children, needs, producers, consumers, decisions
+wavecoord spec new auth/sessions/token-rotation --kind requirement --title ...
 wavecoord spec status <task> on_hold
 wavecoord spec status-sync [--reset <task>]      write status now; --reset undoes a rolled-back done
-wavecoord spec mv <old id> <new id>
+wavecoord spec mv <old id> <new id>                (moving back to the old id is allowed)
+wavecoord spec delete <id>                       refused while referenced; --force also deletes children
 wavecoord spec migrate-plan --dry-run            move plan/tasks into the tree
 ```
 
@@ -155,7 +159,7 @@ The lead plans from the spec tree when `plan.adapter` is `specs`, or when no ada
 
 The lead's tools read the tree on the default branch: `spec_tree`, `spec_get`, `spec_query`, `spec_waves`, `spec_trace` and `spec_check`. `spec_edit` takes the same ops as `wavecoord spec apply`, writes them as one commit on a new `plan/<n>` branch (moves as `git mv`), and opens a PR; pass its `branch` to the next `spec_edit` to add to the same PR.
 
-The coordinator names a task by its path with `.` for `/`: `auth/sessions/token-rotation/rotate-impl` is task `auth.sessions.token-rotation.rotate-impl` in leases, attempts, branches (`wave/<task>-<n>`) and the PR's `Task:` line. `check` keeps that name within 64 characters. After `mv`, the old id stays in `aliases`, and the coordinator's leases, attempts and merges under it still belong to the task: a moved task keeps its status and is not dispatched again. `plan_get` and `dispatch` take the tree id or an alias too.
+`spec_waves` and `spec_trace` name tasks by their path. The coordinator names a task by its path with `.` for `/`: `auth/sessions/token-rotation/rotate-impl` is task `auth.sessions.token-rotation.rotate-impl` in leases, attempts, branches (`wave/<task>-<n>`) and the PR's `Task:` line. `check` keeps that name within 64 characters. After `mv`, the old id stays in `aliases`, and the coordinator's leases, attempts and merges under it still belong to the task: a moved task keeps its status and is not dispatched again. `plan_get` and `dispatch` take the tree id or an alias too.
 
 A task is not ready while a task it `conflicts_with` runs or is in review, and `dispatch_wave` never starts both. A task left `in_progress` or `in_review` in the files with no live attempt is ready again, even before the status commit that resets it lands.
 
