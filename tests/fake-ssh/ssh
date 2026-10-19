@@ -3,12 +3,15 @@
 
 It parses ssh options, takes the first non-option word as the destination and
 runs the rest of the words, joined by spaces (like ssh does), with `sh -c` on
-this machine. stdin, stdout, stderr and the exit code pass through.
+this machine (like sshd runs it with the login shell). stdin, stdout, stderr
+and the exit code pass through.
 
 Environment:
   FAKE_SSH_LOG=<p>    append {"argv": [...], "dest": ..., "cmd": ...} as one JSON line per call
   FAKE_SSH_HOME=<d>   run the command with WAVECOORD_HOME=<d> (the "remote" wavecoord home)
   FAKE_SSH_DOWN=1     exit 255 (unreachable) without running anything
+  FAKE_SSH_SHELL=<p>  the "login shell" that runs the command (default sh), for example /bin/csh
+  FAKE_SSH_CUT=<n>    pass only the first n bytes of stdin, then EOF (a transfer cut short)
 With -N (a tunnel), it logs the call and exits 0.
 """
 
@@ -53,7 +56,11 @@ def main(argv):
     env = dict(os.environ)
     if os.environ.get("FAKE_SSH_HOME"):
         env["WAVECOORD_HOME"] = os.environ["FAKE_SSH_HOME"]
-    return subprocess.call(["sh", "-c", cmd or "true"], env=env)
+    shell = os.environ.get("FAKE_SSH_SHELL") or "sh"
+    if os.environ.get("FAKE_SSH_CUT"):
+        data = sys.stdin.buffer.read()[:int(os.environ["FAKE_SSH_CUT"])]
+        return subprocess.run([shell, "-c", cmd or "true"], env=env, input=data).returncode
+    return subprocess.call([shell, "-c", cmd or "true"], env=env)
 
 
 if __name__ == "__main__":

@@ -29,10 +29,10 @@ wavecoord #42 2026-10-18T12:30:00Z report.post api-auth/1: status=done acceptanc
 
 ## The shared cursor
 
-`lead-cursor.json` in the hook state directory (`WAVECOORD_STATE_DIR`, else `${CLAUDE_PLUGIN_DATA}/state`, else `~/.wavecoord/state`) holds the highest event `seq` delivered to the lead. It only moves forward.
+`coord-<sha(url)>/lead-cursor.json` in the hook state directory (`WAVECOORD_STATE_DIR`, else `${CLAUDE_PLUGIN_DATA}/state`, else `~/.wavecoord/state`) holds the highest event `seq` of that coordinator delivered to the lead. It only moves forward. Every lead session of one coordinator shares it: run one lead session per coordinator.
 
 - `wavecoord events --for lead` starts after the cursor (unless `--since`) and moves it after each event.
-- The hooks inject only events after the cursor, then move it.
+- The hooks inject only events after the cursor, then move it past the lines that fit in the injected text (`hooks.md`, "What fits"); the rest come next turn.
 - A new lead session (`SessionStart` with source `startup` or `clear`) moves the cursor to the head: the session start summary shows the wave state, not the old backlog. `resume` and `compact` keep the backlog.
 - The channel does not move the cursor. Claude Code drops channel events without an error when the session did not load the channel, so the hooks must still deliver them. With the channel on, the lead can see an event twice; the `seq` tells.
 

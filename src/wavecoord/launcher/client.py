@@ -16,7 +16,7 @@ from . import coord as coordmod
 from .providers import ANTHROPIC, cost_basis
 from .common import (FINAL, TASK_RE, LauncherError, Unreachable, ensure_dir, git_run, now, rand4, read_json,
                      run_cmd, wc_home, write_json)
-from .transport import Host
+from .transport import SSH_OPTS, Host, ssh_exe
 
 POLL_S = 10.0
 
@@ -180,12 +180,13 @@ class Launcher(object):
         return dict(parallel(one, names))
 
     # -- attempt numbers
-    def existing_attempts(self, task):
-        """Attempt numbers of `task` seen as branches on origin, local branches or host state."""
+    def existing_attempts(self, task, probes=None):
+        """Attempt numbers of `task` seen as branches on origin, local branches, the client index or the
+        attempt dirs of the probed hosts (`probes`: probe answers with `attempt_ids`)."""
         prefix = "%s/%s-" % (self.cfg.branch_prefix, task)
         nums = set()
         rc, out, _ = git_run(["ls-remote", "--heads", "origin", "refs/heads/%s*" % prefix], self.cfg.root, timeout=60)
-        rc2, out2, _ = git_run(["for-each-ref", "--format=%(refname)", "refs/heads/" + prefix.rstrip("-")],
+        rc2, out2, _ = git_run(["for-each-ref", "--format=%(refname)", "refs/heads/%s*" % prefix],
                                self.cfg.root, timeout=60)
         for line in (out if rc == 0 else "").splitlines() + (out2 if rc2 == 0 else "").splitlines():
             m = re.search(r"refs/heads/%s(\d+)$" % re.escape(prefix), line)
@@ -196,6 +197,11 @@ class Launcher(object):
             m = re.match(r"^%s-(\d+)\.json$" % re.escape(task), n)
             if m:
                 nums.add(int(m.group(1)))
+        for p in (probes or {}).values():
+            for aid in (p or {}).get("attempt_ids") or []:
+                m = re.match(r"^%s-(\d+)$" % re.escape(task), str(aid))
+                if m:
+                    nums.add(int(m.group(1)))
         return nums
 
     def index_dir(self):
@@ -292,8 +298,10 @@ class Launcher(object):
         if u.hostname not in ("127.0.0.1", "localhost", "::1"):
             return
         port = u.port or 80
-        argv = h.ssh_argv()[:-1] + ["-f", "-N", "-o", "ExitOnForwardFailure=yes", "-o", "ControlMaster=no",
-                                    "-o", "ControlPath=none", "-R", "%d:127.0.0.1:%d" % (port, port), h.cfg["ssh"]]
+        # A connection of its own, never the shared ControlMaster: ssh keeps the first value of an
+        # option, so the overrides go before SSH_OPTS.
+        argv = [ssh_exe(), "-o", "ControlMaster=no", "-o", "ControlPath=none"] + SSH_OPTS + [
+            "-f", "-N", "-o", "ExitOnForwardFailure=yes", "-R", "%d:127.0.0.1:%d" % (port, port), h.cfg["ssh"]]
         try:
             subprocess.run(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, timeout=30)
         except (OSError, subprocess.TimeoutExpired) as e:
@@ -354,7 +362,7 @@ class Launcher(object):
         name, provider, chain, fallback, probes = sel["host"], sel["provider"], sel["chain"], sel["all_fallback"], sel["probes"]
         h, probe, skipped = self.hosts[name], probes[name], sel["skipped"]
 
-        existing = self.existing_attempts(task)
+        existing = self.existing_attempts(task, probes)
         if opts.get("attempt"):
             attempt = int(opts["attempt"])
         elif opts.get("continue"):

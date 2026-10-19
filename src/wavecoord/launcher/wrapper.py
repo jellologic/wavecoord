@@ -17,23 +17,26 @@ stdin (launcher/steer.py), so a hint arrives within INBOX_POLL_S.
 
 import json
 import os
+import re
 import signal
 import subprocess
 import sys
 import threading
+import time
 from urllib.parse import quote
 
 from wavecoord import jsonschema_lite, zipapp
+from wavecoord.const import parse_ts
 
 from . import coord as coordmod
 from . import fencehost, providers, sessions, steer
 from .common import (DEVNULL, Flock, LauncherError, const, git_run, host_env, iso, kill_group, now,
-                     pgroup_alive, read_json, run_cmd, signal_group, tail_text, update_status,
+                     pgroup_alive, read_json, signal_group, tail_text, update_status,
                      wait_group_gone, write_json)
 from .hostside import RUN_LOCK, attempt_dir, claude_bin, self_argv
 from .stream import StreamStats
 from .steer import Steer
-from .worktrees import REMOTE, dirty_count, merge_tree_conflicts
+from .worktrees import FETCH_RETRY_DELAYS_S, REMOTE, dirty_count, fetch_ref, merge_tree_conflicts
 
 NOTIFY_MIN_INTERVAL_S = 60.0
 REPORT_FIELDS = ("status", "summary", "commits", "files", "checks_run", "acceptance_met", "questions",
@@ -63,8 +66,30 @@ You are a wavecoord worker: a non-interactive Claude Code session that works on 
 """
 
 
+# The lines of the PR body header that gate-check and the refinery read (gatecheck.py).
+HEADER_LINE_RE = re.compile(r"^(Task|Attempt|Lease):", re.M)
+# The turn after a lead `steer interrupt` with no note: an interrupt stops the turn, not the run.
+INTERRUPT_NOTE = "(no note) The lead interrupted your last step. Go on with the task."
+_SCHEMA = {}
+
+
 def report_schema():
-    return json.loads(zipapp.load_schema_bytes("report.schema.json").decode("utf-8"))
+    """The report schema, read once: a zipapp that an upload replaces or removes later cannot break finish."""
+    if "report" not in _SCHEMA:
+        _SCHEMA["report"] = json.loads(zipapp.load_schema_bytes("report.schema.json").decode("utf-8"))
+    return _SCHEMA["report"]
+
+
+def preload():
+    """Read now what the wrapper needs later from its zipapp (the schema, lazily imported modules)."""
+    report_schema()
+    from wavecoord import hooks  # noqa: F401 - steer.frame_messages uses its frame()
+
+
+def quote_headers(text):
+    """Worker text in a PR body: a line that starts like the header (Task:, Attempt:, Lease:) is quoted,
+    so the body keeps exactly one header, the wrapper's."""
+    return HEADER_LINE_RE.sub(r"> \1:", text)
 
 
 def validate_report(rep):
@@ -92,10 +117,17 @@ def continue_cut(reason, subtype):
     return None
 
 
+# A worker never uses the plugin's MCP servers: Claude Code fills their bearer token from the plugin
+# option (the lead's token), not from the worker's env (security.md, "Tokens").
+WORKER_DENY = ["Bash(git push)", "Bash(git push *)", "mcp__plugin_wavecoord_wavecoord",
+               "mcp__plugin_wavecoord_lead-feed"]
+
+
 def worker_settings(task=None):
-    """--settings for a worker: the launcher pushes, so the worker may not. The fence pins
-    (disableAllHooks false, the fence env) win over the worktree's own settings files."""
-    out = {"permissions": {"deny": ["Bash(git push)", "Bash(git push *)"]}}
+    """--settings for a worker: the launcher pushes, so the worker may not, and the worker gets no
+    tool of the plugin's MCP servers. The fence pins (disableAllHooks false, the fence env) win over
+    the worktree's own settings files."""
+    out = {"permissions": {"deny": list(WORKER_DENY)}}
     out.update(fencehost.settings_pins(task or {}))
     return out
 
@@ -173,6 +205,8 @@ class Attempt(object):
         self.session_fallback = None
         self.steer = None
         self.hb_inbox = None  # the inbox of the last heartbeat answer
+        self._hb_lock = threading.Lock()
+        self.last_turn_at = now()
 
     # -- logging and coordinator calls
     def log(self, msg):
@@ -182,18 +216,19 @@ class Attempt(object):
     def heartbeat(self):
         if not self.coord.configured:
             return None
-        self.hb_seq += 1
-        body = {"agent": self.task["agent"], "kind": "worker", "host": self.task["host"], "source": "launcher",
-                "seq": self.hb_seq, "task": self.task["task"], "attempt": self.task["attempt"],
-                "branch": self.branch, "worktree": self.wt}
-        if self.stats.session_id:
-            body["session_id"] = self.stats.session_id
-        if self.stats.last_tool:
-            body["last_tool"] = self.stats.last_tool
-        try:
-            status, out = self.coord.request("POST", "/api/hb", body)
-        except LauncherError:
-            return None
+        with self._hb_lock:  # the claude loop, or a Beat thread in prepare and finish
+            self.hb_seq += 1
+            body = {"agent": self.task["agent"], "kind": "worker", "host": self.task["host"], "source": "launcher",
+                    "seq": self.hb_seq, "task": self.task["task"], "attempt": self.task["attempt"],
+                    "branch": self.branch, "worktree": self.wt}
+            if self.stats.session_id:
+                body["session_id"] = self.stats.session_id
+            if self.stats.last_tool:
+                body["last_tool"] = self.stats.last_tool
+            try:
+                status, out = self.coord.request("POST", "/api/hb", body)
+            except LauncherError:
+                return None
         if status != 200:
             return None
         self.hb_inbox = out.get("inbox") if isinstance(out.get("inbox"), list) else None
@@ -228,17 +263,48 @@ class Attempt(object):
 
     # -- phases
     def run_prepare(self):
+        """prepare_cmd in its own process group, with heartbeats. A stop (SIGTERM) or a lost lease kills it."""
         cmd = self.task["hostcfg"].get("prepare_cmd")
         if not cmd:
             return True
         self.log("prepare_cmd: %s" % (cmd if isinstance(cmd, str) else " ".join(cmd)))
-        rc, out, err = run_cmd(cmd, self.wt, env=self.env, timeout=const("PREPARE_TIMEOUT_S", 3600.0))
-        with open(os.path.join(self.d, "prepare.log"), "w", encoding="utf-8") as f:
-            f.write(out + ("\n[stderr]\n" + err if err else ""))
+        argv = ["sh", "-c", cmd] if isinstance(cmd, str) else list(cmd)
+        timeout = const("PREPARE_TIMEOUT_S", 3600.0)
+        path = os.path.join(self.d, "prepare.log")
+        rc, why = None, None
+        with open(path, "wb") as out, Beat(self) as beat:
+            try:
+                p = subprocess.Popen(argv, cwd=self.wt, env=self.env, stdin=DEVNULL, stdout=out,
+                                     stderr=subprocess.STDOUT, start_new_session=True)
+            except OSError as e:
+                rc, why = 127, str(e)
+            else:
+                end = now() + timeout
+                while rc is None:
+                    try:
+                        rc = p.wait(timeout=0.5)
+                    except subprocess.TimeoutExpired:
+                        if self.stop["sig"] or beat.lost or now() > end:
+                            why = "stopped" if self.stop["sig"] else (
+                                "lease lost" if beat.lost else "timed out after %ss" % int(timeout))
+                            kill_group(p.pid, 5.0)
+                            rc = p.wait()
+                if pgroup_alive(p.pid):  # leftovers in its process group
+                    kill_group(p.pid, 2.0)
+        text = why if rc == 127 and why else tail_text(path, 2000)
+        if self.stop["sig"]:
+            self.reason = "stopped"
+            self.log("prepare_cmd: stopped")
+            return False
+        if beat.lost:
+            self.reason = "lease_lost"
+            self.note = "lease lost during prepare_cmd: %s by %s" % (beat.lost.get("reason"), beat.lost.get("by"))
+            self.log(self.note)
+            return False
         if rc != 0:
-            self.log("prepare_cmd failed (exit %s): %s" % (rc, (err or out)[-500:]))
+            self.log("prepare_cmd failed (exit %s%s): %s" % (rc, ", " + why if why else "", text[-500:]))
             self.reason = "prepare_failed"
-            self.note = "prepare_cmd failed (exit %s): %s" % (rc, (err or out).strip()[-300:])
+            self.note = "prepare_cmd failed (exit %s%s): %s" % (rc, ", " + why if why else "", text.strip()[-300:])
             return False
         return True
 
@@ -430,6 +496,7 @@ class Attempt(object):
                         self.note = "lease lost: %s by %s" % (lost.get("reason"), lost.get("by"))
                     elif self.hb_inbox:
                         self.deliver(self.hb_inbox)
+                self.check_controls()
                 if self.reason is None and now() >= next_inbox:
                     next_inbox = now() + inbox_every
                     self.deliver(self.fetch_inbox())
@@ -473,12 +540,15 @@ class Attempt(object):
 
     def _feed(self, raw):
         self.last_line_at = now()
+        before = self.stats.activity
         for kind, ev in self.stats.feed(raw.decode("utf-8", "replace")):
             if kind == "stuck":
                 self.notify("stuck", dict(ev, digest=self.stats.digest()), text="%s: %s" % (ev["why"], ev["text"]),
                             key="stuck:" + ev["why"])
             else:
                 self.notify(kind, ev)
+        if self.stats.activity != before:  # a turn line (not a control response, hook or state change)
+            self.last_turn_at = now()
         if self.stats.session_id and self.stats.lines <= 3:
             update_status(self.d, session_id=self.stats.session_id)
 
@@ -494,16 +564,29 @@ class Attempt(object):
         msgs = out.get("messages") if status == 200 else None
         return msgs if isinstance(msgs, list) else []
 
+    def stale_steer(self, m):
+        """A steer action sent before this run's lease began is for an earlier run of the task (a later
+        attempt, a --continue run or a resolver has a new lease): it never acts here. Both times are the
+        coordinator's clock; the message ts has whole seconds."""
+        try:
+            epoch = int(self.spec.get("lease_epoch") or 0)
+            sent = parse_ts(m["ts"]) if isinstance(m.get("ts"), str) else None
+        except (TypeError, ValueError):
+            return False
+        return bool(epoch > 0 and sent is not None and int(sent) < epoch // 1000)
+
     def deliver(self, msgs):
-        """Write new messages into the worker's stdin; act on lead steer actions; ack what went through."""
+        """Write new messages into the worker's stdin; act on lead steer actions; ack what went through.
+
+        -> the number of user lines written (each one gives the worker a turn)."""
         st = self.steer
         if st is None or st.closed:
-            return
+            return 0
         fresh = [m for m in msgs or [] if isinstance(m, dict) and m.get("id") is not None
                  and m["id"] not in st.seen and not m.get("acked")]
         if not fresh:
-            return
-        plain, done = [], []
+            return 0
+        plain, done, lines = [], [], 0
         for m in fresh:
             act = steer.parse_action(m)
             if act is None:
@@ -511,32 +594,63 @@ class Attempt(object):
                 continue
             st.seen.add(m["id"])
             done.append(m)
+            if self.stale_steer(m):
+                self.log("steer #%s from %s: %s, sent at %s before this run's lease: ignored"
+                         % (m["id"], m.get("sender"), act["action"], m.get("ts")))
+                st.record("stale", ids=[m["id"]], action=act["action"], sent=m.get("ts"))
+                continue
             self.log("steer #%s from %s: %s" % (m["id"], m.get("sender"), act["action"]))
             note = {"id": m["id"], "sender": m.get("sender"), "ts": m.get("ts"), "body": act["note"]}
             if act["action"] == "interrupt":
                 # the control request stops the running tool call and ends the turn; Claude Code then
-                # runs the queued note as the next turn (priority "now" alone waits for the running tool)
-                st.control("interrupt")
-                if act["note"]:
-                    st.send(steer.frame_messages([note]), priority="next", ids=[m["id"]])
+                # runs the queued line as the next turn (priority "now" alone waits for the running tool).
+                # Without a note the line says to go on: an interrupt stops the turn, never the run.
+                st.control("interrupt", ids=[m["id"]])
+                if st.send(steer.frame_messages([dict(note, body=act["note"] or INTERRUPT_NOTE)]), priority="next",
+                           ids=[m["id"]]):
+                    lines += 1
             elif act["action"] == "model":
-                st.control("set_model", model=act["model"])
-                if act["note"]:
-                    st.send(steer.frame_messages([note]), ids=[m["id"]])
+                st.control("set_model", ids=[m["id"]], model=act["model"])
+                if act["note"] and st.send(steer.frame_messages([note]), ids=[m["id"]]):
+                    lines += 1
             elif act["action"] == "stop":
                 self.stop["sig"] = "steer"
                 self.note = "stopped by the lead (steer #%s)%s" % (m["id"], (": " + act["note"]) if act["note"] else "")
         if plain:
             text = steer.frame_messages(plain)
-            if not st.send(text, priority="next", ids=[m["id"] for m in plain]):
-                return  # not delivered: the hooks show them instead
-            for m in plain:
-                st.seen.add(m["id"])
-            done += plain
-            self.log("steer: %d message(s) to the worker: %s" % (len(plain), ", ".join("#%s" % m["id"] for m in plain)))
+            if st.send(text, priority="next", ids=[m["id"] for m in plain]):
+                for m in plain:
+                    st.seen.add(m["id"])
+                done += plain
+                lines += 1
+                self.log("steer: %d message(s) to the worker: %s" % (
+                    len(plain), ", ".join("#%s" % m["id"] for m in plain)))
+            # else: not delivered (stdin closed): the hooks show them instead
         for m in done:
             self.coord.post_or_spool("/api/messages/%s/ack" % m["id"], None,
                                      idem="ack:%s:%s" % (self.task["agent"], m["id"]))
+        return lines
+
+    def check_controls(self):
+        """Claude Code answers each control request with a control_response. An error (or no answer
+        within STEER_WAIT_S) of a lead steer action goes to steer.jsonl and to the lead as a notice."""
+        st = self.steer
+        if st is None:
+            return
+        wait = const("STEER_WAIT_S", 60.0)
+        for rid, req in list(st.pending.items()):
+            r = self.stats.controls.get(rid)
+            if r is None and now() - req["at"] < wait and not st.closed:
+                continue
+            st.pending.pop(rid, None)
+            if (r is not None and r.get("subtype") != "error") or not req["ids"]:
+                continue  # done, or the wrapper's own request (get_context_usage)
+            why = str(r.get("error") or "error") if r is not None else "no answer within %ds" % int(wait)
+            self.log("steer: %s for #%s failed: %s" % (req["subtype"], ", #".join(map(str, req["ids"])), why[:300]))
+            st.record("control_failed", request_id=rid, subtype=req["subtype"], ids=req["ids"], error=why[:300])
+            self.notify("steer_failed", {"subtype": req["subtype"], "ids": req["ids"], "error": why[:300]},
+                        text="%s (steer #%s): %s" % (req["subtype"], ", #".join(map(str, req["ids"])), why[:300]),
+                        key="steer_failed:" + rid)
 
     def after_result(self):
         """A turn ended. Turns that Claude Code still has queued, or user lines it has not answered yet
@@ -552,9 +666,8 @@ class Attempt(object):
             return
         if (self.stats.result or {}).get("subtype") == "success" and st.extra_turns < steer.EXTRA_TURNS_MAX \
                 and self.reason is None:
-            before = len(st.seen)
-            self.deliver(self.fetch_inbox())
-            if len(st.seen) > before and not st.closed:
+            # only a user line gives a turn: a control alone (a model switch with no note) does not
+            if self.deliver(self.fetch_inbox()) and not st.closed:
                 st.extra_turns += 1
                 self.log("steer: another turn for new messages (%d of %d)" % (st.extra_turns, steer.EXTRA_TURNS_MAX))
                 return
@@ -562,9 +675,10 @@ class Attempt(object):
 
     def check_open_stdin(self):
         """After a result, stdin stays open only while a turn is coming: close it after STEER_WAIT_S without
-        a new stream line (a queued line that Claude Code dropped must not hold the run open)."""
+        a new turn line (a queued line that Claude Code dropped must not hold the run open). Control
+        responses, hook lines and state changes are not a turn."""
         st, at = self.steer, getattr(self, "result_at", None)
-        if st is None or st.closed or at is None or self.last_line_at > at:
+        if st is None or st.closed or at is None or self.last_turn_at > at:
             return
         if now() - at > const("STEER_WAIT_S", 60.0):
             self.log("steer: no turn followed the result for %ds; closing stdin" % int(now() - at))
@@ -614,20 +728,47 @@ class Attempt(object):
             return None
         return out.split()[0] if out.strip() else ""
 
-    def push(self, res):
-        """Push HEAD to the attempt branch. Rebases first when that is clean and needed."""
-        rc, _, err = git_run(["fetch", "--quiet", REMOTE, "+refs/heads/%s:refs/remotes/%s/%s"
-                              % (self.default, REMOTE, self.default)], self.wt, timeout=600)
+    def fetch_default(self, res):
+        """Fetch the default branch (under the repo's admin lock, with retries), then merge-tree HEAD
+        against it. -> (ok, conflicts or None when merge-tree failed)."""
+        rc, err = fetch_ref(self.task.get("repo") or self.wt, self.wt, self.default)
         if rc != 0:
             res["push_error"] = "fetch of %s failed: %s" % (self.default, err[-300:])
-            return False
-        base = "%s/%s" % (REMOTE, self.default)
+            return False, None
         try:
-            conflicts = merge_tree_conflicts(self.wt, base)
+            conflicts = merge_tree_conflicts(self.wt, "%s/%s" % (REMOTE, self.default))
         except LauncherError as e:
             conflicts = None
             res["merge_tree_error"] = str(e)
         res["conflicts"] = conflicts or []
+        return True, conflicts
+
+    def check_pushed(self, res):
+        """The branch on origin is HEAD already (the worker pushed it, or a --continue run added nothing).
+        The launcher's checks still run: merge-tree (so a resolver that merged nothing is not clean) and
+        E3 (so the report has its E4 fields). -> False when the fetch failed or E3 refused."""
+        ok, _ = self.fetch_default(res)
+        if not ok:
+            return False
+        res["behind"] = len(self.git_lines(["rev-list", "HEAD..%s/%s" % (REMOTE, self.default)]) or [])
+        return fencehost.prepush(self, res, "%s/%s" % (REMOTE, self.default))
+
+    def git_push(self, args):
+        """git push, again after FETCH_RETRY_DELAYS_S on an error that is not a refusal."""
+        rc, _, err = git_run(args, self.wt, timeout=600, env=self.env)
+        for delay in FETCH_RETRY_DELAYS_S:
+            if rc == 0 or "rejected" in err or "non-fast-forward" in err or "stale info" in err:
+                break
+            time.sleep(delay)
+            rc, _, err = git_run(args, self.wt, timeout=600, env=self.env)
+        return rc, err
+
+    def push(self, res):
+        """Push HEAD to the attempt branch. Rebases first when that is clean and needed."""
+        ok, conflicts = self.fetch_default(res)
+        if not ok:
+            return False
+        base = "%s/%s" % (REMOTE, self.default)
         remote_before = self.remote_sha()
         rebased = False
         behind = self.git_lines(["rev-list", "HEAD.." + base]) or []
@@ -645,14 +786,13 @@ class Attempt(object):
         if not fencehost.prepush(self, res, base):  # E3: the fence check of the net diff
             res["pushed"] = False
             return False
-        rc, _, err = git_run(["push", "--quiet", REMOTE, "HEAD:refs/heads/" + self.branch], self.wt, timeout=600,
-                             env=self.env)
+        rc, err = self.git_push(["push", "--quiet", REMOTE, "HEAD:refs/heads/" + self.branch])
         if rc != 0 and rebased and remote_before:
             # Only our own attempt branch, only after our own rebase, and only if nobody
             # else moved it since we looked: --force-with-lease with the sha we saw.
             self.log("non-fast-forward after rebase; pushing with --force-with-lease")
-            rc, _, err = git_run(["push", "--quiet", "--force-with-lease=refs/heads/%s:%s" % (self.branch, remote_before),
-                                  REMOTE, "HEAD:refs/heads/" + self.branch], self.wt, timeout=600, env=self.env)
+            rc, err = self.git_push(["push", "--quiet", "--force-with-lease=refs/heads/%s:%s" % (
+                self.branch, remote_before), REMOTE, "HEAD:refs/heads/" + self.branch])
         res["pushed"] = rc == 0
         res["push_error"] = None if rc == 0 else err[-600:]
         self.log("push %s: %s" % (self.branch, "ok" if rc == 0 else err[-300:]))
@@ -660,10 +800,12 @@ class Attempt(object):
 
     def pr_body(self, report, res):
         lease = "%s@%s" % (self.task["task"], self.spec.get("lease_epoch") or "none")
-        lines = [
+        head = [
             "Task: %s" % self.task["task"],
             "Attempt: %s" % self.task["attempt"],
             "Lease: %s" % lease,
+        ]
+        lines = [
             "",
             "## Summary",
             "",
@@ -686,6 +828,8 @@ class Attempt(object):
             res.get("turns") if res.get("turns") is not None else "?",
             res.get("cost_usd") if res.get("cost_usd") is not None else "?", res.get("cost_basis")),
             "", "\U0001F916 Generated with [Claude Code](https://claude.com/claude-code)"]
+        # the worker's text (summary, checks, questions, risks, commits) may not add a header line
+        lines = head + [quote_headers("\n".join(lines))]
         trailers = [t for t in self.spec.get("trailers") or [] if isinstance(t, list) and len(t) == 2]
         if trailers:  # last, as git trailers: a squash merge keeps them in the commit
             lines += [""] + ["%s: %s" % (k, v) for k, v in trailers]
@@ -717,16 +861,24 @@ class Attempt(object):
         branch_commits = self.git_lines(["rev-list", "--reverse", base + "..HEAD"]) or []
         res["dirty"] = dirty_count(self.wt)
 
-        rep = self.stats.structured_output
+        rep, earlier = self.pick_report()
         errs = validate_report(rep) if rep is not None else ["no structured_output in the result"]
         if self.reason in ("prepare_failed", "guard_failed", "claude_missing", "provider_error", "fence_refused"):
             errs = [self.note]
         res["report_errors"] = errs
+        if earlier is not None:
+            # a steered turn after the report failed or wrote none: the worker's report stands
+            last = self.stats.result or {}
+            res["late_turn"] = {"subtype": last.get("subtype"), "is_error": bool(last.get("is_error")),
+                                "exit_code": rc}
+            self.log("the last turn ended %s without a valid report; the report of an earlier turn stands"
+                     % last.get("subtype"))
+        failed_run = (rc != 0 or self.stats.is_error) and earlier is None
         if self.reason == "stopped":
             state = "stopped"
         elif self.reason == "timeout":
             state = "timed_out"
-        elif self.reason or rc != 0 or self.stats.is_error or errs:
+        elif self.reason or failed_run or errs:
             state = "failed"
         else:
             state = "reported"
@@ -734,11 +886,8 @@ class Attempt(object):
         # Push: a run with commits that does not push is a failed run. Never after a
         # stop or a lost lease (the task may belong to another agent now).
         if branch_commits and self.reason not in ("stopped", "lease_lost"):
-            if self.remote_sha() == git_run(["rev-parse", "HEAD"], self.wt)[1]:
-                res["pushed"] = True
-            elif not self.push(res):
-                state = "failed"
-                self.note = "push failed: %s" % (res.get("push_error") or "")[-200:]
+            with Beat(self):  # the fetch, rebase and push can take minutes: keep the lease fresh
+                state = self.push_or_check(res, state)
             branch_commits = self.git_lines(["rev-list", "--reverse", base + "..HEAD"]) or []
         res["commits"] = branch_commits
 
@@ -800,9 +949,11 @@ class Attempt(object):
         res["report_body"] = body
         res["report_post"] = self.coord.post_or_spool("/api/attempts/%s/%s/report" % (t["task"], t["attempt"]), body,
                                                       idem=idem)
-        self.hb_seq += 1
+        with self._hb_lock:
+            self.hb_seq += 1
+            seq = self.hb_seq
         fin = {"state": {"reported": "done", "stopped": "stopped"}.get(state, "failed"), "pushed": res["pushed"],
-               "source": "launcher", "seq": self.hb_seq}
+               "source": "launcher", "seq": seq}
         res["finish_post"] = self.coord.post_or_spool("/api/agents/%s/finish" % t["agent"], fin,
                                                       idem="finish:%s" % t["agent"])
         res["state"] = state
@@ -817,6 +968,99 @@ class Attempt(object):
                  % (state, rc, len(branch_commits), res["pushed"], res["report_post"]))
         return state
 
+    def push_or_check(self, res, state):
+        """Push the branch, or, when origin already has HEAD, run the push checks on it. -> the state."""
+        t = self.task
+        head = git_run(["rev-parse", "HEAD"], self.wt)[1]
+        if self.remote_sha() == head:
+            res["pushed"] = True
+            res["already_pushed"] = "earlier_run" if t.get("continue") and head == t.get("base_sha") else "worker"
+            if res["already_pushed"] == "worker":
+                self.log("the branch on %s is already at HEAD: the worker pushed it" % REMOTE)
+            if not self.check_pushed(res):
+                self.note = "push check failed (the branch was already at HEAD on %s): %s" % (
+                    REMOTE, (res.get("push_error") or "")[-200:])
+                return "failed"
+        elif not self.push(res):
+            self.note = "push failed: %s" % (res.get("push_error") or "")[-200:]
+            return "failed"
+        return state
+
+    def pick_report(self):
+        """-> (report, the earlier result line it comes from, or None).
+
+        The final result's structured_output, unless that result failed or its report is not valid
+        while an earlier successful result has a valid one: a steered turn after the report (a hint,
+        an interrupt) that errors or writes no report does not undo the worker's report."""
+        rep = self.stats.structured_output
+        last = self.stats.result
+        if rep is not None and not self.stats.is_error and not validate_report(rep):
+            return rep, None
+        for _, r in reversed(self.stats.reports):
+            if r is last:
+                continue
+            so = r.get("structured_output")
+            if r.get("subtype") == "success" and not r.get("is_error") and so is not None and not validate_report(so):
+                return so, r
+        return rep, None
+
+    def finish_fallback(self, rc, err):
+        """finish() raised: post a failed report and the finish anyway, so the lead hears of it now and
+        the lease does not wait for the reaper."""
+        t = self.task
+        note = "finish failed: %s" % err
+        pushed = False
+        try:
+            pushed = bool(self.remote_sha() == git_run(["rev-parse", "HEAD"], self.wt)[1])
+        except Exception:  # noqa: BLE001 - the worktree may be gone
+            pass
+        try:
+            report = synthetic_report("attempt %s: %s" % (t["id"], note))
+            body = {"report": report, "cost_usd": self.stats.cost_usd, "turns": self.stats.turns,
+                    "session_id": self.session_used(), "agent": t["agent"], "host": t["host"],
+                    "provider": self.provider, "state": "failed", "branch": self.branch, "pushed": pushed}
+            idem = "report:%s:%s" % (t["task"], t["attempt"]) + ((":" + t["agent"]) if t.get("continue") else "")
+            self.coord.post_or_spool("/api/attempts/%s/%s/report" % (t["task"], t["attempt"]), body, idem=idem)
+            with self._hb_lock:
+                self.hb_seq += 1
+                seq = self.hb_seq
+            self.coord.post_or_spool("/api/agents/%s/finish" % t["agent"],
+                                     {"state": "failed", "pushed": pushed, "source": "launcher", "seq": seq},
+                                     idem="finish:%s" % t["agent"])
+            coordmod.flush_spool()
+        except Exception as e:  # noqa: BLE001
+            self.log("finish fallback failed: %s" % e)
+        update_status(self.d, state="failed", ended=now(), note=note, exit_code=rc)
+
+
+class Beat(object):
+    """Heartbeats in a thread while the wrapper works outside the claude loop (prepare_cmd, finish), so a
+    long prepare or push does not make a healthy lease stale. `lost` is the first lost-lease answer."""
+
+    def __init__(self, attempt):
+        self.a = attempt
+        self.lost = None
+        self.ev = threading.Event()
+        self.t = threading.Thread(target=self.run, name="wavecoord-beat", daemon=True)
+
+    def run(self):
+        every = max(0.1, const("HB_INTERVAL_S", 30.0))
+        while not self.ev.wait(every):
+            try:
+                lost = self.a.heartbeat()
+            except Exception:  # noqa: BLE001 - a heartbeat is best effort
+                lost = None
+            if lost and self.lost is None:
+                self.lost = lost
+
+    def __enter__(self):
+        self.t.start()
+        return self
+
+    def __exit__(self, *a):
+        self.ev.set()
+        self.t.join(10)
+
 
 def _next_provider(current, fallback):
     """The profile after `current` in the fallback list (P4 dispatches the next attempt with it)."""
@@ -827,6 +1071,7 @@ def _next_provider(current, fallback):
 
 
 def wrap(project, aid):
+    preload()
     a = Attempt(project, aid)
     lock = Flock(os.path.join(a.d, RUN_LOCK))
     lock.__enter__()  # held until this process exits
@@ -873,5 +1118,5 @@ def wrap(project, aid):
         a.finish(rc, guard)
     except Exception as e:  # noqa: BLE001
         a.log("finish failed: %s" % e)
-        update_status(a.d, state="failed", ended=now(), note="finish failed: %s" % e)
+        a.finish_fallback(rc, e)
     return 0

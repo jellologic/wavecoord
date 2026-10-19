@@ -76,7 +76,7 @@ Each change is logged once (idempotency keys `pr-merged:<task>/<n>`, `pr-abandon
 
 ## Hosts
 
-- `repo_path`: a checkout of the consumer repo with an `origin` remote. On a local host a relative path is relative to the consumer repo root; on an ssh host use an absolute or `~/` path. Attempt worktrees go to `<repo_path>/../wt/<task>-<n>`.
+- `repo_path`: a checkout of the consumer repo with an `origin` remote. On a local host a relative path is relative to the consumer repo root; on an ssh host use an absolute or `~/` path. Attempt worktrees go to `<repo_path>/../wt/<project>/<task>-<n>`.
 - `env`: extra environment for `prepare_cmd` and the worker on that host. Values expand `~` and `$VAR` on the host, so `"PATH": "$HOME/.local/bin:$PATH"` works.
 - `labels`: capabilities of the host (for example `gpu`, `python3`). A task's `exec.host_needs` must all be in the host's labels or be its name; dispatch places the task only on such hosts.
 - `providers`: the provider profiles this host has (default: all). Each profile's `env_file` must exist on the host with mode 600 (`providers.md`). That file is the host's credentials for that profile: a host with no claude login can take attempts of any profile it has (`launcher.md`, "Hosts and placement").

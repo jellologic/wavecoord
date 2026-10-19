@@ -75,8 +75,9 @@ def attempt_view(d):
         return None
     task = read_json(os.path.join(d, "task.json"), {}) or {}
     state = st.get("state")
+    held = lock_held(os.path.join(d, RUN_LOCK))  # the wrapper runs while it holds its run lock
     if state in ACTIVE:
-        live = lock_held(os.path.join(d, RUN_LOCK))
+        live = held
         if not live and state == "starting":
             live = pid_alive(st.get("pid"))
         if not live:
@@ -105,6 +106,7 @@ def attempt_view(d):
         "worktree": task.get("worktree"),
         "provider": (task.get("spec") or {}).get("provider") or providers.ANTHROPIC,
         "throttled": st.get("throttled"),
+        "running": bool(held),
     }
 
 
@@ -122,12 +124,21 @@ def iter_attempt_dirs(project=None):
 
 
 def count_active(host_name):
+    """Attempts that take a slot: an active state, or a wrapper that still runs (whatever its status says)."""
     n = 0
     for d in iter_attempt_dirs():
         v = attempt_view(d)
-        if v and v["state"] in ACTIVE and v["host"] == host_name:
+        if v and (v["state"] in ACTIVE or v["running"]) and v["host"] == host_name:
             n += 1
     return n
+
+
+def project_attempt_ids(project):
+    """The attempt ids of `project` on this host (the client counts them when it numbers an attempt)."""
+    try:
+        return sorted(os.path.basename(d) for d in iter_attempt_dirs(project))
+    except LauncherError:
+        return []
 
 
 # ---- probe -------------------------------------------------------------------------------------
@@ -221,6 +232,8 @@ def r_probe(payload, args):
         "token_sha": file_sha(coordmod.token_path()),
         "providers": providers.probe(payload.get("providers") or {}),
     }
+    if payload.get("project"):
+        out["attempt_ids"] = project_attempt_ids(payload["project"])
     if payload.get("flush_spool", True):
         out["spool"] = coordmod.flush_spool()
     url = payload.get("coord_url")
@@ -305,8 +318,8 @@ def r_launch(payload, args):
         if not spec.get("continue"):
             return {"ok": False, "exists": True, "id": aid, "state": v["state"],
                     "error": "attempt %s already exists on %s (state %s)" % (aid, cfg["name"], v["state"])}
-        if v["state"] not in FINAL:
-            return {"ok": False, "error": "attempt %s is still %s" % (aid, v["state"])}
+        if v["state"] not in FINAL or v["running"]:
+            return {"ok": False, "error": "attempt %s is still %s" % (aid, "running" if v["running"] else v["state"])}
         prev = True
     prev_task, prev_result = {}, {}
     with Flock(slots_lock_path(cfg["name"])):
@@ -328,10 +341,12 @@ def r_launch(payload, args):
         write_json(os.path.join(d, "status.json"),
                    {"state": "starting", "created": now(), "pid": os.getpid(), "host": cfg["name"],
                     "task": spec["task"], "attempt": spec["attempt"], "branch": spec["branch"]})
+    wt, repo, made = None, None, False
     try:
         repo = expand_repo(cfg["repo_path"])
         wt, base_sha, default = prepare_worktree(repo, spec["branch"], aid, cont=bool(spec.get("continue")),
-                                                 log_branch=payload.get("log_branch"))
+                                                 log_branch=payload.get("log_branch"), project=project)
+        made = not spec.get("continue")
         # --continue: the sessions of the earlier runs, the first run's (the lineage root) first. The
         # wrapper resumes the first one whose transcript exists, else it starts a fresh session.
         candidates, spec_prompt = [], spec.get("prompt") or ""
@@ -371,14 +386,38 @@ def r_launch(payload, args):
         if st.get("state") == "starting":
             if p.poll() is None:
                 return {"ok": False, "error": "wrapper did not start within %ss" % LAUNCH_WAIT_S, "id": aid}
+            why = "wrapper exited at start: %s" % tail_text(os.path.join(d, "wrapper.log"), 600)
             update_status(d, state="failed", ended=now(), note="wrapper exited at start (see wrapper.log)")
-            return {"ok": False, "error": "wrapper exited at start: %s" % tail_text(os.path.join(d, "wrapper.log"), 600),
-                    "id": aid}
+            out = {"ok": False, "error": why, "id": aid}
+            if not prev:
+                out["moved_to"] = discard_failed(d, repo, wt if made else None, spec["branch"])
+            return out
     except Exception as e:  # noqa: BLE001 - the launch failure is recorded on the attempt
         update_status(d, state="failed", ended=now(), note="launch failed: %s" % e)
-        return {"ok": False, "error": "launch on %s failed: %s" % (cfg["name"], e), "id": aid}
+        out = {"ok": False, "error": "launch on %s failed: %s" % (cfg["name"], e), "id": aid}
+        if not prev:
+            out["moved_to"] = discard_failed(d, repo, wt if made else None, spec["branch"])
+        return out
     return {"ok": True, "id": aid, "host": cfg["name"], "worktree": wt, "base_sha": base_sha,
             "default_branch": default, "pid": p.pid, "state_dir": d}
+
+
+def discard_failed(d, repo, wt, branch):
+    """A new attempt that failed before its wrapper ran: move its dir to <project>/.failed/<id>-<ms>
+    (kept for diagnosis, out of the attempt list) and remove the worktree and branch it made, so the
+    next dispatch can use the same number. -> the new path of the dir."""
+    if wt and repo:
+        try:
+            remove_worktree(repo, wt, branch)
+        except LauncherError:
+            pass
+    dest = os.path.join(ensure_dir(os.path.join(os.path.dirname(d), ".failed")),
+                        "%s-%d" % (os.path.basename(d), int(now() * 1000)))
+    try:
+        os.replace(d, dest)
+    except OSError:
+        return None
+    return dest
 
 
 # ---- the other commands ------------------------------------------------------------------------
@@ -425,6 +464,13 @@ def r_stop(payload, args):
             break
         time.sleep(0.3)
     v = attempt_view(d)
+    if v["running"] and v["state"] not in FINAL:
+        # The wrapper still holds its run lock (a long prepare_cmd, fetch or push): it records the final
+        # state itself. Writing `stopped` now would free its slot and let gc remove its worktree.
+        from .common import kill_group
+        kill_group((read_json(os.path.join(d, "status.json"), {}) or {}).get("claude_pid"), grace=3.0)
+        return {"ok": True, "state": v["state"], "stopping": True,
+                "note": "the wrapper still runs; it ends the attempt when its current step returns"}
     if v["state"] not in FINAL or v["state"] == "lost":
         from .common import kill_group
         kill_group(st.get("claude_pid"), grace=3.0)
@@ -522,7 +568,7 @@ def r_gc(payload, args):
         v = attempt_view(d)
         task = read_json(os.path.join(d, "task.json"), {}) or {}
         wt = task.get("worktree")
-        if not v or v["state"] not in FINAL or v["state"] == "lost" or not wt or not os.path.isdir(wt):
+        if not v or v["state"] not in FINAL or v["state"] == "lost" or v["running"] or not wt or not os.path.isdir(wt):
             continue
         if v["host"] != payload["host"]["name"]:
             continue

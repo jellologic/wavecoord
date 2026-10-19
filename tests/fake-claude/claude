@@ -56,6 +56,12 @@ Environment:
                              "send": "<text>"     POST /api/messages to the lead as this worker
                                                   ($WAVECOORD_URL, $WAVECOORD_TOKEN_FILE, $WAVECOORD_AGENT_ID)
                              "sleep", "exit", "cost"  as the variables above
+                             "push": true         after the commits, `git push origin HEAD:<$WAVECOORD_BRANCH>`
+                                                  (a worker that pushes its branch itself)
+                             "extra_turn_error": true  each turn after the first ends with an error result
+                                                  (error_during_execution, no structured_output)
+                             "control_error": [<subtype>, ...]  answer these control requests with an
+                                                  error control_response ("error": "fake error")
   FAKE_CLAUDE_RUNS=<p>     append one JSON line per run: {task, attempt, provider, mode, cwd, branch,
                            session, resume}
   FAKE_CLAUDE_TRANSCRIPTS=1  keep transcripts as Claude Code does: one JSON line per prompt in
@@ -276,6 +282,7 @@ def report_for(prompt, session_id, mode=None):
 
 
 OUT_LOCK = threading.Lock()
+MODE = {}  # the mode of this run (the stdin reader reads it)
 
 
 def emit(obj):
@@ -316,6 +323,11 @@ class StdinReader(object):
                 continue
             if obj.get("type") == "control_request":
                 req = obj.get("request") or {}
+                if req.get("subtype") in (MODE.get("control_error") or ()):
+                    emit({"type": "control_response", "response": {"subtype": "error",
+                                                                    "request_id": obj.get("request_id"),
+                                                                    "error": "fake error"}})
+                    continue
                 body = {"percentage": 42} if req.get("subtype") == "get_context_usage" else {}
                 emit({"type": "control_response", "response": {"subtype": "success",
                                                                 "request_id": obj.get("request_id"),
@@ -461,6 +473,7 @@ def main(argv):
             sys.stderr.write("fake claude: unexpected env: %s\n" % ", ".join(sorted(env_errors)))
 
     mode_key, mode = mode_for(prompt)
+    MODE.update(mode)
     if os.environ.get("FAKE_CLAUDE_RUNS"):
         with open(os.environ["FAKE_CLAUDE_RUNS"], "a", encoding="utf-8") as f:
             f.write(json.dumps({"task": os.environ.get("WAVECOORD_TASK"), "attempt": os.environ.get("WAVECOORD_ATTEMPT"),
@@ -507,6 +520,9 @@ def main(argv):
                 f.write("edited by fake claude\n")
         tool_event = {"type": "fake_tool", "tool": "Edit", "path": target, "decision": decision, "reasons": reasons}
     structured = report_for(prompt, session_id, mode)
+    if mode.get("push") and os.environ.get("WAVECOORD_BRANCH"):
+        subprocess.run(["git", "push", "-q", "origin", "HEAD:refs/heads/" + os.environ["WAVECOORD_BRANCH"]],
+                       env=git_env(), check=True)
     if mode.get("echo_steer") and reader is not None and reader.users:
         structured["risks_hit"] = list(structured.get("risks_hit") or []) + ["steer: " + u[:1000] for u in reader.users]
     text = str(structured.get("summary") or "fake claude done")
@@ -570,7 +586,11 @@ def main(argv):
                       "message": {"id": "msg_fake_%s_%d" % (session_id[:8], turn), "type": "message",
                                   "role": "assistant", "model": args.model, "stop_reason": "end_turn", "usage": usage,
                                   "content": [{"type": "text", "text": "read: " + reader.users[-1][:200]}]}})
-                emit(dict(result, num_turns=turn, user_message_uuids=[u for u in reader.uuids[prev:seen] if u]))
+                late = dict(result, num_turns=turn, user_message_uuids=[u for u in reader.uuids[prev:seen] if u])
+                if mode.get("extra_turn_error"):
+                    late.update(subtype="error_during_execution", is_error=True)
+                    late.pop("structured_output", None)
+                emit(late)
     elif args.output_format == "json":
         out.write(json.dumps(result) + "\n")
     else:

@@ -67,6 +67,21 @@ def fetch(repo, sleep=time.sleep):
         raise LauncherError("git %s failed in %s: %s" % (" ".join(args), repo, (err or out)[-800:]))
 
 
+def fetch_ref(repo, cwd, branch, sleep=time.sleep):
+    """Fetch origin's `branch` into refs/remotes/origin/<branch> from `cwd` (a worktree of `repo`), under
+    the repo's admin lock, with the retries of `fetch`. The wrapper's fetch at finish goes through here:
+    a concurrent fetch of the repo fails an unlocked one. -> (rc, stderr)."""
+    args = ["fetch", "--quiet", REMOTE, "+refs/heads/%s:refs/remotes/%s/%s" % (branch, REMOTE, branch)]
+    with AdminLock(repo):
+        rc, _, err = git_run(args, cwd, timeout=600)
+        for delay in FETCH_RETRY_DELAYS_S:
+            if rc == 0 or "bad object" in (err or ""):
+                break
+            sleep(delay)
+            rc, _, err = git_run(args, cwd, timeout=600)
+    return rc, err or ""
+
+
 def default_branch(repo):
     """The remote's default branch name (origin/HEAD), else main or master."""
     rc, out, _ = git_run(["symbolic-ref", "--quiet", "--short", "refs/remotes/%s/HEAD" % REMOTE], repo)
@@ -109,24 +124,30 @@ def check_branch(branch, default, log_branch=None):
         raise LauncherError("invalid branch name %r" % branch)
 
 
-def worktree_path(repo, attempt_id):
+def worktree_path(repo, attempt_id, project=None):
+    """<repo>/../wt/<project>/<task>-<n>: repos side by side share ../wt, so the project is in the path."""
+    if project:
+        return os.path.normpath(os.path.join(repo, "..", "wt", project, attempt_id))
     return os.path.normpath(os.path.join(repo, "..", "wt", attempt_id))
 
 
-def prepare_worktree(repo, branch, attempt_id, cont=False, log_branch=None):
+def prepare_worktree(repo, branch, attempt_id, cont=False, log_branch=None, project=None):
     """Fetch, then create the attempt worktree. -> (worktree, base_sha, default_branch).
 
     New attempt: branch `branch` from origin/<default>; the branch must not exist.
-    --continue: the existing branch (local, else from origin), fast-forwarded to origin."""
+    --continue: the existing branch (local, else from origin), fast-forwarded to origin. A --continue
+    run reuses the earlier run's worktree, also one at the old path <repo>/../wt/<task>-<n>."""
     if not os.path.isdir(repo):
         raise LauncherError("repo_path %s does not exist" % repo)
     fetch(repo)
     default = default_branch(repo)
     check_branch(branch, default, log_branch)
-    wt = worktree_path(repo, attempt_id)
+    wt = worktree_path(repo, attempt_id, project)
     ensure_dir(os.path.dirname(wt))
     with AdminLock(repo):
         co = worktree_of_branch(repo, branch)
+        if cont and co and os.path.realpath(co) == os.path.realpath(worktree_path(repo, attempt_id)):
+            wt = co  # an earlier run's worktree at the old path (before the project was in it)
         if cont and co and os.path.realpath(co) == os.path.realpath(wt):
             # --continue on the host of the earlier run: reuse its worktree as it is
             base_sha = git(["rev-parse", "HEAD"], wt)

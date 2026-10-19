@@ -34,7 +34,7 @@ class LocalEndToEnd(LauncherTestCase):
         self.assertEqual(r["state"], "reported", r)
 
         # worktree at <repo>/../wt/<attempt>, on the attempt branch
-        wt = os.path.join(os.path.dirname(self.repo), "wt", "t1-1")
+        wt = os.path.join(os.path.dirname(self.repo), "wt", "demo", "t1-1")  # wt/<project>/<task>-<n>
         self.assertEqual(r["worktree"], wt)
         self.assertEqual(sh(["git", "rev-parse", "--abbrev-ref", "HEAD"], wt), "wave/t1-1")
 

@@ -52,7 +52,7 @@ The full walk-through is [docs/quickstart.md](docs/quickstart.md). In short, in 
    wavecoord install-server        # add --dry-run to see the unit first
    wavecoord status                # ok: http://127.0.0.1:18741 ...
    ```
-4. **Plugin options.** Set `token` to the lead token (`cat ~/.wavecoord/token`) and `lead` to true for the session you plan from. `coord_url` defaults to `http://127.0.0.1:18741`.
+4. **Plugin options.** Set `token` to the lead token (`cat ~/.wavecoord/token`) and `lead` to true for the session you plan from. Set `coord_url` to `http://127.0.0.1:18741` (the option has no default; the hooks act only in a repo with `.claude/wavecoord.json`).
 5. **Plan.** `/wavecoord:wave-plan add token rotation to the auth service`. Review and merge the plan PR. With no `plan` key the lead plans from the spec tree (`specs/`) once it has records on the default branch, else from `plan/tasks` ([adapters.md](docs/adapters.md)).
 6. **Run.** `/wavecoord:wave-run` dispatches the ready, non-overlapping tasks and arms a Monitor on `wavecoord events --follow --for lead`, so reports, conflicts and notices reach the session while you work.
 7. **Triage.** `/wavecoord:triage` starts with `collect` (it opens the PRs of finished attempts) and turns each event into the next action: merge through the refinery, resolve conflicts, retry, revise the plan. For an unattended run: `/loop 10m /wavecoord:triage`.

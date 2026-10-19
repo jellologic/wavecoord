@@ -2,7 +2,13 @@
 
 Remote hosts run the zipapp at `~/.wavecoord/bin/wavecoord-<hash>`. A remote
 command exits 86 when that file is missing; the client then uploads it over
-the same ssh connection (ControlMaster) and runs the command again.
+the same ssh connection (ControlMaster) and runs the command again. The upload
+writes a temp file and renames it only when its sha256 matches, so a cut
+transfer never takes the build's name. Every command touches the file it runs,
+and an upload removes builds unused for 30 days, never one in use.
+
+ssh runs the command with the remote user's login shell, which may not be a
+POSIX shell (csh, tcsh, fish): every script goes as `sh -c '<script>'`.
 """
 
 import json
@@ -39,6 +45,26 @@ def local_zipapp():
     return p
 
 
+# The upload check: the sha256 prefix of the temp file must be the build's hash (zipapp.content_hash).
+HASH_CHECK = ("import hashlib,sys; f=open(sys.argv[1],'rb'); "
+              "sys.exit(hashlib.sha256(f.read()).hexdigest()[:len(sys.argv[2])]!=sys.argv[2])")
+
+
+def sh_c(script):
+    """The remote command line: the script under `sh -c`, whatever the login shell is."""
+    return "sh -c " + shlex.quote(script)
+
+
+def upload_script(h):
+    """Write stdin to a temp file, check its hash, then rename it to wavecoord-<h>; else remove it and
+    fail. Then remove the builds that no command ran for 30 days (a command touches its build)."""
+    return ('d="%s/bin" && mkdir -p "$d" && f="$d/wavecoord-%s" && t="$f.tmp.$$" && '
+            '{ cat > "$t" && python3 -I -c %s "$t" %s && chmod 755 "$t" && mv "$t" "$f"; } '
+            '|| { rm -f "$t"; echo "wavecoord: the upload is incomplete or corrupt (hash mismatch)" >&2; exit 1; }; '
+            'find "$d" -name "wavecoord-*" -mtime +30 -delete 2>/dev/null; true'
+            % (REMOTE_HOME, h, shlex.quote(HASH_CHECK), h))
+
+
 class Host(object):
     _lock = threading.Lock()
 
@@ -53,18 +79,16 @@ class Host(object):
     def argv(self, cmd, args=()):
         if self.local:
             return [sys.executable or "python3", "-I", local_zipapp(), "_remote", cmd] + list(args)
-        script = ('f="%s/bin/wavecoord-%s"; [ -f "$f" ] || exit %d; exec python3 -I "$f" _remote %s'
+        script = ('f="%s/bin/wavecoord-%s"; [ -f "$f" ] || exit %d; touch "$f" 2>/dev/null; '
+                  'exec python3 -I "$f" _remote %s'
                   % (REMOTE_HOME, zipapp.self_hash(), EXIT_NEED_UPLOAD,
                      " ".join(shlex.quote(x) for x in [cmd] + list(args))))
-        return self.ssh_argv() + [script]
+        return self.ssh_argv() + [sh_c(script)]
 
     def upload(self):
-        script = ('d="%s/bin" && mkdir -p "$d" && f="$d/wavecoord-%s" && cat > "$f.tmp.$$" && '
-                  'chmod 755 "$f.tmp.$$" && mv "$f.tmp.$$" "$f" && '
-                  'find "$d" -name "wavecoord-*" -mtime +30 -delete 2>/dev/null; true'
-                  % (REMOTE_HOME, zipapp.self_hash()))
+        script = upload_script(zipapp.self_hash())
         try:
-            p = subprocess.run(self.ssh_argv() + [script], input=zipapp.self_bytes(), stdout=PIPE, stderr=PIPE,
+            p = subprocess.run(self.ssh_argv() + [sh_c(script)], input=zipapp.self_bytes(), stdout=PIPE, stderr=PIPE,
                                timeout=300)
         except subprocess.TimeoutExpired:
             raise Unreachable("%s: upload timed out" % self.name)
