@@ -63,7 +63,8 @@ Here the answers to the usual questions are in the request. What you see: a plan
 which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a
 shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test,
 needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20
-for every task. Do not ask me anything; if the plan cannot take this shape, pick the closest one and say
+for every task. Write each Acceptance command as one plain python3 command, such as python3 -m unittest
+tests.test_add. Do not ask me anything; if the plan cannot take this shape, pick the closest one and say
 why.
 ```
 

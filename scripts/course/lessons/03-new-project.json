@@ -121,7 +121,7 @@
       "say": "Step two: the tasks. We ask for small tasks on a cheap, fast model, and for a shape that runs in parallel: one foundation task, then one task per command, each in its own files."
     },
     {
-      "type": "/wavecoord:wave-plan bookmarks. Make two waves. Wave 1 is one task: the store module and the entry point, which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test, needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task. Do not ask me anything; if the plan cannot take this shape, pick the closest one and say why.",
+      "type": "/wavecoord:wave-plan bookmarks. Make two waves. Wave 1 is one task: the store module and the entry point, which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test, needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task. Write each Acceptance command as one plain python3 command, such as python3 -m unittest tests.test_add. Do not ask me anything; if the plan cannot take this shape, pick the closest one and say why.",
       "enter": true
     },
     {
