@@ -24,10 +24,11 @@ IMPL = "auth.sessions.token-rotation.rotate-impl"
 IMPL_FILE = "specs/auth/sessions/token-rotation/tasks/rotate-impl.md"
 
 
-def fixture_with(verify="true", acceptance="true"):
-    """The fixture tree, with checks that run in a test repo."""
+def fixture_with(verify="true", acceptance="true", drop_tests=False):
+    """The fixture tree, with checks that run in a test repo. drop_tests: rotate-impl is the requirement's last task."""
     fs = source.read_tree(_paths.FIXTURES, "specs")
-    ops = [{"op": "set_section", "id": "auth/sessions/token-rotation", "section": "Verify", "value": [verify]},
+    ops = [{"op": "set_status", "id": "auth/sessions/token-rotation/rotate-tests", "status": "dropped"}] if drop_tests else []
+    ops += [{"op": "set_section", "id": "auth/sessions/token-rotation", "section": "Verify", "value": [verify]},
            {"op": "set_section", "id": "auth/sessions/token-rotation/rotate-impl", "section": "Acceptance",
             "value": [acceptance]},
            {"op": "rebase_basis", "task": "auth/sessions/token-rotation/rotate-impl"},
@@ -103,7 +104,9 @@ class StatusLifecycleTest(StatusFlowCase):
         self.assertEqual([r["state"] for r in out["results"]], ["merged"], out)
         self.assertEqual(self.main_status(), "done")
         merge = self.events("refinery.merge")[-1]["payload"]
-        self.assertEqual(merge["spec"]["verified"], True)
+        # rotate-tests is still open: the requirement's Verify waits for the last task; Acceptance ran
+        self.assertEqual((merge["spec"]["verified"], merge["spec"]["requirement_pending"]),
+                         (False, ["auth/sessions/token-rotation/rotate-tests"]))
         self.assertEqual(merge["spec"]["requirement"], "auth/sessions/token-rotation")
         commits = self.status_commits()
         self.assertTrue(any("Wavecoord-Status: %s planned in_progress" % IMPL in c for c in commits), commits)
@@ -122,7 +125,7 @@ class StatusLifecycleTest(StatusFlowCase):
 
 
 class VerifyFailsTest(StatusFlowCase):
-    CHECKS = {"verify": "false", "acceptance": "true"}
+    CHECKS = {"verify": "false", "acceptance": "true", "drop_tests": True}
 
     def test_verify_from_main_blocks(self):
         self.run_impl()
@@ -130,6 +133,17 @@ class VerifyFailsTest(StatusFlowCase):
         r = out["results"][0]
         self.assertEqual((r["state"], r["reason"]), ("blocked", "verify_failed"), r)
         self.assertEqual(self.main_status(), "in_review")
+
+
+class VerifyLastTaskTest(StatusFlowCase):
+    CHECKS = {"verify": "test -d specs", "acceptance": "true", "drop_tests": True}
+
+    def test_the_last_task_verifies_the_requirement(self):
+        self.run_impl()
+        out = self.lead.refinery_merge()
+        self.assertEqual([r["state"] for r in out["results"]], ["merged"], out)
+        spec = self.events("refinery.merge")[-1]["payload"]["spec"]
+        self.assertEqual((spec["verified"], spec["requirement_pending"], spec["commands"]), (True, [], 2))
 
 
 class StatusPrFallbackTest(StatusFlowCase):

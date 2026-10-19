@@ -1,6 +1,6 @@
 # Specs
 
-Status: in progress (P8). This page is the user guide; the design and the rollout are in `design/spec-layer.md`. Available now (S1 to S3): every command below, `check` with all its rules, `migrate-plan`, the lead's `spec_*` tools, and the tree as the plan: with no `plan` key in the config, or `"plan": {"adapter": "specs"}`, `plan_ready`, `dispatch` and `dispatch_wave` read tasks from the tree on the default branch. S4 adds the status commits, the merge rule for the spec tree and verify at merge (below). The skills arrive in S5.
+Status: available (0.2.0). The design and its rules are in `design/spec-layer.md`.
 
 The spec tree is your plan, from capability to task, as Markdown files in your repo. People read and review them like code; wavecoord treats them as a database: each file is one typed record, and `wavecoord spec check` proves that the tree is consistent.
 
@@ -95,7 +95,7 @@ Each task records `basis`, a fingerprint of its requirement. When the requiremen
 - A task runs only when its requirement is approved and its parents are active. Turn this off with `"require_approved": false`.
 - The worker's prompt holds its requirement, its inputs and outputs with their contracts, and the Verify commands.
 - A worker's PR may not change `specs/`. Workers propose spec changes in their report, and `/wavecoord:revise` turns the ones you accept into a plan PR.
-- The merge re-runs the task's Acceptance and its requirement's Verify, both taken from your default branch, and blocks on a failure (`verify_failed`). Turn this off with `"verify_at_merge": false`.
+- The merge re-runs the task's Acceptance, taken from your default branch, and, with the last open task of a requirement, the requirement's Verify too; it blocks on a failure (`verify_failed`). Turn this off with `"verify_at_merge": false`.
 - The PR body of a task ends with the trailers `Spec-Task:` and `Spec-Basis:`, so a squash merge carries them into `git log`.
 - When your default branch is protected, status commits go through one `wavecoord: status` PR instead.
 

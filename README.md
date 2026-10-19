@@ -23,7 +23,7 @@ The plugin needs a coordinator server on the lead machine. The plugin's `bin/wav
 
 ```bash
 curl -fsSL -o ~/.local/bin/wavecoord \
-  https://raw.githubusercontent.com/jellologic/wavecoord/v0.1.0/plugin/bin/wavecoord
+  https://raw.githubusercontent.com/jellologic/wavecoord/v0.2.0/plugin/bin/wavecoord
 chmod +x ~/.local/bin/wavecoord
 wavecoord version
 ```
@@ -63,6 +63,7 @@ The full walk-through is [docs/quickstart.md](docs/quickstart.md). In short, in 
 
 | Skill | What |
 |---|---|
+| `/wavecoord:spec <feature>` | Build the spec tree with you: capabilities, features, requirements with EARS statements, scenarios, Verify commands and typed contracts; one plan PR |
 | `/wavecoord:wave-plan <goal>` | Decompose a goal into task specs with an LLM execution plan each; planner and reviewer subagents draft and critique; one plan PR |
 | `/wavecoord:wave-run` | Dispatch the ready, non-overlapping tasks up to `wip_cap`; arm the feedback Monitor |
 | `/wavecoord:triage` | Turn reports, notices, conflicts and proposals into the next action |
@@ -84,7 +85,7 @@ The full walk-through is [docs/quickstart.md](docs/quickstart.md). In short, in 
 | [hooks.md](docs/hooks.md) | The Claude Code hooks and git guards |
 | [security.md](docs/security.md) | Network, tokens, and why coordination text is never consent |
 | [rollback.md](docs/rollback.md) | Revert one event, roll back to a commit, rebuild the cache |
-| [specs.md](docs/specs.md) | The spec tree: capability, feature, requirement and task as typed Markdown records, checked by scripts (planned; design in [design/spec-layer.md](docs/design/spec-layer.md)) |
+| [specs.md](docs/specs.md) | The spec tree: capability, feature, requirement and task as typed Markdown records in your repo, checked by scripts, planned in waves, with status in git (design: [design/spec-layer.md](docs/design/spec-layer.md)) |
 
 ## Layout
 

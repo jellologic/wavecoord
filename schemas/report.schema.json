@@ -33,7 +33,7 @@
         "additionalProperties": false,
         "required": ["kind", "summary"],
         "properties": {
-          "kind": {"enum": ["plan_edit", "new_task", "split", "dependency", "other"]},
+          "kind": {"enum": ["plan_edit", "new_task", "split", "dependency", "requirement_gap", "spec_change", "other"]},
           "summary": {"type": "string", "minLength": 1},
           "task": {"type": "string"},
           "detail": {"type": "string"}

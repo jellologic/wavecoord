@@ -7,6 +7,7 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__plan_ready
   - mcp__plugin_wavecoord_wavecoord__plan_get
   - mcp__plugin_wavecoord_wavecoord__plan_graph
+  - mcp__plugin_wavecoord_wavecoord__spec_waves
   - mcp__plugin_wavecoord_wavecoord__attempts
   - mcp__plugin_wavecoord_wavecoord__refinery_status
   - mcp__plugin_wavecoord_wavecoord__conflicts
@@ -35,6 +36,8 @@ Call `plan_ready`. The server already removes tasks that overlap active leases. 
 - skip a task whose `paths` overlap the `paths` of a task already picked (the same rule `dispatch_wave` uses);
 - skip a task with an open conflict or a failed attempt that triage did not handle yet;
 - stop at the free slots.
+
+With a spec tree (`docs/specs.md`), also call `spec_waves`: it proves which tasks can run together (no needs between them, disjoint paths and outputs) and shows the critical path. Prefer the tasks on the critical path when the slots are fewer than the wave. `plan_ready` already leaves out tasks whose requirement is not approved.
 
 Show the picked set as a table (task, size, model, budget, host need) with the skipped tasks and why. With `--dry-run`, stop here.
 

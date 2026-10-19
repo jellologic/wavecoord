@@ -38,7 +38,7 @@ Every request has `Authorization: Bearer <token>`, `X-Wavecoord-Agent: <agent id
 | `StopFailure` | | sync | 10 | 6 | `POST /api/notify` kind `rate_limit` (for `rate_limit` and `overloaded`) or `api_error`, so the launcher can back off | P2 |
 | `Notification` | `permission_prompt\|idle_prompt\|elicitation_dialog\|agent_needs_input` | async | 6 | 4 | `POST /api/notify` kind `waiting_on_you` | P2 |
 | `PreCompact` | | sync | 10 | 8 | `POST /api/notify` kind `handoff` with the branch, HEAD, lease, uncommitted files and the trigger | P2 |
-| `SessionEnd` | | sync | 2 | 1.2 | `POST /api/agents/<id>/finish` with `state: "stopped"` and `pushed`; the server parks the lease when `pushed` is true, else releases it. No finish on `clear` or `resume` when the agent id is explicit, because the same agent goes on | P2 |
+| `SessionEnd` | | sync | 2 | 1.2 | `POST /api/agents/<id>/finish` with `state: "stopped"` and `pushed`; the server parks the lease when `pushed` is true, else releases it. No finish on `clear` or `resume` when the agent id is explicit, because the same agent goes on. No finish for a worker that the launcher runs (`WAVECOORD_ATTEMPT_DIR` set): the launcher pushes after the session ends and sends the finish with `pushed`, so the lease is parked for review | P2 |
 
 The request and response bodies are in `schemas/api.schema.json`: `hb_request`, `check_request`, `check_response`, `reservation_request`, `notify_request`, `finish_request`. The fixtures are in `tests/fixtures/api/`. The sample hook inputs are in `tests/fixtures/hooks/`.
 

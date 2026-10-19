@@ -241,8 +241,16 @@ class RefineryMixin(object):
                 "requirement_fp": fingerprint(req) if req else None, "verified": None}
         if (self.cfg().raw.get("spec") or {}).get("verify_at_merge", True) is False:
             return {"ok": True, "detail": None, "spec": info}
+        # the requirement's Verify describes the finished requirement: it runs with the merge of the last
+        # open task under the requirement; earlier merges run the task's own Acceptance
+        snap_states = self.states()
+        from wavecoord.specs.plan import coord_id
+        others = [x for x in plan.tree.tasks_under(t["requirement"]) if x != t["id"]]
+        pending = [x for x in others if snap_states.get(coord_id(x)) != "done" and
+                   (plan.tree.nodes[x].rec or {}).get("status") not in ("done", "dropped")]
+        info["requirement_pending"] = pending
         cmds = []
-        for c in list(spec["sections"].get("acceptance") or []) + list(t.get("verify") or []):
+        for c in list(spec["sections"].get("acceptance") or []) + ([] if pending else list(t.get("verify") or [])):
             if c not in cmds:
                 cmds.append(c)
         if cmds:
@@ -251,7 +259,7 @@ class RefineryMixin(object):
             if not ok:
                 return {"ok": False, "detail": "the task's Acceptance or the requirement's Verify failed (from %s):"
                                                " %s" % (default, tail), "spec": info}
-        info["verified"] = True
+        info["verified"] = not pending  # the requirement is verified once its last task merges
         info["commands"] = len(cmds)
         return {"ok": True, "detail": None, "spec": info}
 

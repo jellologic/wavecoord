@@ -646,6 +646,11 @@ class Hook(object):
         reason = self.inp.get("reason")
         if self.id.explicit and reason in ("clear", "resume"):
             return None  # the same agent id goes on in the next session
+        if self.env.get("WAVECOORD_ATTEMPT_DIR"):
+            # a worker that the launcher runs: the launcher, its parent, pushes after the session ends and then
+            # sends the finish (with pushed), so the lease is parked for review; a finish from here would come
+            # first, with pushed false, and release it
+            return None
         st = worktree_status(self.cwd) if self.holds_lease() else None
         body = {"state": "stopped", "pushed": pushed(st), "source": "hook", "seq": self.state.next_seq()}
         from urllib.parse import quote

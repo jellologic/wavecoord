@@ -4,6 +4,7 @@ description: Show the wavecoord coordinator status for this project (configured 
 allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__attempts
   - mcp__plugin_wavecoord_wavecoord__plan_ready
+  - mcp__plugin_wavecoord_wavecoord__spec_tree
   - mcp__plugin_wavecoord_wavecoord__refinery_status
   - mcp__plugin_wavecoord_wavecoord__conflicts
   - mcp__plugin_wavecoord_wavecoord__inbox
@@ -33,7 +34,8 @@ Only when the status is `ok`, and only when the wavecoord tools are in your tool
 1. `attempts`: the attempts in state `dispatched` or `running` (task, attempt, host, branch, age), and the recent `reported` or `failed` ones that nobody handled yet.
 2. `refinery_status`: parked work, its checks, and holds that wait for the user.
 3. `conflicts`: open conflicts.
-4. `plan_ready`: how many tasks are ready, and `config` for `wip_cap` (free slots = `wip_cap` minus attempts in flight).
+4. With a spec tree, `spec_tree`: progress per capability and feature (done of total tasks).
+5. `plan_ready`: how many tasks are ready, and `config` for `wip_cap` (free slots = `wip_cap` minus attempts in flight).
 5. `inbox`: the number of unacked messages to the lead. Do not ack them here.
 
 Show one short table per part, and one line on what to do next: `/wavecoord:triage` when reports or messages wait, `/wavecoord:resolve` for conflicts, `/wavecoord:wave-run` when slots are free and tasks are ready.
