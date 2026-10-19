@@ -66,6 +66,8 @@ Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the who
 ### Fixed
 
 - Task prompts from `/wavecoord:wave-plan` no longer tell workers to push. A launched worker may not push (the launcher does), so such a prompt made it report `blocked`. The reviewer agent, the risk table and the watchdog nudge say the same.
+- `wavecoord launch --continue` keeps the earlier run's model, effort, turn and budget limits when they are not given; it ran on Claude Code's default model before.
+- `--continue` resumes the earlier session when the recorded worktree path and git's differ only by a symlink (`/tmp` and `/private/tmp` on macOS); it started a fresh session before.
 - A usage warning from Claude Code (`rate_limit_event` with status `allowed_warning`) no longer counts as a rate limit, so it does not back off the provider and hold the next wave.
 - `/wavecoord:spec` and `/wavecoord:wave-plan` write spec ops to a file for `wavecoord spec apply --dry-run`, instead of a heredoc that made Claude Code ask for permission.
 - Verify and Acceptance run on the merge of the default branch and the PR head, not on the head alone, so work merged since the branch started is in the checked tree.

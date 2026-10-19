@@ -297,6 +297,10 @@ def self_argv():
     return [sys.executable or "python3", "-m", "wavecoord"]
 
 
+# the exec plan of an attempt that a --continue run takes from the earlier run when not given
+CONTINUE_KEEP = ("model", "effort", "max_turns", "max_budget_usd", "max_tokens", "fallback_model", "timeout_min")
+
+
 def r_launch(payload, args):
     cfg = payload["host"]
     spec = payload["spec"]
@@ -337,6 +341,10 @@ def r_launch(payload, args):
                     os.replace(os.path.join(d, n), os.path.join(archive, n))
             prev_task = read_json(os.path.join(archive, "task.json"), {}) or {}
             prev_result = read_json(os.path.join(archive, "result.json"), {}) or {}
+            # a --continue run keeps the earlier run's exec plan unless the caller gives a value
+            for k in CONTINUE_KEEP:
+                if spec.get(k) in (None, "") and (prev_task.get("spec") or {}).get(k) not in (None, ""):
+                    spec[k] = prev_task["spec"][k]
         ensure_dir(d)
         write_json(os.path.join(d, "status.json"),
                    {"state": "starting", "created": now(), "pid": os.getpid(), "host": cfg["name"],
@@ -351,7 +359,7 @@ def r_launch(payload, args):
         # wrapper resumes the first one whose transcript exists, else it starts a fresh session.
         candidates, spec_prompt = [], spec.get("prompt") or ""
         if spec.get("continue") and prev:
-            if prev_task.get("worktree") == wt:
+            if prev_task.get("worktree") and os.path.realpath(prev_task["worktree"]) == os.path.realpath(wt):
                 candidates = sessions.lineage(d, prev_task, prev_result)
             spec_prompt = sessions.first_prompt(d, prev_task) or spec_prompt
         resume = candidates[0] if candidates else None
