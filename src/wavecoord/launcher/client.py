@@ -453,7 +453,8 @@ class Launcher(object):
                 res.get("state"), res.get("pushed"), ", ".join((res.get("conflicts") or [])[:5]) or "none")
         title = res.get("pr_title") or "%s: attempt %s" % (res.get("task"), res.get("attempt"))
         body = res.get("pr_body") or "Task: %s\nAttempt: %s\n" % (res.get("task"), res.get("attempt"))
-        url, err = run_pr_cmd(self.cfg, res["branch"], res.get("default_branch") or "main", title, body,
+        branch = rec.get("branch") or res["branch"]  # the branch the lead launched, not the host's word for it
+        url, err = run_pr_cmd(self.cfg, branch, res.get("default_branch") or "main", title, body,
                               os.path.join(self.index_dir(), aid + ".pr-body.md"),
                               task=res.get("task"), attempt=res.get("attempt"))
         if url:

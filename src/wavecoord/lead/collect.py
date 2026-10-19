@@ -182,8 +182,9 @@ class CollectMixin(object):
             act("report")
             if not dry_run:
                 self.coord.report(self.ctx, task, n, body, idem=res["report_idem"])
-        # 2. the PR, or a conflict instead of a PR
-        pr_url, pr_error, conflict = res.get("pr_url") or rec.get("pr_url"), None, None
+        # 2. the PR, or a conflict instead of a PR. The PR is the one the lead opened (its index), never a URL
+        #    from the host's files, which the worker can write (security.md)
+        pr_url, pr_error, conflict = rec.get("pr_url"), None, None
         files = res.get("conflicts") or []
         if res["state"] == "reported" and res.get("pushed") and res.get("commits"):
             if files:
