@@ -76,6 +76,28 @@ class ReportStatusTest(FlowCase):
         self.assertEqual(self.events("resolve.start"), [])
 
 
+
+class HostPrUrlTest(FlowCase):
+    def test_collect_ignores_a_pr_url_from_the_host(self):
+        """Review 2, item 82: the PR of an attempt is the one the lead opened, never a URL from result.json."""
+        env(FAKE_CLAUDE_COMMIT="1", FAKE_CLAUDE_COMMIT_FILE="solo/f.txt", FAKE_CLAUDE_COMMIT_TEXT="solo\n")
+        os.environ.pop("FAKE_CLAUDE_STATUS", None)
+        d = self.lead.dispatch("solo")
+        self.wait_host(d["id"])
+        sd = self.lead.launcher().result(d["id"])["state_dir"]
+        for name in ("result.json", "status.json"):  # both are on the host, where the worker runs
+            with open(os.path.join(sd, name)) as f:
+                data = json.load(f)
+            data["pr_url"] = "https://github.com/acme/other/pull/7"
+            with open(os.path.join(sd, name), "w") as f:
+                json.dump(data, f)
+        self.lead.collect()
+        pr = [p for p in self.gh()["prs"] if p["head"] == d["branch"]]
+        self.assertEqual(len(pr), 1, self.gh()["prs"])
+        self.assertNotIn("acme/other", self.attempt("solo", 1)["pr_url"])
+        self.assertEqual([i["pr_url"] for i in self.lead.refinery_queue()], [self.attempt("solo", 1)["pr_url"]])
+
+
 class HeldFlatTaskTest(FlowCase):
     def test_a_dropped_task_is_not_merged(self):
         """Items 3 and 14 (flat plan): the lead dropped the task on the default branch after its PR opened."""
