@@ -11,14 +11,35 @@ sections in order, one blank line between sections, LF, a final newline. So
 lines); `fmt` is `render(parse(text))`.
 """
 
+import decimal
 import json
+import math
 import re
 
 from wavecoord.plan.spec import SpecError, _risks, _scalar, parse_frontmatter
 
-from .model import ARTIFACT_KEYS, ARTIFACT_LISTS, EXEC_KEYS, FRAME, KINDS, STEP_WORDS, normalize
+from .model import ARTIFACT_KEYS, ARTIFACT_LISTS, EXEC_KEYS, FRAME, KINDS, STEP_WORDS, normalize, shape_errors
 
-_PLAIN_RE = re.compile(r"^[A-Za-z0-9_./(<][^\n]*$")
+_PLAIN_RE = re.compile(r"^[A-Za-z0-9_./(<][^\x00-\x1f\x7f]*$")
+_FENCE_RE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
+_FLOW_SPECIAL = ",[]{}"
+
+
+def fence(state, line):
+    """Markdown code fences, shared by the parser, lint and the sentence splitter.
+    `state` is None outside a fence, else (character, length) of the opening run.
+    -> (new state, whether the line is a fence line or inside a fence).
+
+    A fence opens with ``` or ~~~ (3 or more; a ``` fence's info string has no backquote, so ```x``` is
+    inline code) and closes with a run of the same character at least as long and nothing after it."""
+    m = _FENCE_RE.match(line)
+    if state is None:
+        if m and not (m.group(1)[0] == "`" and "`" in m.group(2)):
+            return (m.group(1)[0], len(m.group(1))), True
+        return None, False
+    if m and m.group(1)[0] == state[0] and len(m.group(1)) >= state[1] and not m.group(2).strip():
+        return None, True
+    return state, True
 
 
 # ------------------------------------------------------------------ parse
@@ -59,12 +80,11 @@ def parse(text, kind=None):
 
 def _sections(kind, body, first):
     titles = {s.title.lower(): s for s in kind.sections}
-    raw, errs, cur, fence = {}, [], None, False
+    raw, errs, cur, fstate = {}, [], None, None
     for i, line in enumerate(body):
         n = first + i
-        if line.lstrip().startswith("```"):
-            fence = not fence
-        elif line.startswith("## ") and not fence:
+        fstate, in_fence = fence(fstate, line)
+        if not in_fence and line.startswith("## "):
             sec = titles.get(line[3:].strip().lower())
             if sec is None:
                 errs.append("line %d: unknown section %r for a %s (allowed: %s)" % (
@@ -169,15 +189,25 @@ def _scenarios(lines, start):
 
 # ------------------------------------------------------------------ render
 
-def scalar(v):
-    """A scalar in the YAML subset; quoted (JSON) only when a plain value would read differently."""
+def _float(v):
+    if math.isnan(v) or math.isinf(v):
+        raise SpecError(["%r is not a number the YAML subset can hold" % v])
+    s = format(decimal.Decimal(repr(v)), "f")  # 1e-05 -> 0.00001: the subset reads only digits.digits
+    return s if "." in s else s + ".0"
+
+
+def scalar(v, flow=False):
+    """A scalar in the YAML subset; quoted (JSON) only when a plain value would read differently.
+    In a flow list (`flow`), a `,`, `[`, `]`, `{` or `}` is quoted too."""
     if isinstance(v, bool):
         return "true" if v else "false"
-    if isinstance(v, (int, float)):
+    if isinstance(v, int):
         return repr(v)
+    if isinstance(v, float):
+        return _float(v)
     s = str(v)
     plain = (_PLAIN_RE.match(s) and s == s.strip() and ": " not in s and " #" not in s and not s.endswith(":")
-             and s not in ("true", "false", "null", "~"))
+             and s not in ("true", "false", "null", "~") and not (flow and any(c in s for c in _FLOW_SPECIAL)))
     if plain:  # and it reads back as the same string (not a number or a boolean)
         try:
             if _scalar(s, "render") == s:
@@ -188,7 +218,7 @@ def scalar(v):
 
 
 def _flow(items):
-    return "[" + ", ".join(scalar(i) for i in items) + "]"
+    return "[" + ", ".join(scalar(i, flow=True) for i in items) + "]"
 
 
 def render(rec):
@@ -244,7 +274,13 @@ def render(rec):
 
 
 def fmt(text, kind=None):
-    """The canonical text of a record (rule M8). Raises SpecError when the text does not parse."""
+    """The canonical text of a record (rule M8). Raises SpecError when the text does not parse, or when the
+    record cannot be written back whole (a kind that is not the path's, unknown keys, a list key that holds
+    something else): fmt never drops data."""
     rec = parse(text, kind)
-    rec.setdefault("kind", kind)
+    if kind and "kind" not in rec:
+        rec["kind"] = kind
+    errs = shape_errors(rec, kind)
+    if errs:
+        raise SpecError(errs)
     return render(rec)

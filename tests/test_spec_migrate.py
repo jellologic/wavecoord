@@ -28,7 +28,7 @@ def flat(tid, state="todo", needs=(), paths=None, phase="p1"):
 
 def migrate(specs, states=None):
     ops, ids = plan_ops(specs, states=states)
-    changes, _, problems = apply_ops({}, ops)
+    changes, _, problems = apply_ops({}, ops, coordinator=True)  # as migrate-plan does
     files = {k: v for k, v in changes.items() if v is not None}
     return files, ids, problems
 

@@ -3,7 +3,7 @@ status: planned
 kind: task
 schema: 1
 title: Tests for token rotation
-basis: 75c3e429
+basis: a6f4586d
 needs:
   - auth/sessions/token-rotation/rotate-impl
 inputs:

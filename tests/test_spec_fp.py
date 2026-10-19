@@ -39,6 +39,7 @@ class FingerprintTest(unittest.TestCase):
         same("notes", lambda r: r["sections"].update(notes="A note."))
         same("reflow", lambda r: r["sections"].update(statement="  " + r["sections"]["statement"].replace(" ", "   ")))
         same("backquotes", lambda r: r["sections"].update(verify=["`%s`" % c for c in r["sections"]["verify"]]))
+        same("input from (a move rewrites it)", lambda r: r["inputs"][0].update({"from": "auth/sessions/storage"}))
         same("keyword case", lambda r: [s.__setitem__(0, s[0].lower()) for sc in r["sections"]["scenarios"]
                                         for s in sc["steps"]])
 

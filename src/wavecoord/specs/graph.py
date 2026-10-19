@@ -3,20 +3,25 @@
     g = Graph(tree)
     g.problems             # references, blockers, alignment A1-A7, predicate P, suspect tasks
     g.deps(task)           # the tasks it waits for: its needs and its ancestors' needs, expanded
-    g.waves()              # {"waves": [[task]], "critical_path": [task], "width": n}
+    g.waves()              # {"waves": [[task]], "critical_path": [task], "width": n, "unplaced", "held"}
     g.ready()              # {"tasks": [task], "why_not": {task: reason}}
     g.trace(node)          # ancestors, children, needs, needed by, artifacts, decisions
 
-Only records that parse take part. A task is closed when its status is done or
-dropped; waves and readiness are over the open tasks, and a closed need counts
-as met only when it is done.
+Only valid records take part (a file that parses and fits its schema). A task is
+closed when its status is done or dropped; waves and readiness are over the open
+tasks. Needs fail closed: a need is met only when every task it stands for is
+done, where a dropped task stands for nothing, and a record that does not parse
+or is invalid, a need that does not resolve, and a node with no tasks yet are
+never done.
 """
 
 from wavecoord.globs import covers, globs_overlap, literal_prefix
 
-from .check import Problem
+from .check import Problem, canonical_glob
 from .fingerprint import fingerprint
 from .model import CLOSED, DONE
+
+RUNNING = ("in_progress", "in_review")
 
 REF_KEYS = ("needs", "conflicts_with", "supersedes")
 
@@ -27,9 +32,12 @@ class Graph(object):
         self.require_approved = require_approved
         self.override = dict(status_override or {})  # node -> status the coordinator knows better
         self.problems = []
+        self._glob_cache = {}
         self.recs = {nid: n.rec for nid, n in tree.nodes.items() if n.rec is not None}
+        self.bad = {nid for nid, n in tree.nodes.items() if n.rec is None}  # does not parse, or invalid
         self.tasks = sorted(nid for nid in self.recs if tree.nodes[nid].kind == "task")
         self._refs()
+        self.conflicts = {k: v for k, v in self.conflicts.items() if v}
         self._task_deps()
         self._artifacts()
         self._alignment()
@@ -46,14 +54,23 @@ class Graph(object):
         return self.override.get(nid) or (self.recs.get(nid) or {}).get("status")
 
     def expand(self, nid):
-        """A node -> the tasks it stands for in `needs`: itself, or every task in its subtree."""
-        return [x for x in self.t.subtree(nid) if self.t.nodes[x].kind == "task" and x in self.recs]
+        """A node -> the tasks it stands for in `needs`: itself, or every task in its subtree that is not
+        dropped. A task record that does not parse or is invalid stays in: it is never done (fail closed)."""
+        if self.t.nodes[nid].kind == "task":
+            return [nid]
+        return [x for x in self.t.subtree(nid) if self.t.nodes[x].kind == "task" and self.status(x) != "dropped"]
+
+    def has_tasks(self, nid):
+        """Whether any task file (dropped, invalid or not) lies under nid."""
+        return any(self.t.nodes[x].kind == "task" for x in self.t.subtree(nid))
 
     # ---------------------------------------------------------------- references and blockers
 
     def _refs(self):
         self.needs = {}  # node -> resolved direct needs
+        self.dangling = {}  # node -> needs that do not resolve (they block: fail closed)
         self.conflicts = {}
+        self.superseded_by = {}  # requirement -> the requirements that supersede it
         for path, msg in self.t.alias_errors:
             self.problems.append(Problem("error", "alias", None, path, msg))
         for nid, rec in sorted(self.recs.items()):
@@ -64,6 +81,8 @@ class Graph(object):
                     rid = self.t.resolve(ref)
                     if rid is None:
                         self._p("error", "ref", nid, "%s: %s does not exist" % (key, ref))
+                        if key == "needs":
+                            self.dangling.setdefault(nid, []).append(ref)
                         continue
                     if rid != ref:
                         self._p("warning", "alias", nid, "%s: %s is an old id of %s; use the new id" % (key, ref, rid))
@@ -74,6 +93,11 @@ class Graph(object):
                     if key == "supersedes" and self.t.nodes[rid].kind != "requirement":
                         self._p("error", "ref", nid, "supersedes %s: not a requirement" % ref)
                         continue
+                    if key == "supersedes" and rid == nid:
+                        self._p("error", "supersedes", nid, "a requirement cannot supersede itself")
+                        continue
+                    if key == "supersedes":
+                        self.superseded_by.setdefault(rid, []).append(nid)
                     out.append(rid)
                 if key == "needs":
                     self.needs[nid] = out
@@ -82,41 +106,49 @@ class Graph(object):
             for a in rec.get("inputs") or []:
                 if a.get("from") and self.t.resolve(a["from"]) is None:
                     self._p("error", "ref", nid, "input %s: from %s does not exist" % (a.get("id"), a["from"]))
+        dsup = {}
         for did, d in sorted(self.t.decisions.items()):
             for ref in (d.rec or {}).get("affects") or []:
                 if self.t.resolve(ref) is None:
                     self._p("error", "ref", did, "affects %s does not exist" % ref)
             for ref in (d.rec or {}).get("supersedes") or []:
-                if ref not in self.t.decisions:
+                if ref == did:
+                    self._p("error", "supersedes", did, "a decision cannot supersede itself")
+                elif ref not in self.t.decisions:
                     self._p("error", "ref", did, "supersedes %s: no such decision" % ref)
+                else:
+                    dsup.setdefault(did, []).append(ref)
+        rsup = {old: [] for old in self.superseded_by}
+        for old, news in self.superseded_by.items():
+            for new in news:
+                rsup.setdefault(new, []).append(old)
+        for edges in (rsup, dsup):
+            cyc = _cycle(edges)
+            if cyc:
+                self._p("error", "supersedes", cyc[0], "supersedes forms a cycle: %s" % " -> ".join(cyc))
+        for old, news in sorted(self.superseded_by.items()):
+            if self.status(old) != "deprecated":
+                self._p("warning", "supersedes", old, "superseded by %s but %s: deprecate it (its tasks do not run)"
+                        % (", ".join(sorted(news)), self.status(old)))
 
     def node_deps(self, nid):
-        """The tasks that a node waits for: the expansion of its needs and of its ancestors' needs."""
+        """What a node waits for: the expansion of its needs and of its ancestors' needs. Besides tasks, it
+        holds what can never be done, so the need stays unmet: a need that does not resolve (as written) and
+        a node that has no tasks yet (its id)."""
         out = set()
         for x in [nid] + self.t.ancestors(nid):
             for r in self.needs.get(x, []):
-                out.update(self.expand(r))
+                e = self.expand(r)
+                if e:
+                    out.update(e)
+                elif not self.has_tasks(r):
+                    out.add(r)
+            out.update(self.dangling.get(x, []))
         return out
 
     def _task_deps(self):
         self._deps = {t: self.node_deps(t) for t in self.tasks}
-        # cycles, on the expanded task graph
-        color, stack_path, self.cycle = {}, [], None
-
-        def visit(t):
-            color[t] = 1
-            stack_path.append(t)
-            for d in sorted(self._deps.get(t, ())):
-                if color.get(d) == 1 and self.cycle is None:
-                    self.cycle = stack_path[stack_path.index(d):] + [d]
-                elif d not in color:
-                    visit(d)
-            stack_path.pop()
-            color[t] = 2
-
-        for t in self.tasks:
-            if t not in color:
-                visit(t)
+        self.cycle = _cycle({t: [d for d in self._deps[t] if d in self._deps] for t in self.tasks})
         if self.cycle:
             self._p("error", "cycle", self.cycle[0], "needs form a cycle: %s" % " -> ".join(self.cycle))
         self._reach = {}
@@ -144,6 +176,8 @@ class Graph(object):
         self.producers = {}  # artifact id -> [task]
         self.consumers = {}  # artifact id -> [node]
         for t in self.tasks:
+            if self.status(t) == "dropped":
+                continue  # a dropped task hands over nothing
             for a in self.recs[t].get("outputs") or []:
                 self.producers.setdefault(a["id"], []).append(t)
         for nid, rec in self.recs.items():
@@ -169,7 +203,10 @@ class Graph(object):
             for a in rec.get("outputs") or []:
                 if node.kind != "task":  # A1
                     under = [p for p in self.producers.get(a["id"], []) if p in sub]
-                    if len(under) != 1:
+                    if not under and not self.has_tasks(nid):
+                        self._p("warning", "A1", nid, "output %s: no task under it yet (plan one that produces it)"
+                                % a["id"])
+                    elif len(under) != 1:
                         self._p("error", "A1", nid, "output %s is produced by %d tasks under it (exactly 1 needed)"
                                 % (a["id"], len(under)))
                     else:
@@ -185,7 +222,12 @@ class Graph(object):
                 if not self._output_used(nid, a):  # A7
                     self._p("warning", "A7", nid, "output %s is not an output of the parent and no node consumes"
                                                   " it" % a["id"])
-            deps = self.node_deps(nid) if node.kind != "task" else self.deps(nid)
+            if node.kind == "task":
+                deps = self.reach(nid)
+            else:
+                deps = set(self.node_deps(nid))
+                for d in list(deps):
+                    deps |= self.reach(d)
             for a in rec.get("inputs") or []:  # A3, A4
                 if a.get("external") or not a.get("from"):
                     continue
@@ -193,6 +235,10 @@ class Graph(object):
                 if src is None:
                     continue
                 made = [p for p in self.producers.get(a["id"], []) if p in set(self.expand(src))]
+                if not made and not self.has_tasks(src):
+                    self._p("warning", "A3", nid, "input %s: no task under %s yet (plan the producer)" % (
+                        a["id"], a["from"]))
+                    continue
                 if not made:
                     self._p("error", "A3", nid, "input %s: no task under %s produces it" % (a["id"], a["from"]))
                     continue
@@ -205,8 +251,13 @@ class Graph(object):
                 for g in rec.get("paths") or []:
                     if not any(covers(g, o) or g == o or globs_overlap(g, o) for o in outs):
                         self._p("warning", "A6", nid, "paths %s: no output says what the task hands over there" % g)
-            for r in self.needs.get(nid, []):  # needs that no input justifies
-                if not self._consumes_from(nid, r):
+            for r in self.needs.get(nid, []):
+                if not self.has_tasks(r):
+                    self._p("warning", "needs", nid, "needs %s, which stands for no task yet: what needs it waits"
+                            % r)
+                elif t.nodes[r].kind == "task" and self.status(r) == "dropped":
+                    self._p("warning", "needs", nid, "needs %s, which is dropped: what needs it waits" % r)
+                if not self._consumes_from(nid, r):  # needs that no input justifies
                     self._p("warning", "needs", nid, "needs %s, but no input comes from it (keep it if the order"
                                                      " is real)" % r)
 
@@ -232,16 +283,23 @@ class Graph(object):
         return [t for t in self.tasks if self.status(t) not in CLOSED]
 
     def _conflict(self, a, b):
+        if not self.conflicts:
+            return False
         for x, y in ((a, b), (b, a)):
             for c in self.conflicts.get(x, []) + [c for anc in self.t.ancestors(x) for c in self.conflicts.get(anc, [])]:
                 if y == c or c in self.t.ancestors(y):
                     return True
         return False
 
+    def _globs(self, t, key):
+        k = (t, key)
+        if k not in self._glob_cache:
+            self._glob_cache[k] = [canonical_glob(g) for g in self.recs[t].get(key) or []]
+        return self._glob_cache[k]
+
     def _paths_clash(self, a, b):
-        ra, rb = self.recs[a], self.recs[b]
-        ea, eb = ra.get("paths") or [], rb.get("paths") or []
-        sa, sb = ra.get("shared_paths") or [], rb.get("shared_paths") or []
+        ea, eb = self._globs(a, "paths"), self._globs(b, "paths")
+        sa, sb = self._globs(a, "shared_paths"), self._globs(b, "shared_paths")
         for x in ea:
             for y in eb + sb:
                 if globs_overlap(x, y):
@@ -268,7 +326,7 @@ class Graph(object):
         and every pair with a task whose glob starts with a wildcard."""
         buckets, wild = {}, set()
         for t in tasks:
-            for g in (self.recs[t].get("paths") or []) + (self.recs[t].get("shared_paths") or []):
+            for g in self._globs(t, "paths") + self._globs(t, "shared_paths"):
                 pre, wild_card = literal_prefix(g)
                 # the first segment is fixed only when the wildcard comes after its "/" (`s*` overlaps `src/x`)
                 seg = pre.split("/", 1)[0] if ("/" in pre or not wild_card) else ""
@@ -293,15 +351,29 @@ class Graph(object):
                 self._p("error", "P", a, "%s and %s may run at the same time but both write %s: add a needs or split"
                         " the paths" % (a, b, clash))
 
-    def waves(self, root=None):
-        tasks = [t for t in self.open_tasks() if root is None or t == root or t.startswith(root + "/")]
-        todo = set(tasks)
+    def waves(self, root=None, suspect="warn"):
+        """Wave 1 is the tasks that are ready or running; wave n+1 the tasks whose needs are all done or in
+        earlier waves. A task that cannot run for another reason (its status, its requirement, suspect) is
+        `held` with the reason, and what waits for it is `unplaced`. Raises KeyError for an unknown root."""
+        if root:
+            rid = self.t.resolve(root.strip("/"))
+            if rid is None:
+                raise KeyError("no node %s" % root)
+            root = rid
+        tasks = [t for t in self.open_tasks() if not root or t == root or t.startswith(root + "/")]
+        held = {}
+        for t in tasks:
+            st = self.status(t)
+            why = None if st in RUNNING else "status %s" % st if st != "planned" else self._hold(t, suspect)
+            if why:
+                held[t] = why
+        todo = set(tasks) - set(held)
         done = {t for t in self.tasks if self.status(t) in DONE}
         waves, placed = [], set()
         while todo:
-            avail = sorted(t for t in todo if all(d in done or d in placed for d in self.reach(t) if d in self.recs))
+            avail = sorted(t for t in todo if all(d in done or d in placed for d in self.deps(t)))
             if not avail:
-                break  # a cycle, or a need that is dropped or outside root and not done
+                break  # a cycle, or a need that is held, invalid, dropped or outside root and not done
             wave = []
             for t in avail:
                 if all(self.parallel_ok(t, w) for w in wave):
@@ -317,7 +389,7 @@ class Graph(object):
                 longest[t] = best + [t]
         crit = max(longest.values(), key=len) if longest else []
         return {"waves": waves, "critical_path": crit, "width": max((len(w) for w in waves), default=0),
-                "unplaced": sorted(todo)}
+                "unplaced": sorted(todo), "held": held}
 
     # ---------------------------------------------------------------- ready, suspect, trace
 
@@ -331,22 +403,43 @@ class Graph(object):
                 continue
             unmet = sorted(d for d in self.deps(t) if self.status(d) not in DONE)
             if unmet:
-                why[t] = "needs not done: %s" % ", ".join(unmet[:5])
+                why[t] = "needs not done: %s" % ", ".join(self._label(d) for d in unmet[:5])
                 continue
-            if self.require_approved:
-                req = self.t.requirement_of(t)
-                if self.status(req) != "approved":
-                    why[t] = "requirement %s is %s" % (req, self.status(req))
-                    continue
-                inactive = [a for a in self.t.ancestors(req) if self.status(a) != "active"]
-                if inactive:
-                    why[t] = "%s is %s" % (inactive[0], self.status(inactive[0]))
-                    continue
-            if suspect == "refuse" and self.is_suspect(t):
-                why[t] = "suspect: the requirement changed since basis"
+            hold = self._hold(t, suspect)
+            if hold:
+                why[t] = hold
                 continue
             tasks.append(t)
         return {"tasks": tasks, "why_not": why}
+
+    def _label(self, d):
+        if d not in self.t.nodes:
+            return "%s (does not exist)" % d
+        if d in self.bad:
+            return "%s (the record is invalid: see check)" % d
+        if self.t.nodes[d].kind != "task":
+            return "%s (no tasks yet)" % d
+        if self.status(d) == "dropped":
+            return "%s (dropped)" % d
+        return d
+
+    def _hold(self, t, suspect):
+        """Why a planned task whose needs are met still may not run, or None."""
+        req = self.t.requirement_of(t)
+        if self.superseded_by.get(req):
+            return "requirement %s is superseded by %s" % (req, ", ".join(sorted(self.superseded_by[req])))
+        if self.require_approved:
+            if self.status(req) != "approved":
+                return "requirement %s is %s" % (req, self.status(req))
+            inactive = [a for a in self.t.ancestors(req) if self.status(a) != "active"]
+            if inactive:
+                return "%s is %s" % (inactive[0], self.status(inactive[0]))
+        if suspect == "refuse":
+            if req in self.recs and not self.recs[t].get("basis"):
+                return "suspect: no basis (review the task, then `wavecoord spec rebase-basis %s`)" % t
+            if self.is_suspect(t):
+                return "suspect: the requirement changed since basis"
+        return None
 
     def is_suspect(self, task):
         rec = self.recs.get(task) or {}
@@ -392,7 +485,7 @@ class Graph(object):
             "id": rid, "kind": t.nodes[rid].kind, "status": self.status(rid), "ancestors": t.ancestors(rid),
             "children": t.children(rid), "needs": self.needs.get(rid, []),
             "waits_for": sorted(self.node_deps(rid) if t.nodes[rid].kind != "task" else self.deps(rid)),
-            "needed_by": needed_by,
+            "needed_by": needed_by, "superseded_by": sorted(self.superseded_by.get(rid, [])),
             "outputs": [{"id": a, "producer": self.producers.get(a, []), "consumers": self.consumers.get(a, [])}
                         for a in produced if a in {o["id"] for o in rec.get("outputs") or []} or
                         t.nodes[rid].kind == "task"],
@@ -405,3 +498,28 @@ class Graph(object):
     def artifacts(self):
         ids = sorted(set(self.producers) | set(self.consumers))
         return [{"id": a, "producers": self.producers.get(a, []), "consumers": self.consumers.get(a, [])} for a in ids]
+
+
+def _cycle(edges):
+    """The first cycle of a directed graph {node: [node]}, as [a, b, ..., a], or None. Iterative, so a long
+    chain does not hit the recursion limit."""
+    color = {}
+    for start in sorted(edges):
+        if start in color:
+            continue
+        color[start] = 1
+        path, stack = [start], [iter(sorted(edges.get(start, ())))]
+        while stack:
+            nxt = next(stack[-1], None)
+            if nxt is None:
+                color[path.pop()] = 2
+                stack.pop()
+                continue
+            c = color.get(nxt)
+            if c == 1:
+                return path[path.index(nxt):] + [nxt]
+            if c is None:
+                color[nxt] = 1
+                path.append(nxt)
+                stack.append(iter(sorted(edges.get(nxt, ()))))
+    return None

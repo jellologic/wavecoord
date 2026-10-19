@@ -34,8 +34,8 @@ The result is **one plan PR** that adds or changes task specs. You never edit th
 
 - Step 1: `spec_query` with `kind=requirement` under the node in the arguments (or the requirements that no task covers yet: `spec_tree` shows progress). Read each with `spec_get`. A requirement that is missing or unclear goes back to `/wavecoord:spec`, not into a task.
 - Step 2: give each `wavecoord:planner` subagent its requirements; it returns `create` ops with ids `<requirement>/<task>`.
-- Step 3, in addition: each output a requirement promises is an output of exactly one task, with the same kind and contract; a task's inputs come `from` a task it `needs`; file outputs lie in `paths`; Acceptance includes the requirement's Verify. Run `wavecoord spec apply --dry-run` or let `spec_edit` refuse what breaks the tree.
-- Step 5: one `spec_edit` call with all ops (or calls with the same `branch`). Put `spec_waves` of the result in the PR body: the waves, the critical path and the widest wave. New tasks are `planned` (or `draft` when the user wants to review them first).
+- Step 3, in addition: each output a requirement promises is an output of exactly one task, with the same kind and contract; a task's inputs come `from` a task it `needs`; file outputs lie in `paths`. Acceptance holds the task's own checks only: the refinery runs the requirement's Verify with the merge of the last open task under it, so an earlier task does not repeat it. Run `wavecoord spec apply - --dry-run` (the ops as JSON on stdin) or let `spec_edit` refuse what breaks the tree.
+- Step 5: one `spec_edit` call with all ops (or calls with the same `branch`); the body lists the tasks with size and needs. New tasks are `planned` (or `draft` when the user wants to review them first). `spec_waves` reads the default branch and does not see the new tasks before the merge: run `wavecoord spec waves --ref <commit>` with the `commit` that `spec_edit` returns, and show the waves, the critical path and the widest wave in your report.
 
 ## 1. Understand the goal
 

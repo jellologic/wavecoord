@@ -233,7 +233,7 @@ class SpecIdsTest(SpecLeadCase):
         self.assertEqual(len(got["attempts"]), 1)
         self.assertIn(got["state"], ("active", "review"))
         start = [e for e in self.core.events_after(0) if e["kind"] == "attempt.start"][0]
-        self.assertEqual(start["payload"]["basis"], "75c3e429")
+        self.assertEqual(start["payload"]["basis"], "a6f4586d")
         self.wait_host(out["id"])
 
     def test_moved_task_keeps_its_attempt(self):

@@ -26,7 +26,7 @@ class QueryError(ValueError):
 
 
 def _values(n, key, status=None):
-    rec = n.rec or {}
+    rec = n.rec or n.raw or {}
     if key == "status" and status and n.id in status:
         return [status[n.id]]
     if key == "id":
@@ -49,7 +49,11 @@ def _values(n, key, status=None):
 
 def parse_query(expr):
     terms = []
-    for t in shlex.split(expr or ""):
+    try:
+        words = shlex.split(expr or "")
+    except ValueError as e:  # an unbalanced quote
+        raise QueryError("cannot read the query: %s" % e)
+    for t in words:
         if t.startswith("!"):
             if not t[1:]:
                 raise QueryError("empty term %r" % t)
@@ -112,8 +116,8 @@ def record(tree, nid):
     if n is None:
         return None
     out = summary(n)
-    out.update(parent=n.parent, children=tree.children(n.id) if n.kind != "decision" else [], record=n.rec,
-               errors=tree.parse_errors.get(n.id, []))
+    out.update(parent=n.parent, children=tree.children(n.id) if n.kind != "decision" else [],
+               record=n.rec or n.raw, errors=tree.parse_errors.get(n.id, []) + list(n.invalid))
     return out
 
 

@@ -193,6 +193,70 @@ class ManifestTest(unittest.TestCase):
             self.assertIn("Validation passed", p.stdout)
 
 
+class SpecCommandTest(unittest.TestCase):
+    """Every `wavecoord spec ...` command that a skill, an agent or docs/specs.md names parses (items 77, 81)."""
+
+    def commands(self):
+        out = []
+        paths = [os.path.join(_paths.ROOT, "docs", "specs.md")]
+        for base in (SKILLS, AGENTS):
+            for d, _, fs in os.walk(base):
+                paths += [os.path.join(d, f) for f in fs if f.endswith(".md")]
+        for p in paths:
+            with open(p, encoding="utf-8") as f:
+                text = f.read()
+            snippets = re.findall(r"`(wavecoord spec [^`]+)`", text)
+            snippets += [l.strip() for l in text.splitlines() if l.strip().startswith("wavecoord spec ")]
+            for snip in snippets:
+                for part in snip.split("&&"):
+                    cmd = re.split(r"\s{2,}", part.strip())[0]
+                    if cmd.startswith("wavecoord spec ") and "|" not in cmd:
+                        out.append((os.path.relpath(p, _paths.ROOT), cmd))
+        return out
+
+    def test_named_commands_parse(self):
+        import shlex
+        from wavecoord.cli import build_parser
+        cmds = self.commands()
+        self.assertGreater(len(cmds), 10)
+        for where, cmd in cmds:
+            with self.subTest(where=where, cmd=cmd):
+                words = re.sub(r"\[[^\]]*\]", "", cmd)  # optional parts
+                words = re.sub(r"<[^>]*>", "x", words).replace("...", "x")
+                parser = build_parser()
+                argv = shlex.split(words)[1:]
+                if len(argv) == 2:  # a bare `wavecoord spec <action>` names the action only
+                    argv.append("--help")
+                    try:
+                        with open(os.devnull, "w") as null:
+                            import contextlib
+                            with contextlib.redirect_stdout(null):
+                                parser.parse_args(argv)
+                    except SystemExit as e:
+                        self.assertEqual(e.code, 0, "%s names an action that does not exist: %s" % (where, cmd))
+                    continue
+                try:
+                    parser.parse_args(argv)
+                except SystemExit:
+                    self.fail("%s names a command that does not parse: %s" % (where, cmd))
+
+    def test_wave_run_maps_tree_ids(self):
+        with open(os.path.join(SKILLS, "wave-run", "SKILL.md"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertTrue("`.` for `/`" in text)
+
+    def test_planners_leave_verify_to_the_refinery(self):
+        for p in (os.path.join(SKILLS, "wave-plan", "SKILL.md"), os.path.join(AGENTS, "planner.md")):
+            with open(p, encoding="utf-8") as f:
+                text = f.read()
+            self.assertFalse("Acceptance includes the requirement's Verify" in text, p)
+
+    def test_triage_routes_spec_changes_to_revise(self):
+        with open(os.path.join(SKILLS, "triage", "actions.md"), encoding="utf-8") as f:
+            text = f.read()
+        self.assertTrue("spec_edit" in text)
+
+
 class ParserTest(unittest.TestCase):
     def test_rejects_ambiguous_yaml(self):
         for bad in ("---\nname: a: b\n---\n", "---\n- x\n---\n", "---\nname: [a]\n---\n", "no frontmatter",

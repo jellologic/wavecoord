@@ -5,13 +5,19 @@
 
 Paths are relative to the spec directory, with "/" separators. `norm_dir` is the
 one reading of the config value `spec.dir` (the lead, the CLI and gate-check use it).
+Both readers never follow a symlink: a symlink (or a FIFO, a device) under the spec
+directory reads as SYMLINK, which the tree reports as a layout error, so a check of
+the working tree and one of a ref see the same thing and `fmt` never writes through
+a link.
 """
 
 import os
 import posixpath
+import stat
 import subprocess
 
 DEFAULT_DIR = "specs"
+SYMLINK = "\x00wavecoord: not a regular file\n"
 
 
 class SourceError(RuntimeError):
@@ -36,13 +42,17 @@ def read_tree(root, spec_dir):
     if not os.path.isdir(base):
         return out
     for d, dirs, files in os.walk(base):
-        dirs[:] = sorted(x for x in dirs if not x.startswith("."))
-        for f in sorted(files):
+        links = [x for x in dirs if not x.startswith(".") and os.path.islink(os.path.join(d, x))]
+        dirs[:] = sorted(x for x in dirs if not x.startswith(".") and x not in links)
+        for f in sorted(files + links):
             if f.startswith("."):
                 continue
             p = os.path.join(d, f)
             rel = os.path.relpath(p, base).replace(os.sep, "/")
             try:
+                if not stat.S_ISREG(os.lstat(p).st_mode):
+                    out[rel] = SYMLINK
+                    continue
                 with open(p, "rb") as fh:
                     out[rel] = fh.read().decode("utf-8", "replace")
             except OSError as e:
@@ -61,13 +71,13 @@ def _git(repo, args, data=None):
 def read_ref(repo, ref, spec_dir):
     prefix = norm_dir(spec_dir) + "/"
     listing = _git(repo, ["ls-tree", "-r", "-z", "--full-tree", ref, "--", prefix])
-    blobs = []
+    blobs, out = [], {}
     for entry in listing.split(b"\0"):
         if not entry:
             continue
         meta, _, path = entry.partition(b"\t")
         parts = meta.split()
-        if len(parts) != 3 or parts[1] != b"blob":
+        if len(parts) != 3 or parts[1] not in (b"blob", b"commit"):
             continue
         path = path.decode("utf-8", "replace")
         if not path.startswith(prefix):
@@ -75,11 +85,14 @@ def read_ref(repo, ref, spec_dir):
         rel = path[len(prefix):]
         if any(seg.startswith(".") for seg in rel.split("/")):
             continue
+        if parts[0] != b"100644" and parts[0] != b"100755":  # a symlink (120000) or a submodule
+            out[rel] = SYMLINK
+            continue
         blobs.append((rel, parts[2].decode()))
     if not blobs:
-        return {}
+        return out
     data = _git(repo, ["cat-file", "--batch"], ("\n".join(sha for _, sha in blobs) + "\n").encode())
-    out, pos = {}, 0
+    pos = 0
     for rel, sha in blobs:
         nl = data.index(b"\n", pos)
         head = data[pos:nl].split()

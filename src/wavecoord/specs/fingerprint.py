@@ -2,8 +2,9 @@
 
 It covers what a task builds against: the Statement, the Scenarios, the Verify
 commands, and the inputs and outputs. It ignores the title, status, tags,
-aliases, Rationale, Notes and the path, so a reflow, a reorder, a status change
-or a move leaves it unchanged. A task stores it as `basis`.
+aliases, Rationale, Notes and the path, and an input's `from` (a path, which a
+move rewrites), so a reflow, a reorder, a status change or a move leaves it
+unchanged. A task stores it as `basis`.
 """
 
 import hashlib
@@ -21,7 +22,7 @@ def norm(s):
 
 
 def _artifact(a):
-    return {k: (norm(v) if isinstance(v, str) else v) for k, v in sorted(a.items())}
+    return {k: (norm(v) if isinstance(v, str) else v) for k, v in sorted(a.items()) if k != "from"}
 
 
 def canonical(rec):
