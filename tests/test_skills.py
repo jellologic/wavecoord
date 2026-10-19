@@ -79,6 +79,11 @@ def skill_dirs():
     return sorted(d for d in os.listdir(SKILLS) if os.path.isfile(os.path.join(SKILLS, d, "SKILL.md")))
 
 
+def read(path):
+    with open(path, encoding="utf-8") as f:
+        return f.read()
+
+
 def agent_files():
     return sorted(f for f in os.listdir(AGENTS) if f.endswith(".md"))
 
@@ -258,6 +263,34 @@ class SpecCommandTest(unittest.TestCase):
 
 
 class ParserTest(unittest.TestCase):
+    def test_lead_flow_review_items(self):
+        """Second review: no skill pre-approves every wavecoord command (80); triage and wave-run collect (73);
+        planners create planned tasks (12); resolve passes the user's decision as `brief` (72, 74); the plugin
+        declares no option that nothing reads (81)."""
+        for d in skill_dirs():
+            fm, _ = parse_frontmatter(read(os.path.join(SKILLS, d, "SKILL.md")))
+            self.assertNotIn("Bash(wavecoord *)", fm["allowed-tools"], d)
+            self.assertNotIn("Bash(wavecoord spec *)", fm["allowed-tools"], d)
+            for t in fm["allowed-tools"]:
+                for cmd in ("revert", "rebuild", "tokens", "install-server", "gc", "refinery", "steer", "launch",
+                            "spec apply", "spec status-sync", "spec migrate-plan"):
+                    self.assertFalse(t.startswith("Bash(wavecoord %s" % cmd), (d, t))
+        for d in ("triage", "wave-run"):
+            fm, body = parse_frontmatter(read(os.path.join(SKILLS, d, "SKILL.md")))
+            self.assertIn(TOOL_PREFIX + "collect", fm["allowed-tools"], d)
+            self.assertIn("`collect`", body, d)
+        _, body = parse_frontmatter(read(os.path.join(SKILLS, "triage", "SKILL.md")))
+        self.assertLess(body.index("`collect`"), body.index("`inbox`"))
+        for rel in (os.path.join(SKILLS, "wave-plan", "SKILL.md"), os.path.join(AGENTS, "planner.md")):
+            self.assertIn('"status": "planned"', read(rel), rel)
+        _, body = parse_frontmatter(read(os.path.join(SKILLS, "resolve", "SKILL.md")))
+        self.assertIn("as `brief`", body)
+        self.assertNotIn("own branch", read(os.path.join(SKILLS, "resolve", "resolver-brief.md")))
+        actions = read(os.path.join(SKILLS, "triage", "actions.md"))
+        self.assertIn("Retry an attempt that has a PR", actions)
+        with open(os.path.join(PLUGIN, ".claude-plugin", "plugin.json")) as f:
+            self.assertNotIn("project", json.load(f)["userConfig"])
+
     def test_rejects_ambiguous_yaml(self):
         for bad in ("---\nname: a: b\n---\n", "---\n- x\n---\n", "---\nname: [a]\n---\n", "no frontmatter",
                     "---\nk: v\nk: w\n---\n"):

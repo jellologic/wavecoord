@@ -210,7 +210,7 @@ class ExternalMergeTest(LeadTestCase):
         n = self.core.log.last_seq
         self.assertEqual(self.lead.collect()["parked"], [])  # once only
         self.assertEqual(self.core.log.last_seq, n)
-        self.assertIn(["pr", "view", "1", "--json", "state,mergedAt"], self.gh()["calls"])
+        self.assertIn(["pr", "view", "1", "--json", "state,mergedAt,url"], self.gh()["calls"])
         # a PR closed without a merge: release, and the attempt is abandoned
         self.lead.dispatch("two")
         self.collect_until("two-1")

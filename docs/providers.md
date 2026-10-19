@@ -84,7 +84,7 @@ The wrapper marks a run `throttled` on an `api_retry` with error `rate_limit` or
 
 The lead tools do:
 
-- `collect` (the tool, the CLI and the dispatcher loop) starts the next attempt of a task on `next_provider` when an attempt ended throttled and not `reported`. The new attempt is a new branch (`<task>-<n+1>`); its result has `actions: [..., "fallback"]` and the new attempt in `fallback`.
+- `collect` (the tool, the CLI and the dispatcher loop) starts the next attempt of a task when an attempt ended throttled and not `reported` and the host named a `next_provider`. It is a normal `dispatch`: the task must still be ready (not dropped, on hold, merged or running), and the provider comes from the lead's chain (`exec.provider`, then `exec.provider_fallback`, less the backed-off ones), never from the host's result. The new attempt is a new branch (`<task>-<n+1>`); its result has `actions: [..., "fallback"]` and the new attempt in `fallback`, or `fallback_error` with the reason. A throttled resolver run is different: the attempt stays `reported` with its PR, and the resolver runs again (a `--continue` of the same attempt, at most `MAX_RESOLVES` runs per attempt).
 - `dispatch` and `dispatch_wave` skip a provider for `PROVIDER_BACKOFF_S` (900 s) after a throttled attempt or a `rate_limit` notice that names it, and take the next one of `[exec.provider] + exec.provider_fallback` that a candidate host has. The `reason` of the decision lists the skipped ones (`alt: backed off (...)`). An explicit `overrides.provider` is never skipped.
 - No provider left gives the refusal `rate_limited` (all backed off) or `no_provider`.
 

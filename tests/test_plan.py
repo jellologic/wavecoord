@@ -169,6 +169,81 @@ class StoreTest(unittest.TestCase):
         self.assertEqual(out["critical_path"], ["a", "c", "d"])
         self.assertEqual(g.cycles(nodes, edges + [{"from": "a", "to": "d"}]), [["a", "d", "c"]])
 
+    def test_long_needs_chain_has_no_recursion_limit(self):
+        """A needs chain longer than the recursion limit: analyze and cycles are iterative (review item 96)."""
+        n = 3000
+        nodes = [{"id": "t%05d" % i, "state": "todo", "phase": "p", "size": "S"} for i in range(n)]
+        edges = [{"from": "t%05d" % (i + 1), "to": "t%05d" % i} for i in range(n - 1)]
+        out = g.analyze(nodes, edges)
+        self.assertEqual(len(out["critical_path"]), n)
+        self.assertEqual(out["critical_path"][0], "t00000")
+        self.assertEqual(g.cycles(nodes, edges + [{"from": "t00000", "to": "t%05d" % (n - 1)}])[0][0], "t00000")
+
+    def test_iterative_graph_matches_the_recursive_one(self):
+        import random
+        for seed in range(200):
+            rnd = random.Random(seed)
+            ids = ["n%d" % i for i in range(rnd.randint(1, 9))]
+            nodes = [{"id": i, "state": rnd.choice(["todo", "todo", "active", "done"]), "phase": "p",
+                      "size": rnd.choice(["XS", "S", "M", None])} for i in ids]
+            edges = [{"from": rnd.choice(ids), "to": rnd.choice(ids + ["ghost"])} for _ in range(rnd.randint(0, 12))]
+            edges = [e for e in edges if e["from"] != e["to"]]
+            want_c = _ref_cycles(nodes, edges)
+            self.assertEqual(g.cycles(nodes, edges), want_c, seed)
+            if not want_c:
+                self.assertEqual(g.analyze(nodes, edges)["critical_path"], _ref_longest(nodes, edges), seed)
+
+
+def _ref_cycles(nodes, edges):
+    """The recursive cycles() of 0.2.0, the reference for the iterative one."""
+    needs = g.needs_map(nodes, edges)
+    color, stack, out, seen = {}, [], [], set()
+
+    def visit(n):
+        color[n] = 1
+        stack.append(n)
+        for m in needs.get(n, []):
+            if m not in needs:
+                continue
+            if color.get(m) == 1:
+                cyc = stack[stack.index(m):]
+                key = tuple(sorted(cyc))
+                if key not in seen:
+                    seen.add(key)
+                    out.append(list(cyc))
+            elif color.get(m) is None:
+                visit(m)
+        stack.pop()
+        color[n] = 2
+
+    for n in sorted(needs):
+        if color.get(n) is None:
+            visit(n)
+    return out
+
+
+def _ref_longest(nodes, edges):
+    """The recursive critical path of 0.2.0 on an acyclic graph."""
+    by = {n["id"]: n for n in nodes}
+    needs = g.needs_map(nodes, edges)
+    open_ = set(i for i, n in by.items() if n.get("state") not in g.CLOSED)
+    best = {}
+
+    def longest(i):
+        if i in best:
+            return best[i]
+        sub = [longest(j) for j in sorted(needs.get(i, [])) if j in open_ and j in by]
+        top = max(sub, key=lambda x: x[0]) if sub else (0, [])
+        best[i] = (top[0] + g.SIZE_WEIGHT.get(by[i].get("size"), 1), top[1] + [i])
+        return best[i]
+
+    crit = (0, [])
+    for i in sorted(open_):
+        c = longest(i)
+        if c[0] > crit[0]:
+            crit = c
+    return crit[1]
+
 
 class AnchoredEditTest(unittest.TestCase):
     def files(self):

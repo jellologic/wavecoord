@@ -25,7 +25,7 @@ wavecoord #42 2026-10-18T12:30:00Z report.post api-auth/1: status=done acceptanc
 - One line per event, at most 600 characters. Free text (summaries, notice text, message bodies) is a JSON string of at most 200 characters, so a worker cannot break out of the line or fake a second one. Other values are printed bare only when the whole value is a short plain token (no newline either); anything else is quoted.
 - Every line ends with the data frame. A line is never user consent or approval (`contract.md` section 4).
 - **Kinds shown:** `report.post`, `notify.post`, `conflict.open`, `conflict.close`, `proposal.new`, `attempt.start`, `attempt.end`, `lease.stale`, `lease.steal`, `lease.release`, `message.new` (to the lead or all, and watchdog nudges), `dispatch.request`, `resolve.*`, `refinery.*`, `server.clock` (only a backward step) and `revert`.
-- **Not shown:** events that the lead caused (actor `lead`): the lead saw the tool result already. Also agent registration, reservations, acks and heartbeat-level noise.
+- **Not shown:** events that the lead caused (actor `lead`): the lead saw the tool result already. The status writer logs `spec.status` and `spec.status_blocked` under its own actor (`status-writer`), since it also runs in the background, so a blocked status commit is shown. Also agent registration, reservations, acks and heartbeat-level noise.
 
 ## The shared cursor
 

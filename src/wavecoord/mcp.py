@@ -140,17 +140,19 @@ TOOLS = [
     ("conflicts", "Open conflicts: live reservation overlaps, merge-tree conflicts of pushed attempt branches with "
                   "the default branch, hot files. With globs: only the overlap check for those globs.",
      _obj({"globs": _ARR}), _conflicts),
-    ("resolve", "Dispatch a resolver: a --continue run of the attempt's branch with a brief of the conflicting files "
-                "and both sides' intents.",
+    ("resolve", "Dispatch a resolver: a --continue run of the attempt's branch (same branch, same PR) with a brief "
+                "of the conflicting files and both sides' intents. `brief`: the user's decision, which the resolver "
+                "follows first. Refused while a run of the attempt is in flight.",
      _obj({"attempt": {"type": "string", "description": "<task>/<n>"}, "branch": _STR, "conflict": _INT,
-           "dry_run": _BOOL}),
+           "dry_run": _BOOL, "brief": {"type": "string", "description": "the lead's decision for the resolver"}}),
      lambda c, ctx, a: _lead(c, ctx, True).resolve(a.get("attempt"), a.get("branch"), a.get("conflict"),
-                                                   bool(a.get("dry_run")))),
+                                                   bool(a.get("dry_run")), a.get("brief"))),
     ("refinery_status", "Merge queue in merge order (funnel heads first): PRs, blocks, checks, protected paths.",
      _obj({}), lambda c, ctx, a: _lead(c, ctx).refinery_status()),
     ("refinery_merge", "Merge one PR (or every queued PR, in order) through merge_cmd, after a fresh merge-tree "
-                       "re-check, the protected-path check and check_cmd. Set approved_protected only after the "
-                       "user approved it in this session.",
+                       "re-check, the protected-path check and check_cmd. Only attempts whose report is done and tasks the "
+                       "plan still wants. Set approved_protected only with `pr`, after the user approved that PR's "
+                       "protected change in this session.",
      _obj({"pr": {"type": "string", "description": "PR number, URL, branch or <task>/<n>"},
            "approved_protected": _BOOL}),
      lambda c, ctx, a: _lead(c, ctx, True).refinery_merge(a.get("pr"), bool(a.get("approved_protected")))),

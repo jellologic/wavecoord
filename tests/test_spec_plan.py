@@ -159,5 +159,24 @@ class ProducerTest(unittest.TestCase):
                       prompt_from_spec(spec))
 
 
+class FlatIdSpellsANodeTest(unittest.TestCase):
+    """Review item 8: a migrated flat id with dots that also spells a feature's path still names its task."""
+
+    def test_get_resolves_the_alias_first(self):
+        from wavecoord.specs import migrate
+        from wavecoord.specs.plan import task_of
+        flat = {"id": "auth.sessions", "title": "Old", "phase": "p1", "paths": ["old/**"], "class": "B",
+                "size": "S", "exec": dict(EXEC), "state": "todo", "sections": {"prompt": "Do it."}}
+        fs = source.read_tree(_paths.FIXTURES, "specs")
+        ops, _ = migrate.plan_ops([flat], states={})
+        changes, _, _ = apply_ops(fs, ops, coordinator=True)
+        fs.update({k: v for k, v in changes.items() if v is not None})
+        plan = SpecTreePlan(fs)
+        tid = task_of(plan.tree, "auth.sessions")
+        self.assertTrue(tid.startswith("legacy/"), tid)
+        self.assertEqual(plan.get("auth.sessions")["tree"]["id"], tid)
+        self.assertEqual(plan.get(IMPL)["tree"]["id"], REQ + "/rotate-impl")
+
+
 if __name__ == "__main__":
     unittest.main()

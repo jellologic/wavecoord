@@ -16,7 +16,9 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__spec_check
   - mcp__plugin_wavecoord_wavecoord__spec_edit
   - mcp__plugin_wavecoord_wavecoord__attempts
-  - Bash(wavecoord *)
+  - Bash(wavecoord spec waves *)
+  - Bash(wavecoord spec check *)
+  - Bash(wavecoord spec show *)
   - Bash(git log *)
   - Bash(git ls-files *)
   - Read
@@ -30,12 +32,13 @@ Goal from the user: $ARGUMENTS
 
 The result is **one plan PR** that adds or changes task specs. You never edit the default branch and you never dispatch from this skill. The spec format is `docs/task-spec.md` in the wavecoord repo; the template with every field is in [spec-template.md](spec-template.md).
 
-**With a spec tree** (`spec_tree` lists capabilities; `docs/specs.md`): tasks live under requirements, and the plan PR is made with `spec_edit`, not `plan_edit`. Follow the steps below with these changes:
+**With a spec tree** (`spec_tree` lists capabilities; `docs/specs.md`): tasks live under requirements, and the plan PR is made with `spec_edit`, not `plan_edit`. First check `config`: `plan.selected_by` must name the spec tree. When `spec_tree` answers with a `plan_note`, the lead does not plan from the tree (for example `plan.adapter` is `builtin`): tell the user to remove `plan.adapter` or set it to `specs`, and stop. Follow the steps below with these changes:
 
 - Step 1: `spec_query` with `kind=requirement` under the node in the arguments (or the requirements that no task covers yet: `spec_tree` shows progress). Read each with `spec_get`. A requirement that is missing or unclear goes back to `/wavecoord:spec`, not into a task.
-- Step 2: give each `wavecoord:planner` subagent its requirements; it returns `create` ops with ids `<requirement>/<task>`.
-- Step 3, in addition: each output a requirement promises is an output of exactly one task, with the same kind and contract; a task's inputs come `from` a task it `needs`; file outputs lie in `paths`. Acceptance holds the task's own checks only: the refinery runs the requirement's Verify with the merge of the last open task under it, so an earlier task does not repeat it. Run `wavecoord spec apply - --dry-run` (the ops as JSON on stdin) or let `spec_edit` refuse what breaks the tree.
-- Step 5: one `spec_edit` call with all ops (or calls with the same `branch`); the body lists the tasks with size and needs. New tasks are `planned` (or `draft` when the user wants to review them first). `spec_waves` reads the default branch and does not see the new tasks before the merge: run `wavecoord spec waves --ref <commit>` with the `commit` that `spec_edit` returns, and show the waves, the critical path and the widest wave in your report.
+- Step 2: give each `wavecoord:planner` subagent its requirements; it returns `create` ops with ids `<requirement>/<task>`, each with `"status": "planned"` in `fields` (a created task is `draft` otherwise, and a draft is never dispatched). Use `draft` only when the user wants to review the tasks first; then say that a later plan PR must set them `planned`. Paste this op shape instead of spec-template.md, which is the flat format:
+  `{"op": "create", "id": "<requirement>/<task>", "fields": {"title": "...", "status": "planned", "paths": [...], "class": "B", "size": "S", "exec": {"model": "...", "effort": "...", "max_turns": 30, "budget_usd": 2, "timeout_min": 30}, "needs": [...], "outputs": [{"id": "src/x.py", "kind": "file"}]}, "sections": {"Context": "...", "Risks": [...], "Acceptance": ["..."], "Prompt": "..."}}`
+- Step 3, in addition: each output a requirement promises is an output of exactly one task, with the same kind and contract; a task's inputs come `from` a task it `needs`; file outputs lie in `paths`. Acceptance holds the task's own checks only: the refinery runs the requirement's Verify with the merge of the last open task under it, so an earlier task does not repeat it. `spec_edit` refuses what breaks the tree and writes nothing. To preview the diff first, run `wavecoord spec apply - --dry-run --ref origin/<default>` (or `--ref origin/<plan branch>` for a later call on a plan branch) with the ops as JSON on stdin; it asks for permission.
+- Step 5: one `spec_edit` call with all ops (a later call with the same `branch` adds a commit and rewrites the PR body for the whole branch); the body lists the tasks with size and needs. New tasks are `planned` (or `draft` when the user wants to review them first). A `switch:` warning means this PR adds the first spec records while `plan/tasks` has tasks: run `wavecoord spec migrate-plan` in the same PR, or tell the user. `spec_waves` reads the default branch and does not see the new tasks before the merge: run `wavecoord spec waves --ref <commit>` with the `commit` that `spec_edit` returns, and show the waves, the critical path and the widest wave in your report.
 
 ## 1. Understand the goal
 

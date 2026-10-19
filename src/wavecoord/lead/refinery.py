@@ -21,9 +21,13 @@ import tempfile
 from wavecoord.core import ApiError
 from wavecoord.globs import globs_overlap
 from wavecoord.launcher.client import fill
-from wavecoord.launcher.common import git_run, run_cmd
+from wavecoord.launcher.common import LauncherError, git_run, run_cmd
 
 DEFAULT_MERGE_CMD = ["gh", "pr", "merge", "{pr}", "--merge", "--match-head-commit", "{sha}"]
+# The report status of an attempt the refinery merges. failed, blocked and needs_decision wait for the lead.
+MERGE_REPORT = ("done",)
+# Task statuses (the lead's) whose PRs the refinery does not merge: the lead held, dropped or drafted the task.
+HELD_STATUSES = ("dropped", "on_hold", "draft")
 # The environment of Verify and Acceptance: these names (and LC_*) from the lead's environment, plus the names in
 # spec.verify_env. Never a credential: names in NEVER_ENV, or with these prefixes, are not passed.
 VERIFY_ENV = ("PATH", "HOME", "LANG", "TMPDIR", "TERM", "TZ", "USER", "LOGNAME", "SHELL")
@@ -73,6 +77,7 @@ class RefineryMixin(object):
             r = refs.get(key) or {}
             items.append({"task": a["task"], "attempt": a["n"], "pr": pr_number(a["pr_url"]), "pr_url": a["pr_url"],
                           "branch": a.get("branch"), "unblocks": unblocks.get(a["task"], 0),
+                          "report_status": (a.get("report") or {}).get("status") or a.get("report_status"),
                           "state": r.get("state") or "waiting", "reason": r.get("reason"), "files": r.get("files"),
                           "detail": r.get("detail"), "ended": a.get("ended") or ""})
         items.sort(key=lambda i: (-i["unblocks"], i["ended"], i["task"], i["attempt"]))
@@ -100,7 +105,11 @@ class RefineryMixin(object):
                 "protected_globs": globs}
 
     def refinery_merge(self, pr=None, approved_protected=False):
-        """Merge one PR (or, without `pr`, every queued PR in order), one at a time."""
+        """Merge one PR (or, without `pr`, every queued PR in order), one at a time. A failure of one item (git, a
+        configured command, the plan) blocks that item with reason `unavailable`; the loop goes on."""
+        if approved_protected and pr is None:
+            raise ApiError("bad_request", "approved_protected needs pr: the user approves the protected change of one"
+                                          " PR they saw, never the whole queue")
         if not self.refinery_lock.acquire(timeout=600):
             raise ApiError("conflict", "the refinery is busy")
         try:
@@ -110,7 +119,12 @@ class RefineryMixin(object):
                 queue = [i for i in queue if want in (i["pr"], i["pr_url"], i["branch"], "%s/%d" % (i["task"], i["attempt"]))]
                 if not queue:
                     raise ApiError("not_found", "no PR %s in the refinery queue (reported, pushed, with a PR)" % pr)
-            results = [self._merge_one(i, approved_protected) for i in queue]
+            results = []
+            for i in queue:
+                try:
+                    results.append(self._merge_one(i, approved_protected))
+                except (ApiError, LauncherError, OSError) as e:
+                    results.append(self._unavailable(i, e))
             if any(r["state"] == "merged" for r in results):
                 self.status_flush(force=True)
             return {"results": results, "merged": [r for r in results if r["state"] == "merged"],
@@ -137,6 +151,42 @@ class RefineryMixin(object):
         out.update(kw)
         return out
 
+    def _unavailable(self, it, e):
+        """The block of an item whose check could not run (it is retried by the next refinery_merge)."""
+        detail = (e.message if isinstance(e, ApiError) else "%s: %s" % (type(e).__name__, e))[-600:]
+        try:
+            return self._block(it, "unavailable", detail=detail)
+        except Exception:  # noqa: BLE001 - the coordinator log is down too: still answer for this item
+            return dict(it, state="blocked", reason="unavailable", detail=detail)
+
+    def _held(self, it):
+        """(reason, detail) when the plan or the report says the PR must not merge now, else None: a report whose
+        status is not done (report_not_done), or a task the lead dropped, put on hold or drafted on the default
+        branch (held). A spec tree task missing from the tree is left to _verify (verify_unavailable)."""
+        from wavecoord.plan.adapters import PlanError
+        from wavecoord.specs.plan import SpecTreePlan
+        st = it.get("report_status")
+        if st not in MERGE_REPORT:
+            return "report_not_done", (
+                "the attempt's report status is %s, not done: retry it (`wavecoord launch %s --continue`), ask the"
+                " user, or close the PR; the refinery merges only a done report" % (st or "missing", it["task"]))
+        plan = self.plan()
+        try:
+            spec = plan.get(it["task"])
+        except PlanError as e:
+            if isinstance(plan, SpecTreePlan):
+                return None
+            return "held", "%s; the refinery merges only a task of the plan" % e
+        if isinstance(plan, SpecTreePlan):
+            node = plan.tree.nodes.get(spec["tree"]["id"])
+            status = ((node.rec or {}) if node is not None else {}).get("status")
+        else:
+            status = {"blocked": "on_hold"}.get(spec.get("state"), spec.get("state"))
+        if status in HELD_STATUSES:
+            return "held", ("the task is %s on the default branch: close the PR, or restore the task's status with a"
+                            " plan change, then merge" % status)
+        return None
+
     def _merge_one(self, it, approved_protected):
         task, n, branch = it["task"], it["attempt"], it["branch"]
         self.fetch(force=True)
@@ -145,6 +195,11 @@ class RefineryMixin(object):
         rc, sha, _ = git_run(["rev-parse", "--verify", "--quiet", ref + "^{commit}"], self.repo)
         if rc != 0:
             return self._block(it, "branch_missing")
+        # 0. the report and the plan: a failed, blocked or needs_decision report, or a task the lead held, dropped
+        #    or drafted, is never merged (and gets no resolver)
+        held = self._held(it)
+        if held:
+            return self._block(it, held[0], sha=sha, detail=held[1])
         if it["state"] != "blocked":
             self._transition("refinery.queue", "queued", it,
                              {"pr": it["pr"], "pr_url": it["pr_url"], "branch": branch, "sha": sha})
@@ -154,10 +209,7 @@ class RefineryMixin(object):
             out = self._block(it, "conflict", files=files[:200], sha=sha)
             c = self.coord.open_conflict(self.ctx, {"kind": "merge_tree", "branch": branch, "base": default,
                                                     "files": files[:200], "source": "refinery"}, task, n)
-            try:
-                out["resolver"] = self.resolve(attempt="%s/%d" % (task, n), conflict_id=c["id"] if c else None)
-            except ApiError as e:
-                out["resolve_error"] = e.message
+            out.update(self.auto_resolve(task, n, c["id"] if c else None))
             return out
         # 2. protected paths: only with the user's approval, given in the lead session
         globs = self.protected_globs()
@@ -291,7 +343,7 @@ class RefineryMixin(object):
         parse blocks with reason verify_unavailable."""
         from wavecoord.plan.adapters import PlanError
         from wavecoord.specs.fingerprint import fingerprint
-        from wavecoord.specs.plan import SpecTreePlan, coord_id
+        from wavecoord.specs.plan import SpecTreePlan
         plan = self.plan()
         if not isinstance(plan, SpecTreePlan):
             return None
@@ -320,10 +372,14 @@ class RefineryMixin(object):
         # the requirement's Verify describes the finished requirement: it runs with the merge of the last
         # open task under the requirement (a dropped or on_hold sibling is not open); earlier merges run the
         # task's own Acceptance
-        snap_states = self.states()
+        # a sibling's state from the coordinator reaches it through its aliases (a moved task merged under its
+        # old id); a sibling record that does not parse cannot say whether it is open: fail closed
+        gr = plan._graph(self.states())
         others = [x for x in plan.tree.tasks_under(t["requirement"]) if x != t["id"]]
-        pending = [x for x in others if snap_states.get(coord_id(x)) != "done" and
-                   (plan.tree.nodes[x].rec or {}).get("status") not in ("done", "dropped", "on_hold")]
+        broken = [x for x in others if plan.tree.nodes[x].rec is None]
+        if broken:
+            return unavailable("the task %s under %s does not parse" % (broken[0], t["requirement"]), info)
+        pending = [x for x in others if gr.status(x) not in ("done", "dropped", "on_hold")]
         info["requirement_pending"] = pending
         verify = [] if pending else list(t.get("verify") or [])
         cmds = []

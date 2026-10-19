@@ -264,6 +264,44 @@ class CliRobustTest(Repo):
         self.assertEqual(out.returncode, 1)
         self.assertIn("written by the coordinator", out.stdout)
 
+    def test_apply_dry_run_against_a_ref(self):
+        """Review item 16: `spec apply - --dry-run --ref <ref>` checks ops against that ref; a write with --ref is
+        still refused."""
+        os.remove(self.path(IMPL))  # the working tree lags: the ref has the task
+        ops = json.dumps([{"op": "set", "id": "auth/sessions/token-rotation/rotate-impl", "key": "title",
+                           "value": "Rotate"}])
+        env = dict(os.environ, PYTHONPATH=_paths.SRC)
+        base = [sys.executable, "-m", "wavecoord", "spec", "apply", "-"]
+        out = subprocess.run(base + ["--dry-run", "--ref", "main"], cwd=self.repo, env=env, input=ops,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+        self.assertEqual(out.returncode, 0, out.stderr)
+        self.assertIn("+title: Rotate", out.stdout)
+        out = subprocess.run(base + ["--ref", "main"], cwd=self.repo, env=env, input=ops,
+                             stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True, timeout=60)
+        self.assertEqual(out.returncode, 2)
+        self.assertFalse(os.path.exists(self.path(IMPL)))
+
+    def test_check_base_passes_the_status_writers_commit(self):
+        """Review item 0: the status PR (status lines only, each named by a Wavecoord-Status: trailer) passes the
+        documented CI check; the same change without the trailer, or with another edit, does not."""
+        from wavecoord.specs.status import set_status_line
+        git(self.repo, "checkout", "-q", "-b", "wavecoord/status")
+        self.write(IMPL, set_status_line(self.read(IMPL), "in_progress"))
+        git(self.repo, "add", "-A")
+        git(self.repo, "-c", "user.name=t", "-c", "user.email=t@example.invalid", "commit", "-q", "-m",
+            "wavecoord: status (1 task)", "-m", "Wavecoord-Status: auth.sessions.token-rotation.rotate-impl planned"
+                                              " in_progress")
+        out = run("check", "--base", "main", cwd=self.repo)
+        self.assertEqual(out.returncode, 0, out.stdout + out.stderr)
+        # a trailer that names another change does not cover this one
+        self.write(IMPL, set_status_line(self.read(IMPL), "done"))
+        out = run("check", "--base", "main", cwd=self.repo)
+        self.assertEqual(out.returncode, 1, out.stdout)
+        self.assertIn("written by the coordinator", out.stdout)
+        # a status line plus another edit is a plan change
+        self.write(IMPL, set_status_line(self.read(IMPL), "in_progress").replace("title: ", "title: X ", 1))
+        self.assertEqual(run("check", "--base", "main", cwd=self.repo).returncode, 1)
+
 
 @unittest.skipUnless(os.environ.get("WAVECOORD_PERF"), "WAVECOORD_PERF=1 runs the perf test")
 class PerfTest(Repo):

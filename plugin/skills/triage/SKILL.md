@@ -3,6 +3,7 @@ name: triage
 description: Process wavecoord feedback as the lead. Turns each report, notice, conflict, proposal and inbox message into the next action - merge or queue done work, answer or escalate blocked and needs_decision attempts, retry failed attempts with an adjusted spec or another provider, send conflicts to resolve, and proposals to revise. Use after lead events arrive, when the user asks what the workers need, or on a loop for unattended runs.
 argument-hint: "[--unattended]"
 allowed-tools:
+  - mcp__plugin_wavecoord_wavecoord__collect
   - mcp__plugin_wavecoord_wavecoord__proposals
   - mcp__plugin_wavecoord_wavecoord__inbox
   - mcp__plugin_wavecoord_wavecoord__ack
@@ -19,7 +20,11 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__refinery_merge
   - mcp__plugin_wavecoord_wavecoord__propose
   - mcp__plugin_wavecoord_wavecoord__config
-  - Bash(wavecoord *)
+  - Bash(wavecoord status)
+  - Bash(wavecoord status *)
+  - Bash(wavecoord events *)
+  - Bash(wavecoord hint *)
+  - Bash(wavecoord attempts logs *)
   - Agent
 ---
 
@@ -35,6 +40,7 @@ Arguments: $ARGUMENTS
 
 Gather the open items once, then act:
 
+0. `collect`: it ends finished attempts on the hosts, opens their PRs on this machine (or records a merge-tree conflict), starts a resolver when `auto_resolve` is on, goes on with the next provider after a rate limit, and releases the leases of PRs merged or closed outside the refinery. Without it no PR opens and the refinery queue stays empty. Its result lists each attempt with its actions and errors.
 1. The event lines in this conversation since the last triage (Monitor, channel, or the hook text "Coordination events since your last turn").
 2. `inbox`: messages to the lead.
 3. `attempts` with state `reported` and `failed`; `attempt_get` for each one you will act on (report, cost, turns, retries, throttling, `next_provider`, PR URL).
@@ -48,7 +54,7 @@ Details and the retry rules: [actions.md](actions.md).
 
 | Item | Action |
 |---|---|
-| Report `done`, acceptance met, pushed | `refinery_merge`. When the refinery holds it (protected path, failed check), report the hold. Protected path: ask the user |
+| Report `done`, acceptance met, pushed | `refinery_merge`. When the refinery holds it (protected path, failed check), report the hold. Protected path: ask the user, then `refinery_merge` with that `pr` and `approved_protected` |
 | Report `done` but acceptance not met, or not pushed | Treat as `failed` (below); say why |
 | Report `blocked` | Read the question. Answer with `send` to the task when the spec or the code answers it. Otherwise ask the user |
 | Report `needs_decision` | A design choice: ask the user, unless the spec decides it. Record the answer in the spec (`/wavecoord:revise`), then retry |
@@ -60,10 +66,13 @@ Details and the retry rules: [actions.md](actions.md).
 | Notice `progress` (a running worker's digest) | Nothing, unless it shows the worker off its task: then steer (actions.md, "Steer a running worker") |
 | Notice `stuck` (`loop`, `failing`, `waiting`, `budget`, `quiet`) | Steer by `auto_steer` of `config` (actions.md, "Steer a running worker") |
 | `lease.stale` (by `watchdog` or TTL) | The worker is idle. Check `attempt_get`; send a message, or steal and redispatch after you tell the user |
-| Refinery hold `verify_failed` (spec tree) | The task's Acceptance or its requirement's Verify, run from the default branch, failed on the merge result. Treat as `failed`; the requirement is not met yet |
+| Refinery hold `report_not_done` | The report is `failed`, `blocked` or `needs_decision` but the branch has a PR. Handle it by its report status (rows above); the refinery never merges it. To retry, continue the attempt or abandon it (actions.md, "Retry an attempt that has a PR") |
+| Refinery hold `held` | The task is `dropped`, `on_hold` or `draft` on the default branch (or not in the flat plan). Ask the user: close the PR (actions.md, "Retry an attempt that has a PR"), or restore the task with `/wavecoord:revise` |
+| Refinery hold `unavailable` | A check could not run (git, a command, the plan). Report the detail; the next `refinery_merge` tries again |
+| Refinery hold `verify_failed` (spec tree) | The task's Acceptance or its requirement's Verify, run from the default branch, failed on the merge result. Treat as `failed`; the requirement is not met yet. Retry by continuing the attempt (actions.md, "Retry an attempt that has a PR") |
 | Refinery hold `verify_unavailable` (spec tree) | The task or its requirement is missing or does not parse on the default branch, so nothing could verify it. Fix the record in a plan PR (`/wavecoord:revise`), then merge again |
-| Refinery hold `spec_change` | A task PR changed the spec tree. Never merge it: the worker's change goes through `/wavecoord:revise` as a proposal; retry the task without it |
-| Event `spec.status_blocked` | The coordinator could not write task status into the spec tree (push refused, status PR not merged). Tell the user; the live status stays in the coordinator |
+| Refinery hold `spec_change` | A task PR changed the spec tree. Never merge it: the worker's change goes through `/wavecoord:revise` as a proposal; continue the attempt with a prompt that removes its change to the spec tree (actions.md, "Retry an attempt that has a PR") |
+| Event `spec.status_blocked` | The coordinator could not write task status into the spec tree (push refused, status PR not merged, for example while its CI runs). Tell the user; the live status stays in the coordinator |
 | Conflict | `/wavecoord:resolve` |
 | Proposal, `proposals` or `plan_feedback` in a report (also `requirement_gap` and `spec_change`) | `/wavecoord:revise` |
 | Message from a worker | Answer with `send` (`reply_to` the message id) when you can; else ask the user. `ack` it when handled |

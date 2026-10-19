@@ -51,6 +51,19 @@ class MigrateTest(unittest.TestCase):
         later = dict(states, logout="done")
         self.assertEqual({n["id"]: n["state"] for n in plan.graph(later)["nodes"]}[coord_id(ids["logout"])], "done")
 
+    def test_migrated_statuses_pass_the_ci_check(self):
+        """Review item 7: `spec check --base` accepts the coordinator statuses migrate-plan writes on new tasks
+        that carry a flat id in aliases; the op API (and a new task without such an alias) still refuses them."""
+        from wavecoord.specs.check import plan_change_problems
+        files, ids, _ = migrate([flat("login"), flat("signup")], {"login": "done", "signup": "active"})
+        before, after = Tree({}), Tree(files)
+        self.assertEqual(plan_change_problems(before, after, ci=True), [])
+        self.assertEqual(len(plan_change_problems(before, after)), 2)
+        rel = [k for k in files if k.endswith("/login.md")][0]
+        files[rel] = files[rel].replace("aliases:\n  - login\n", "")
+        probs = plan_change_problems(before, Tree(files), ci=True)
+        self.assertEqual([p.id for p in probs], [ids["login"]])
+
     def test_flat_states(self):
         """Item 66: blocked is on_hold; a file's active or review without a live attempt is planned."""
         files, ids, _ = migrate([flat("a", "blocked"), flat("b", "active"), flat("c", "review"), flat("d", "done"),

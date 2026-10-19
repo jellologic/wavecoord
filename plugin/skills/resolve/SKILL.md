@@ -10,9 +10,11 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__plan_get
   - mcp__plugin_wavecoord_wavecoord__refinery_status
   - mcp__plugin_wavecoord_wavecoord__refinery_merge
+  - mcp__plugin_wavecoord_wavecoord__collect
   - mcp__plugin_wavecoord_wavecoord__send
   - mcp__plugin_wavecoord_wavecoord__config
-  - Bash(wavecoord *)
+  - Bash(wavecoord status)
+  - Bash(wavecoord status *)
   - Bash(git fetch *)
   - Bash(git log *)
   - Bash(git diff *)
@@ -42,13 +44,15 @@ For each open conflict from `conflicts` (or the ids in the arguments):
 |---|---|
 | One side is done and checked, the other still runs | Merge the done side first (`refinery_merge`); `send` the other worker a note to rebase on the default branch |
 | Both done; the overlap is mechanical (imports, lists, formatting, a changelog) | Merge one side; start a resolver for the other with `resolve` |
-| Both done; the changes disagree on behavior or an interface | Ask the user which behavior wins. Then start a resolver with that decision in the brief |
+| Both done; the changes disagree on behavior or an interface | Ask the user which behavior wins. Then start a resolver with that decision as its `brief` |
 | A path overlap between live leases with no commits yet | `send` both holders which files each owns; propose a plan edit to make `paths` disjoint (`/wavecoord:revise`) |
 | A protected path is in the conflict | Ask the user before any merge |
 
 ## 3. Start a resolver
 
-Fill in the brief from [resolver-brief.md](resolver-brief.md) and pass it to `resolve` as the brief or note field of its input schema. The brief names the base, the branches, the files, the decision, what to keep from each side, and the acceptance commands of both specs. A resolver works on its own branch and ends with a report like any worker; triage merges it.
+Call `resolve` with the attempt (`<task>/<n>`) or the conflict id. The server writes the resolver's brief: the conflicting files, both sides' intents and the acceptance commands. When the user decided something, fill in [resolver-brief.md](resolver-brief.md) and pass it as `brief`: the resolver reads it first and it wins over the rest of the brief. Use `dry_run: true` to see the whole brief first.
+
+A resolver is a `--continue` run of the same attempt: it merges the default branch into the attempt's branch, keeps its PR, and does not push itself (the launcher does). `resolve` is refused while a run of the attempt is in flight. When the resolver reports, `collect` closes the conflict; triage then merges the PR with `refinery_merge`.
 
 ## 4. Report
 

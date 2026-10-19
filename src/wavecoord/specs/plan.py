@@ -120,8 +120,11 @@ class SpecTreePlan(object):
                                                       for i, e in self.tree.parse_errors.items())}
 
     def get(self, cid):
-        tid = tree_id(cid)
-        n = self.tree.nodes.get(tid) or self.tree.nodes.get(task_of(self.tree, cid) or self.tree.resolve(tid) or "")
+        # the task the id names (directly, by an old tree id or by a flat id), before any non-task node that the
+        # same text spells (a flat id `auth.sessions` and the feature auth/sessions)
+        tid = task_of(self.tree, cid)
+        n = self.tree.nodes.get(tid) if tid else (self.tree.nodes.get(tree_id(cid)) or
+                                                   self.tree.nodes.get(self.tree.resolve(tree_id(cid)) or ""))
         if n is None or n.kind != "task":
             raise PlanError("no task %s in %s" % (cid, self.label))
         if n.rec is None:

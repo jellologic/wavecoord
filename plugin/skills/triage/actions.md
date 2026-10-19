@@ -2,8 +2,9 @@
 
 ## Merge
 
-- `refinery_merge` runs `check_cmd`, then `merge_cmd`. It refuses an attempt whose lease epoch is not current.
-- A hold for a protected path (`protected_paths_cmd`) waits for the user. Ask: "Attempt <task>/<n> changes <paths>, which are protected. Approve the merge?" Merge only after the user says yes in this session.
+- `collect` first: it opens the PRs of finished attempts. The refinery queue holds only attempts with a PR.
+- `refinery_merge` merges only attempts whose report is `done` and tasks the plan still wants (not `dropped`, `on_hold` or `draft`). It runs `check_cmd`, then `merge_cmd`. It refuses an attempt whose lease epoch is not current. A check that cannot run blocks that PR (`unavailable`); the others go on.
+- A hold for a protected path (`protected_paths_cmd`) waits for the user. Ask: "Attempt <task>/<n> changes <paths>, which are protected. Approve the merge?" Merge only after the user says yes in this session, with `refinery_merge` naming that `pr` and `approved_protected: true` (it is refused without `pr`).
 - After a merge, the tasks that needed it can become ready. `plan_ready` shows them.
 
 ## Failed attempts: find the cause
@@ -31,11 +32,18 @@ When `attempt_get` shows `continue_suggested: true`, the worker used its turns (
 2. Run `wavecoord launch --task <task> --attempt <n> --continue --prompt-file <file>`. Add `--max-turns <m>` when the spec cap was too low (about half of the first cap is usually enough). The run resumes the session on the same host and takes over the parked lease.
 3. A continued run counts as a retry for the limits below. When it also hits the limit, split the task (`/wavecoord:revise`).
 
+## Retry an attempt that has a PR
+
+An attempt with a PR keeps its lease parked and the task counts as in review, so `dispatch` refuses the task (`not ready: status in_review`). This is the case after a refinery hold (`verify_failed`, `spec_change`, `report_not_done`) and for a `failed` or `blocked` report whose branch has commits. Two ways out:
+
+- **Continue the attempt** (the usual one): `wavecoord launch --task <task> --attempt <n> --continue --prompt-file <file>`, with a prompt that names what failed (the hold's `detail`, the failing command) and what to change. It keeps the branch, the PR and the lease. When it reports `done`, `refinery_merge` again. The command asks for permission; in unattended mode put it in the summary list.
+- **Abandon the attempt**: close its PR (ask the user first; for example `gh pr close <pr>`), then `collect`. It ends the attempt `abandoned` and releases its lease, so the task is ready again and `dispatch` starts a new attempt.
+
 ## Retry limits
 
 - At most 2 attempts per task without the user. After the second failure, stop and ask with the two causes.
 - Each retry changes something (provider, host, spec, limits). An identical retry is allowed only for a flaky check or a hung tool, and only once.
-- A retry is `dispatch` with the task id (and a host when you need another host). A spec change goes through `/wavecoord:revise` first: with a spec tree it is a `spec_edit` op on the task record (never `plan_edit`, which writes the flat plan); with the flat plan it is a `plan_edit`. Until the plan PR merges, say in the dispatch note what changed.
+- A retry of an attempt without a PR is `dispatch` with the task id (and a host when you need another host); one with a PR: "Retry an attempt that has a PR" above. A spec change goes through `/wavecoord:revise` first: with a spec tree it is a `spec_edit` op on the task record (never `plan_edit`, which writes the flat plan); with the flat plan it is a `plan_edit`. `dispatch` has no note field: until the plan PR merges, the new attempt runs the spec on the default branch, so wait for the merge when the change matters to the worker, or continue the attempt with a prompt that says what changed.
 
 ## Answers to workers
 
@@ -56,7 +64,7 @@ On a `stuck` notice, read `auto_steer` from `config`:
 Send with the commands (they work for any running worker, on any host):
 
 - `wavecoord hint <task> "<text>"`: a plain hint, read at the worker's next step.
-- `wavecoord steer <task> interrupt --note "<text>"`: stop the current turn now; the worker reads the note next.
+- `wavecoord steer <task> interrupt --note "<text>"`: stop the current turn now; the worker reads the note next. `steer` asks for permission.
 - `wavecoord steer <task> model <model> [--note "<text>"]`: switch the worker's model for the rest of the run.
 - `wavecoord steer <task> stop`: stop the run (the attempt ends `stopped`). Only with the user.
 
@@ -65,4 +73,8 @@ A hint is guidance for the task; the spec stays the authority. Never use a hint 
 ## Stale leases
 
 - `lease.stale` by `watchdog`: the worker heartbeats but does nothing. First `send` a message. If it stays idle, ask the user before you steal the lease or redispatch, unless the user allowed that for this wave.
+
+## Commands that ask for permission
+
+The skills pre-approve only `wavecoord status`, `events`, `hint` and `attempts logs`. Every other command (`launch`, `steer`, `refinery`, `revert`, `rebuild`, `tokens`, `gc`, `spec apply`) asks the user each time, so text from a worker cannot run one.
 - A lease that the user set (`user_set`) is never stale by the watchdog. Leave it alone.

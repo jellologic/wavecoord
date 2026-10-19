@@ -93,7 +93,7 @@ If you hold, drop or draft a task while its attempt runs, your status stays in t
 
 If a merge is rolled back (`wavecoord rebuild --at`, or a revert of the merge commit), the file still says `done`. `wavecoord spec status-sync --reset <task>` (or `spec_status_sync` with `reset`) sets it back to `planned` when the coordinator has no merged attempt for it.
 
-A push that lost a race is retried after a fetch. When the default branch refuses the push (branch protection), the same commit goes to the branch `wavecoord/status`, one PR "wavecoord: status" carries it, and `merge_cmd` merges it with the same placeholders and `WAVECOORD_*` variables as a task PR. wavecoord force-pushes this branch (it is its own), and rebuilds it only when the changes or the default branch move, so its checks can finish. A closed status PR is replaced by a new one. Any other push failure, or a status PR that cannot be merged, is logged as `spec.status_blocked`, once per reason, and the status stays live in the coordinator. A status flush never fails `dispatch`, `collect` or a merge. `wavecoord spec status-sync` (or the `spec_status_sync` tool) flushes at once.
+A push that lost a race is retried after a fetch. When the default branch refuses the push (branch protection), the same commit goes to the branch `wavecoord/status`, one PR "wavecoord: status" carries it, and `merge_cmd` merges it with the same placeholders and `WAVECOORD_*` variables as a task PR. wavecoord force-pushes this branch (it is its own), and rebuilds it only when the changes or the default branch move, so its checks can finish. A closed status PR is replaced by a new one. After a restart the writer finds its open status PR again (by `pr_state_cmd` with the branch, or the answer of `pr_cmd`) instead of opening a second one. Any other push failure, or a status PR that cannot be merged, is logged as `spec.status_blocked`, once per reason, under the actor `status-writer` (so it reaches the lead's feed: `feedback.md`), and the status stays live in the coordinator. A status flush never fails `dispatch`, `collect` or a merge. `wavecoord spec status-sync` (or the `spec_status_sync` tool) flushes at once.
 
 Status commits and the commits of `spec_edit` and `plan_edit` do not run your git hooks (`core.hooksPath=/dev/null`, `--no-verify`), so a commit-message or pre-push hook does not refuse them. Check them in CI instead.
 
@@ -106,6 +106,8 @@ Each task records `basis`, a fingerprint of its requirement. When the requiremen
 - A worker's PR may not change `specs/` (or your `spec.dir`, in any letter case). Workers propose spec changes in their report, and `/wavecoord:revise` turns the ones you accept into a plan PR. This rule applies only when the repo uses the spec tree: `plan.adapter` is `specs`, or there is no `plan` key and `spec.dir` has files on the default branch. With `"plan": {"adapter": "builtin"}`, a `specs/` folder of your own (an OpenAPI file, say) is just code.
 - The merge re-runs the task's Acceptance, taken from your default branch, and, with the last open task of a requirement, the requirement's Verify too (a `dropped` or `on_hold` sibling is not open). They run on the merge of your default branch and the PR, so sibling work merged earlier is there, and after the fence check. They get a scrubbed environment: add names with `"verify_env": ["CARGO_HOME"]` (`security.md`). A failure blocks (`verify_failed`). A task or requirement record that is missing or does not parse blocks too (`verify_unavailable`). Turn this off with `"verify_at_merge": false` in the config on your default branch; the lead's working tree copy does not count.
 - If you drop the last open task of a requirement after its siblings merged, no merge runs the requirement's Verify. Run it yourself, or in CI.
+- The refinery merges only a PR whose report is `done`, of a task that is not `dropped`, `on_hold` or `draft` on your default branch. A PR of a task you held or dropped waits (`held`): close it, or restore the task's status in a plan PR.
+- A task id names its coordinator history (attempts, merges). `spec_edit` refuses a new task under the id of a deleted task that the coordinator merged, runs or has in review: it would start as done or running. A hand edit in a plan PR is not checked against the coordinator, so pick a new name there too.
 - `spec.dir` is read as a clean relative path (`./specs/` is `specs`); the schema rejects `.`, `..` and `//` in it.
 - The PR body of a task ends with the trailers `Spec-Task:` and `Spec-Basis:`, so a squash merge carries them into `git log`.
 - When your default branch is protected, status commits go through one `wavecoord: status` PR instead.
@@ -121,7 +123,10 @@ Two branches that change different nodes never conflict. To keep it that way:
 - let the tools write, or run `wavecoord spec fmt`;
 - move nodes with `wavecoord spec mv`, which keeps the old ID as an alias.
 
-Put `wavecoord spec check --base origin/main && wavecoord spec fmt --check` in CI.
+Put `wavecoord spec check --base origin/main && wavecoord spec fmt --check` in CI. Two changes pass that check although they set statuses the coordinator writes:
+
+- the status PR (`wavecoord/status`): its commit changes `status:` lines only, between `planned`, `in_progress`, `in_review` and `done`, and names each change in a `Wavecoord-Status:` line of its message. A hand edit has no such line and is reported. Anyone who can push can write that line, so treat the status branch like your other bot branches in review rules;
+- the output of `wavecoord spec migrate-plan`: a new task whose `aliases` hold a flat plan id (no `/`) keeps the status the coordinator gave it.
 
 ## Commands
 
@@ -151,13 +156,15 @@ wavecoord spec migrate-plan --dry-run            move plan/tasks into the tree
 
 Then commit `specs/` with the removal of `plan/tasks`, open a plan PR and merge it. Move the tasks under real requirements with `wavecoord spec mv`.
 
+Migrate before the first spec records land on your default branch. With no `plan` key, the merge of the first record switches the lead from `plan/tasks` to the tree; flat tasks that are not in the tree then block at merge (`verify_unavailable`) and are no longer dispatched. `spec_edit` warns with `switch:` when its PR would do that.
+
 Every read takes `--json`, and every write takes `--dry-run`. In the lead session, `/wavecoord:spec` builds the tree with you and opens one plan PR, and `/wavecoord:wave-plan` plans tasks under requirements.
 
 ## In the lead session
 
-The lead plans from the spec tree when `plan.adapter` is `specs`, or when no adapter is set and `spec.dir` on the default branch holds at least one valid record. Stray files there (an `openapi.yaml`, a README) do not count, and the lead never reads the tree from its working tree: commit and merge the tree first. The `config` tool shows which store is in use.
+The lead plans from the spec tree when `plan.adapter` is `specs`, or when no adapter is set and `spec.dir` on the default branch holds at least one valid record. Stray files there (an `openapi.yaml`, a README) do not count, and the lead never reads the tree from its working tree: commit and merge the tree first. The `config` tool shows which store is in use. When it cannot read the default branch, the lead refuses (`unavailable`) instead of planning from `plan/tasks`. With `plan.adapter` set to `builtin` or `commands`, the spec tools still read the tree but nothing dispatches from it: `spec_tree` and `spec_waves` say so in `plan_note`.
 
-The lead's tools read the tree on the default branch: `spec_tree`, `spec_get`, `spec_query`, `spec_waves`, `spec_trace` and `spec_check`. `spec_edit` takes the same ops as `wavecoord spec apply`, writes them as one commit on a new `plan/<n>` branch (moves as `git mv`), and opens a PR; pass its `branch` to the next `spec_edit` to add to the same PR.
+The lead's tools read the tree on the default branch: `spec_tree`, `spec_get`, `spec_query`, `spec_waves`, `spec_trace` and `spec_check`. `spec_edit` takes the same ops as `wavecoord spec apply`, writes them as one commit on a new `plan/<n>` branch (moves as `git mv`), and opens a PR; pass its `branch` to the next `spec_edit` to add to the same PR, whose body it then rewrites for the whole branch (files, check, warnings; with `gh pr edit`, so a `pr_cmd` without `gh` gets `pr_body_error`). To preview ops against what `spec_edit` reads, run `wavecoord spec apply - --dry-run --ref origin/main` (or `--ref origin/plan/<n>`); `--ref` works only with `--dry-run`.
 
 `spec_waves` and `spec_trace` name tasks by their path. The coordinator names a task by its path with `.` for `/`: `auth/sessions/token-rotation/rotate-impl` is task `auth.sessions.token-rotation.rotate-impl` in leases, attempts, branches (`wave/<task>-<n>`) and the PR's `Task:` line. `check` keeps that name within 64 characters. After `mv`, the old id stays in `aliases`, and the coordinator's leases, attempts and merges under it still belong to the task: a moved task keeps its status and is not dispatched again. `plan_get` and `dispatch` take the tree id or an alias too.
 
