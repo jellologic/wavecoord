@@ -25,6 +25,7 @@
         "resolve.start", "resolve.end",
         "refinery.queue", "refinery.merge", "refinery.block",
         "proposal.new", "proposal.decide",
+        "spec.status", "spec.status_blocked",
         "revert"
       ]
     },

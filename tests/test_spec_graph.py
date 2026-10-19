@@ -56,7 +56,8 @@ class FixtureReadTest(unittest.TestCase):
                          ["auth/sessions/token-rotation/rotate-impl"])
         fs = edit(files(), ROT, lambda r: r["sections"].update(statement=r["sections"]["statement"] + " now"))
         g = Graph(Tree(fs))
-        self.assertIn("suspect", g.ready()["why_not"]["auth/sessions/token-rotation/rotate-impl"])
+        self.assertEqual(g.ready()["tasks"], ["auth/sessions/token-rotation/rotate-impl"])  # suspect: warn
+        self.assertIn("suspect", g.ready("refuse")["why_not"]["auth/sessions/token-rotation/rotate-impl"])
         self.assertEqual({s["task"] for s in g.suspects()}, {"auth/sessions/token-rotation/rotate-impl",
                                                              "auth/sessions/token-rotation/rotate-tests"})
 

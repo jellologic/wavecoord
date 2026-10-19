@@ -18,7 +18,13 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `default_provider` | `anthropic` | Profile when the task and the launch name none |
 | `wip_cap` | number of slots | Maximum attempts in flight |
 | `branch_prefix` | `wave` | Attempt branches are `<prefix>/<task>-<attempt>` |
-| `spec.dir` | `specs` | The spec tree's folder, relative to the repo root (`specs.md`). More `spec` keys arrive with the later phases of `design/spec-layer.md` |
+| `spec.dir` | `specs` | The spec tree's folder, relative to the repo root (`specs.md`) |
+| `spec.require_approved` | `true` | A task is ready only when its requirement is approved and its ancestors are active |
+| `spec.suspect` | `warn` | `refuse`: a task whose requirement changed since its `basis` is not ready |
+| `spec.verify_at_merge` | `true` | The refinery runs the task's Acceptance and its requirement's Verify, both from the default branch, before a merge; a failure blocks with `verify_failed` |
+| `spec.status_commits` | `true` | The coordinator writes task status into the spec tree (`specs.md`, Status) |
+| `spec.status_flush_s` | `60` | Seconds between status commits; a merge flushes at once |
+| `spec.status_author` | `wavecoord <wavecoord@localhost>` | Author of the status commits |
 | `auto_resolve` | `false` | On a merge-tree conflict of a finished attempt, the collector dispatches a resolver by itself (at most `MAX_RESOLVES` per conflict) |
 | `auto_steer` | `draft` | What `/wavecoord:triage` does with a `stuck` notice of a running worker: `off` nothing; `draft` the `steerer` subagent drafts a hint and the lead decides; `hints` triage sends plain-text hints itself (at most one per attempt every 10 minutes). Interrupts and model switches always need the lead's decision. A task PR cannot change it (`config_change`) |
 

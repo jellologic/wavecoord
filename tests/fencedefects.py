@@ -127,6 +127,8 @@ DEFECTS = {
             [(fence, "acked_entries", lambda: (lambda notice, batch: set(r.get("n") for r in batch)))]),
     "D24": ("a task PR that changes the lead's config (fence modes, claude_flags, hooks) passes the merge check",
             [(gatecheck, "config_changes", lambda: (lambda repo, base, head, paths: []))]),
+    "D25": ("a task PR that changes the spec tree passes the merge check",
+            [(gatecheck, "spec_changes", lambda: (lambda repo, base, head, paths: []))]),
 }
 
 

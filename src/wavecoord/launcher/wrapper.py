@@ -678,6 +678,9 @@ class Attempt(object):
             res.get("turns") if res.get("turns") is not None else "?",
             res.get("cost_usd") if res.get("cost_usd") is not None else "?", res.get("cost_basis")),
             "", "\U0001F916 Generated with [Claude Code](https://claude.com/claude-code)"]
+        trailers = [t for t in self.spec.get("trailers") or [] if isinstance(t, list) and len(t) == 2]
+        if trailers:  # last, as git trailers: a squash merge keeps them in the commit
+            lines += [""] + ["%s: %s" % (k, v) for k, v in trailers]
         return "\n".join(lines) + "\n"
 
     def pr_text(self, report, res):

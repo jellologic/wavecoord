@@ -321,7 +321,8 @@ class Graph(object):
 
     # ---------------------------------------------------------------- ready, suspect, trace
 
-    def ready(self):
+    def ready(self, suspect="warn"):
+        """Ready tasks; with suspect "refuse", a task whose requirement changed since its basis is not ready."""
         tasks, why = [], {}
         for t in self.open_tasks():
             st = self.status(t)
@@ -341,7 +342,7 @@ class Graph(object):
                 if inactive:
                     why[t] = "%s is %s" % (inactive[0], self.status(inactive[0]))
                     continue
-            if self.is_suspect(t):
+            if suspect == "refuse" and self.is_suspect(t):
                 why[t] = "suspect: the requirement changed since basis"
                 continue
             tasks.append(t)

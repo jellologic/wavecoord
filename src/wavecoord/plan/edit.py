@@ -142,9 +142,10 @@ def plan_branch(repo, branch=None):
     return branch, new, git(["rev-parse", "--verify", base_ref + "^{commit}"], repo), default
 
 
-def commit_files(repo, base_sha, branch, files, msg, body, wt_root=None, moves=()):
+def commit_files(repo, base_sha, branch, files, msg, body, wt_root=None, moves=(), author=None):
     """Write `files` ({path: text, or None to delete}) on top of base_sha in a fresh worktree, `git mv` each
-    (old, new) of `moves` first, commit once and push refs/heads/<branch>. -> the commit sha."""
+    (old, new) of `moves` first, commit once (as `author`, "Name <email>", when given) and push
+    refs/heads/<branch> without force. -> the commit sha."""
     from wavecoord.launcher.common import git, git_run
     from wavecoord.launcher.worktrees import REMOTE
 
@@ -172,7 +173,7 @@ def commit_files(repo, base_sha, branch, files, msg, body, wt_root=None, moves=(
         rc, out, _ = git_run(["diff", "--cached", "--quiet"], wt)
         if rc == 0:
             raise EditError("the edits change nothing")
-        git(["commit", "--quiet", "-m", msg, "-m", body], wt)
+        git(["commit", "--quiet", "-m", msg, "-m", body] + (["--author", author] if author else []), wt)
         commit = git(["rev-parse", "HEAD"], wt)
         rc, _, err = git_run(["push", "--quiet", REMOTE, "HEAD:refs/heads/" + branch], wt, timeout=600)
         if rc != 0:
