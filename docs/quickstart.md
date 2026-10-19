@@ -15,7 +15,7 @@ Put the same program on your PATH for the terminal steps below:
 
 ```bash
 curl -fsSL -o ~/.local/bin/wavecoord \
-  https://raw.githubusercontent.com/jellologic/wavecoord/v0.1.0/plugin/bin/wavecoord
+  https://raw.githubusercontent.com/jellologic/wavecoord/v0.2.0/plugin/bin/wavecoord
 chmod +x ~/.local/bin/wavecoord
 ```
 

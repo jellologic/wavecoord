@@ -23,7 +23,7 @@ The plugin needs a coordinator server on the lead machine. The plugin's `bin/wav
 
 ```bash
 curl -fsSL -o ~/.local/bin/wavecoord \
-  https://raw.githubusercontent.com/jellologic/wavecoord/v0.1.0/plugin/bin/wavecoord
+  https://raw.githubusercontent.com/jellologic/wavecoord/v0.2.0/plugin/bin/wavecoord
 chmod +x ~/.local/bin/wavecoord
 wavecoord version
 ```
