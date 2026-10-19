@@ -111,8 +111,10 @@ TOOLS = [
            "body": _STR}, ["ops"]),
      lambda c, ctx, a: _lead(c, ctx, True).spec_edit(a["ops"], a.get("branch"), a.get("title"), a.get("body"))),
     ("spec_status_sync", "Write every task's status into the spec tree now, from the coordinator's state (status commits"
-                         " on the default branch, or the status PR when the branch is protected).",
-     _obj({}), lambda c, ctx, a: _lead(c, ctx, True).status_flush(force=True)),
+                         " on the default branch, or the status PR when the branch is protected). reset: done tasks"
+                         " to set back to planned when the coordinator has no merge for them (a rolled-back merge).",
+     _obj({"reset": {"type": "array", "items": _STR}}),
+     lambda c, ctx, a: _lead(c, ctx, True).status_flush(force=True, wait=True, reset=a.get("reset"))),
     ("dispatch", "Claim the lease and start one attempt of one task on a chosen or placed host.",
      _obj({"task": _STR, "host": _STR, "overrides": _OVERRIDES, "dry_run": _BOOL}, ["task"]),
      lambda c, ctx, a: _lead(c, ctx, True).dispatch(a["task"], a.get("host"), a.get("overrides"),

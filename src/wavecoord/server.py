@@ -203,7 +203,8 @@ def _routes():
         ("GET", r"/api/spec/check", lambda a, x, m, b, q, k: _lead(a, x, False, lambda L: L.spec_check())),
         ("POST", r"/api/spec/edit", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.spec_edit(
             (b or {}).get("ops"), (b or {}).get("branch"), (b or {}).get("title"), (b or {}).get("body")))),
-        ("POST", r"/api/spec/status", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.status_flush(True))),
+        ("POST", r"/api/spec/status", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.status_flush(
+            True, wait=True, reset=(b or {}).get("reset")))),
         ("POST", r"/api/dispatch", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: _dispatch(L, b))),
         ("POST", r"/api/collect", lambda a, x, m, b, q, k: _lead(a, x, True, lambda L: L.collect(
             bool((b or {}).get("dry_run")), (b or {}).get("attempt")))),

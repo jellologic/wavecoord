@@ -1,7 +1,8 @@
 #!/usr/bin/env python3
 """A fake `gh` for tests: `gh pr create|view|edit|merge`, against the repo's origin. Stdlib only.
 
-  gh pr view <n|url> --json body      prints {"body", "baseRefName", "headRefName", "state", "mergedAt", ...}
+  gh pr view <n|url|branch> --json body
+                                      prints {"body", "baseRefName", "headRefName", "state", "mergedAt", ...}
                                       (state OPEN, MERGED or CLOSED; a test may set "state" in the file)
   gh pr edit <n|url> --body-file F    replaces the PR body
 
@@ -38,6 +39,17 @@ def opt(args, name):
     return args[args.index(name) + 1] if name in args else None
 
 
+def number(st, arg):
+    """A PR number, a PR URL, or a head branch (its latest PR, as gh does) -> the number or None."""
+    arg = str(arg).rstrip("/")
+    if arg.isdigit():
+        return int(arg)
+    if "/pull/" in arg:
+        return int(arg.split("/")[-1])
+    hits = [p["number"] for p in st["prs"] if p["head"] == arg]
+    return hits[-1] if hits else None
+
+
 def main(argv):
     path = os.environ["FAKE_GH_STATE"]
     st = load(path)
@@ -54,7 +66,10 @@ def main(argv):
             print("https://example.invalid/pull/%d" % n)
             return 0
         if argv[:2] in (["pr", "view"], ["pr", "edit"]):
-            n = int(str(argv[2]).rstrip("/").split("/")[-1])
+            n = number(st, argv[2])
+            if n is None:
+                sys.stderr.write("no pull requests found for branch \"%s\"\n" % argv[2])
+                return 1
             pr = st["prs"][n - 1]
             if argv[1] == "view":
                 print(json.dumps({"body": pr["body"], "baseRefName": pr["base"], "headRefOid": pr.get("sha", ""),

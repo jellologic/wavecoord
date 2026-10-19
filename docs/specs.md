@@ -84,9 +84,15 @@ You never write it. `wavecoord spec waves` computes it: two tasks can run togeth
 | task | `draft`, `planned`, `on_hold`, `dropped` | you, in a plan PR |
 | task | `in_progress`, `in_review`, `done` | wavecoord |
 
-wavecoord commits task status to your default branch as work moves: `in_progress` when a worker starts, `in_review` when its PR is open, `done` when it merges, and back to `planned` when an attempt ends without a merge. The coordinator reconciles: at each flush (every `spec.status_flush_s`, 60 s, and at once after a merge) it compares the files with what it knows and commits only the `status:` lines that differ, as `wavecoord: status (<n> tasks)` with one `Wavecoord-Status: <task> <from> <to>` line per change. It never changes your statuses (`draft`, `planned`, `on_hold`, `dropped`) and never undoes `done`. `status` is always the first line of the frontmatter, so these commits do not conflict with your plan PRs. `ready`, `blocked` and progress are computed, never written.
+wavecoord commits task status to your default branch as work moves: `in_progress` when a worker starts, `in_review` when its PR is open, `done` when it merges, and back to `planned` when an attempt ends without a merge. The coordinator reconciles: at each flush (every `spec.status_flush_s`, 60 s, and at once after a merge) it compares the files with what it knows and commits only the `status:` lines that differ, as `wavecoord: status (<n> tasks)` with one `Wavecoord-Status: <task> <from> <to>` line per change. It reads the files at one commit of the default branch and builds the status commit on that same commit, so it changes only `status:` lines. It writes only over `planned`, `in_progress` and `in_review`: it never changes `draft`, `on_hold` or `dropped`, and never undoes `done`. `in_review` needs an open PR; a finished attempt without one stays `in_progress`. `status` is always the first line of the frontmatter, so these commits do not conflict with your plan PRs. `ready`, `blocked` and progress are computed, never written.
 
-When the default branch refuses the push (branch protection), the same commit goes to the branch `wavecoord/status`, one PR "wavecoord: status" carries it, and `merge_cmd` merges it. If that fails too, the event log records `spec.status_blocked` and the status stays live in the coordinator. `wavecoord spec status-sync` (or the `spec_status_sync` tool) flushes at once.
+If you hold, drop or draft a task while its attempt runs, your status stays in the file and the task is not dispatched again. The attempt is not stopped; use `wavecoord steer <task> stop`. `status-sync` lists such tasks under `held`.
+
+If a merge is rolled back (`wavecoord rebuild --at`, or a revert of the merge commit), the file still says `done`. `wavecoord spec status-sync --reset <task>` (or `spec_status_sync` with `reset`) sets it back to `planned` when the coordinator has no merged attempt for it.
+
+A push that lost a race is retried after a fetch. When the default branch refuses the push (branch protection), the same commit goes to the branch `wavecoord/status`, one PR "wavecoord: status" carries it, and `merge_cmd` merges it with the same placeholders and `WAVECOORD_*` variables as a task PR. wavecoord force-pushes this branch (it is its own), and rebuilds it only when the changes or the default branch move, so its checks can finish. A closed status PR is replaced by a new one. Any other push failure, or a status PR that cannot be merged, is logged as `spec.status_blocked`, once per reason, and the status stays live in the coordinator. A status flush never fails `dispatch`, `collect` or a merge. `wavecoord spec status-sync` (or the `spec_status_sync` tool) flushes at once.
+
+Status commits and the commits of `spec_edit` and `plan_edit` do not run your git hooks (`core.hooksPath=/dev/null`, `--no-verify`), so a commit-message or pre-push hook does not refuse them. Check them in CI instead.
 
 Each task records `basis`, a fingerprint of its requirement. When the requirement's statement, scenarios, checks or contracts change, the task becomes suspect. `wavecoord spec suspect` lists such tasks; after review, `wavecoord spec rebase-basis <task>` clears it.
 
@@ -124,6 +130,7 @@ wavecoord spec show <id> [--json]
 wavecoord spec trace <id>                        parents, children, needs, producers, consumers, PRs
 wavecoord spec new requirement auth/sessions/token-rotation --title ...
 wavecoord spec status <task> on_hold
+wavecoord spec status-sync [--reset <task>]      write status now; --reset undoes a rolled-back done
 wavecoord spec mv <old id> <new id>
 wavecoord spec migrate-plan --dry-run            move plan/tasks into the tree
 ```

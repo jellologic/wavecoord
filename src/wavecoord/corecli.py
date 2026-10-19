@@ -140,7 +140,8 @@ def cmd_serve(args):
         wd.start()
     from wavecoord.lead import lead_for
     from wavecoord.specs.status import StatusLoop
-    status_loop = StatusLoop(lead_for(coord), float(os.environ.get("WAVECOORD_STATUS_FLUSH_S", 60)))
+    every = os.environ.get("WAVECOORD_STATUS_FLUSH_S")  # else spec.status_flush_s, read at each tick
+    status_loop = StatusLoop(lead_for(coord), float(every) if every else None)
     status_loop.start()  # status commits of the spec tree; a no-op without one
     sys.stdout.write("wavecoord serve: %s project=%s log=%s\n" % (srv.url, coord.project, coord.log.log_dir))
     sys.stdout.flush()
