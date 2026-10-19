@@ -463,7 +463,7 @@ Every read takes `--json`; the JSON shapes are in `spec-ops.schema.json`. **Quer
 | P5 | Races: a move against a reference to the old ID merges with an alias warning; a requirement change against a task planned on the old fingerprint merges with a suspect task; a cycle closed by two merges is an error |
 | P6 | A failing op batch writes nothing, in the working tree and on a plan branch |
 | P7 | Fingerprint: unchanged by reflow, reordering, title, status, tags, Rationale, Notes or a move; changed by a one-token change of the Statement, a step, a Verify command or an artifact |
-| P8 | Parallel safety: for a random valid tree, every pair of tasks in one computed wave satisfies P, and a dispatch of a whole wave gets every lease granted in fence enforce mode |
+| P8 | Parallel safety: for a random valid tree, every pair of tasks in one computed wave satisfies P (checked independently of `parallel_ok`), and every need of a task runs in an earlier wave. With the coordinator (S3): a dispatch of a whole wave gets every lease granted in fence enforce mode |
 | P9 | Alignment: random trees with one injected misalignment (an unproduced output, a double producer, an input without `from` or need, a file output outside `paths`) fail `check` with that rule |
 | P10 | `spec_change`: D25 and the table check |
 

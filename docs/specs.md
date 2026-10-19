@@ -1,6 +1,6 @@
 # Specs
 
-Status: in progress (P8). This page is the user guide; the design and the rollout are in `design/spec-layer.md`. Available now (S1): `wavecoord spec tree`, `show`, `query`, `check` (each record on its own), `lint`, `fmt` and `fp`. The checks across records, the writes, the coordinator and the skills arrive in S2 to S5.
+Status: in progress (P8). This page is the user guide; the design and the rollout are in `design/spec-layer.md`. Available now (S1, S2): every command below, `check` with all its rules, and `migrate-plan`. The coordinator (dispatch from the tree, status commits, the merge checks) and the skills arrive in S3 to S5.
 
 The spec tree is your plan, from capability to task, as Markdown files in your repo. People read and review them like code; wavecoord treats them as a database: each file is one typed record, and `wavecoord spec check` proves that the tree is consistent.
 

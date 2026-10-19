@@ -9,6 +9,12 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - **Spec tree, phase S1** (`docs/design/spec-layer.md`, `docs/specs.md`): typed Markdown records for capabilities, features, requirements, tasks and decisions under `specs/` (`spec.dir`).
   - `wavecoord spec tree|show|query|check|lint|fmt|fp`: read the tree from the working tree or a git ref (`--ref`, two git processes for any number of files), query it (`kind=task status=planned outputs~src/*`), check each record (layout, frame, schema, sections, artifacts, EARS, canonical form), format it canonically, and print a requirement's fingerprint.
   - `schemas/spec-record.schema.json`, and the `spec.dir` config key.
+- **Spec tree, phase S2**: the rules across records and the writes.
+  - `check` now also proves references (with aliases), blockers (`needs` on any node expands to its subtree and is inherited; no cycles; no needs on an ancestor or descendant), alignment rules A1-A7 between inputs, outputs and `needs`, and predicate P (two tasks that may run at the same time do not write the same paths); suspect tasks are warnings.
+  - New reads: `waves` (what can run together, the critical path, the width), `ready`, `trace`, `artifacts`, `suspect`.
+  - Writes through one op API (`schemas/spec-ops.schema.json`): `new`, `set`, `status`, `section`, `add`, `rm`, `artifact`, `artifact-rm`, `scenario`, `mv` (rewrites references, keeps the old id as an alias), `rebase-basis`, `supersede`, `delete`, and `apply` for a JSON list of ops. A change that would add an error writes nothing; `--dry-run` prints the diff.
+  - `migrate-plan` moves `plan/tasks` into the tree.
+  - Tests: real `git merge` of random edits on two branches (no conflict, the result checks clean), sorted inserts, genuine conflicts, status against other keys, races; parallel safety of the computed waves; injected misalignments; seeded defects S01-S06 and S09-S11.
 - **Block lists in the YAML subset**: `key:` followed by `- item` lines, in task specs too, and block lists of flat maps for the spec tree's inputs and outputs. Every file that parsed before parses to the same value.
 
 ## 0.1.6
