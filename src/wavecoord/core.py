@@ -949,7 +949,7 @@ class Coord(object):
         if not isinstance(body, dict) or not isinstance(body.get("summary"), str) or not body["summary"]:
             raise ApiError("bad_request", "need {summary, kind?, task?, attempt?, detail?}")
         kind = body.get("kind", "other")
-        if kind not in ("plan_edit", "new_task", "split", "dependency", "other"):
+        if kind not in ("plan_edit", "new_task", "split", "dependency", "requirement_gap", "spec_change", "other"):
             raise ApiError("bad_request", "invalid proposal kind")
         sender = self._sender(ctx)
         task = body.get("task")

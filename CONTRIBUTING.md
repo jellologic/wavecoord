@@ -22,7 +22,7 @@
    python3 scripts/smoke-live.py                     # this host
    python3 scripts/smoke-live.py --ssh build-1=build-1.lan:wc-smoke --origin <a remote both can push>
    ```
-   It prints a table to paste into the PR, with the Claude Code version of each host.
+   It prints a table to paste into the PR, with the Claude Code version of each host. Its `spec` check runs a two-task requirement of the spec tree through the coordinator (dispatch, status commits, verify at merge) with a real `claude`.
 5. Open a PR. CI (`.github/workflows/ci.yml`) runs the tests and the zipapp check on Ubuntu and macOS with Python 3.9 and 3.12. A PR merges after review and green CI.
 
 ## Rules

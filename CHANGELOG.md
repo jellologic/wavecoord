@@ -2,7 +2,9 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
-## Unreleased
+## 0.2.0
+
+The spec tree: requirements and plans as typed Markdown records in your repo, merge-friendly, checked by scripts, planned in waves, with live status in git (`docs/specs.md`, `docs/design/spec-layer.md`). Phases S0 to S5.
 
 ### Added
 
@@ -27,7 +29,18 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
   - The PR body of a tree task ends with the trailers `Spec-Task:` and `Spec-Basis:`.
   - Config keys `spec.require_approved`, `suspect`, `verify_at_merge`, `status_commits`, `status_flush_s`, `status_author`.
   - Seeded defects S07 and S08.
+- **Spec tree, phase S5**: the workflow.
+  - `/wavecoord:spec` builds and revises the tree with the user (references `ears.md`, `spec-templates.md`) and opens one plan PR with `spec_edit`.
+  - `wave-plan` plans tasks under requirements (outputs cover the requirement's promises, inputs from needs, Acceptance includes Verify, `spec_waves` in the PR body); `revise` handles suspect tasks and the proposal kinds `requirement_gap` and `spec_change`; `wave-run` uses `spec_waves`; `triage` handles `verify_failed`, `spec_change` and `spec.status_blocked`; `coord-status` shows the tree's progress.
+  - The planner and reviewer subagents read the tree (`spec_get`, `spec_query`, `spec_trace`, `spec_check`); the reviewer has a spec mode.
+  - Report proposals `requirement_gap` and `spec_change`.
+  - `scripts/smoke-live.py --checks spec`: a two-task requirement through the coordinator with a real `claude`.
 - **Block lists in the YAML subset**: `key:` followed by `- item` lines, in task specs too, and block lists of flat maps for the spec tree's inputs and outputs. Every file that parsed before parses to the same value.
+
+### Fixed
+
+- **A launched worker's `SessionEnd` hook released its own lease before the launcher pushed.** Real Claude Code runs `SessionEnd` when a worker ends; the hook sent `finish` with `pushed: false`, so the server released the lease, the attempt went to the refinery with no parked lease (blocked as `stale_lease`), and a task never showed as in review. The fake claude runs no `SessionEnd` hook, so only the live smoke test found it. The hook now leaves the finish to the launcher when `WAVECOORD_ATTEMPT_DIR` is set.
+- **Verify at merge on a requirement with several tasks.** The requirement's Verify describes the finished requirement, so it now runs with the merge of the last open task under it; earlier merges run the task's Acceptance and record the tasks still pending (`requirement_pending`).
 
 ## 0.1.6
 

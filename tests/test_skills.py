@@ -13,7 +13,7 @@ PLUGIN = os.path.join(_paths.ROOT, "plugin")
 SKILLS = os.path.join(PLUGIN, "skills")
 AGENTS = os.path.join(PLUGIN, "agents")
 TOOL_PREFIX = "mcp__plugin_wavecoord_wavecoord__"
-EXPECTED_SKILLS = {"coord-status", "wave-plan", "wave-run", "triage", "revise", "resolve"}
+EXPECTED_SKILLS = {"coord-status", "wave-plan", "wave-run", "triage", "revise", "resolve", "spec"}
 EXPECTED_AGENTS = {"planner", "reviewer", "steerer"}
 BUILTIN_TOOLS = {"Read", "Grep", "Glob", "Monitor", "Bash", "Edit", "Write", "Agent", "WebFetch"}
 PLUGIN_AGENT_IGNORED = ("hooks", "mcpServers", "permissionMode", "initialPrompt")
@@ -160,7 +160,8 @@ class AgentTest(unittest.TestCase):
                 listed = [t.strip() for t in fm["tools"].split(",")]
                 for t in listed:
                     if t.startswith(TOOL_PREFIX):
-                        self.assertIn(t[len(TOOL_PREFIX):], {"plan_get", "plan_graph", "config", "attempt_get"}, t)
+                        self.assertIn(t[len(TOOL_PREFIX):], {"plan_get", "plan_graph", "config", "attempt_get", "spec_get",
+                                                                       "spec_query", "spec_trace", "spec_check"}, t)
                     else:
                         self.assertIn(t, {"Read", "Grep", "Glob"}, "read-only tools only")
                 self.assertIn("data", body)

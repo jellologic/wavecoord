@@ -345,6 +345,12 @@ class NoticeTest(Base):
             self.hook("SessionEnd", self.fixture("SessionEnd", reason="clear"), env)
             self.assertEqual(len(fc.find("POST", "/api/agents/.*/finish")), 1)
 
+    def test_session_end_of_a_launched_worker_leaves_the_finish_to_the_launcher(self):
+        with FakeCoord() as fc:
+            env = self.worker_env(fc.url, WAVECOORD_ATTEMPT_DIR=self.tmp)
+            self.assertIsNone(self.hook("SessionEnd", self.fixture("SessionEnd"), env))
+            self.assertEqual(fc.find("POST", "/api/agents/.*/finish"), [])
+
     def test_session_end_budget(self):
         with FakeCoord() as fc:
             fc.delay[r"/api/agents/.*/finish"] = 5

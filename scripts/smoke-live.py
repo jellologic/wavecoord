@@ -23,6 +23,10 @@ Checks, per host:
             stuck notices for a loop (a warning only: the model decides how it loops)
   relay     (this host) a plain `claude -p` worker session gets a message through its
             inbox socket and repeats a random word
+  spec      (this host) a two-task requirement of the spec tree, through the coordinator: each wave
+            dispatched from the tree, the requirement in the worker prompt, status commits on main
+            (in_progress, in_review, done), the PR trailers, and the requirement verified at the
+            merge of its last task. PRs use the fake gh of tests/ against the throwaway origin.
 
 Exit 0 when every required check passed.
 """
@@ -40,11 +44,16 @@ import time
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 WAVECOORD = os.path.join(ROOT, "plugin", "bin", "wavecoord")
+FAKE_GH = os.path.join(ROOT, "tests", "fake-gh", "gh")
 PARENT_ENV = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_MESSAGING_SOCKET",
               "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_PLUGIN_OPTION_TOKEN", "CLAUDE_PLUGIN_OPTION_COORD_URL",
               "WAVECOORD_URL", "WAVECOORD_TOKEN", "WAVECOORD_TOKEN_FILE", "WAVECOORD_ROLE", "WAVECOORD_TASK",
               "WAVECOORD_AGENT_ID", "WAVECOORD_ATTEMPT_DIR", "WAVECOORD_STATE_DIR")
 ALLOWED = "Bash(sleep *),Bash(false),Bash(git *),Bash(ls *),Write,Edit"  # a throwaway repo; a prompt nobody answers stalls a run
+
+
+def run_ok(p):
+    return p.returncode == 0
 
 
 def word():
@@ -69,7 +78,10 @@ class Smoke(object):
         env = {k: v for k, v in os.environ.items() if k not in PARENT_ENV}
         env.update(WAVECOORD_HOME=self.home, WAVECOORD_TOKENS_FILE=os.path.join(self.home, "tokens.json"),
                    WAVECOORD_TOKEN_FILE=os.path.join(self.home, "token"), WAVECOORD_PROGRESS_S="10",
-                   WAVECOORD_INBOX_POLL_S="2", WAVECOORD_NOTIFY_MIN_INTERVAL_S="0")
+                   WAVECOORD_INBOX_POLL_S="2", WAVECOORD_NOTIFY_MIN_INTERVAL_S="0",
+                   FAKE_GH_STATE=os.path.join(self.tmp, "gh.json"),
+                   # the refinery calls `gh pr view`: the fake answers for the throwaway origin, never GitHub
+                   PATH=os.pathsep.join([os.path.dirname(FAKE_GH), os.environ.get("PATH", "")]))
         self.env = env
         self.server = None
 
@@ -96,7 +108,11 @@ class Smoke(object):
         for name, dest, path in self.args.ssh_hosts:
             hosts.append({"name": name, "ssh": dest, "slots": 2, "repo_path": path,
                           "claude_flags": ["--permission-mode", "acceptEdits", "--allowedTools", ALLOWED]})
-        cfg = {"project": "wcsmoke", "hosts": hosts, "wip_cap": 6, "pr_cmd": ["true"], "merge_cmd": ["true"]}
+        gh = [sys.executable, FAKE_GH]
+        cfg = {"project": "wcsmoke", "hosts": hosts, "wip_cap": 6, "spec": {"status_flush_s": 0},
+               "pr_cmd": gh + ["pr", "create", "--head", "{branch}", "--base", "{base}", "--title", "{title}",
+                               "--body-file", "{body_file}"],
+               "merge_cmd": gh + ["pr", "merge", "{pr}", "--merge", "--match-head-commit", "{sha}"]}
         os.makedirs(os.path.join(self.repo, ".claude"))
         with open(os.path.join(self.repo, ".claude", "wavecoord.json"), "w") as f:
             json.dump(cfg, f, indent=1)
@@ -298,6 +314,87 @@ class Smoke(object):
         pushed = os.path.isfile(os.path.join(env["WAVECOORD_STATE_DIR"], "pushed-%s.json" % self.key(agent)))
         self.record("local", "relay", w in result, "relay pushed %s; answer: %r" % (pushed, result[:200]))
 
+    def check_spec(self):
+        """A requirement with two tasks (b needs a) through the coordinator, wave by wave."""
+        host = "local"
+        req = "smoke/files/two-files"
+        a, b = req + "/write-a", req + "/write-b"
+        exec_ = {"model": self.args.model, "effort": "low", "max_turns": 15, "budget_usd": 1, "timeout_min": 10}
+
+        def task(tid, path, prompt, needs=(), inputs=()):
+            fields = {"title": "Write %s" % path, "status": "planned", "paths": [path], "class": "C", "size": "XS",
+                      "exec": exec_, "outputs": [{"id": path, "kind": "file"}]}
+            if needs:
+                fields.update(needs=list(needs), inputs=list(inputs))
+            return {"op": "create", "id": tid, "fields": fields, "sections": {
+                "Context": "A smoke test of the spec tree.", "Acceptance": ["test -f %s" % path], "Prompt": prompt}}
+
+        ops = [
+            {"op": "create", "id": "smoke", "fields": {"title": "Smoke", "status": "active"},
+             "sections": {"Intent": "Prove the spec tree end to end."}},
+            {"op": "create", "id": "smoke/files", "fields": {"title": "Files", "status": "active"},
+             "sections": {"Intent": "Two files, one after the other."}},
+            {"op": "create", "id": req, "fields": {"title": "Two files", "status": "approved"},
+             "sections": {"Statement": "When the smoke test runs, the repository shall contain out/a.txt and out/b.txt.",
+                          "Verify": ["test -f out/a.txt && test -f out/b.txt"]}},
+            task(a, "out/a.txt", "Create the file out/a.txt with the single line: a. Then run `git add out/a.txt` and"
+                                 " `git commit -m a`. Then finish with the structured report (status done)."),
+            task(b, "out/b.txt", "Create the file out/b.txt with the single line: b. Then run `git add out/b.txt` and"
+                                 " `git commit -m b`. Then finish with the structured report (status done).",
+                 needs=[a], inputs=[{"id": "out/a.txt", "kind": "file", "from": a}]),
+        ]
+        p = subprocess.run([sys.executable, WAVECOORD, "spec", "apply", "-"], cwd=self.repo, env=self.env,
+                           input=json.dumps({"ops": ops}), stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                           universal_newlines=True)
+        if p.returncode != 0:
+            return self.record(host, "spec: tree", False, p.stderr[-300:])
+        for args in (["add", "-A"], ["-c", "user.name=smoke", "-c", "user.email=smoke@example.invalid", "commit",
+                                     "-q", "-m", "spec tree"], ["push", "-q", "origin", "main"]):
+            sh(["git"] + args, cwd=self.repo)
+        self.record(host, "spec: tree", run_ok(self.wc("spec", "check", check=False)), "check on the tree")
+
+        def status_on_main(tid):
+            sh(["git", "fetch", "-q", "origin"], cwd=self.repo)
+            path = "specs/%s/tasks/%s.md" % tuple(tid.rsplit("/", 1))
+            text = sh(["git", "show", "origin/main:" + path], cwd=self.repo, check=False).stdout
+            for line in text.split("\n"):
+                if line.startswith("status: "):
+                    return line[8:].strip()
+            return None
+
+        verified = None
+        for tid in (a, b):
+            st, out = self.api("POST", "/api/dispatch", {"wave": True})
+            got = [d["task"] for d in (out or {}).get("dispatched") or []]
+            cid = tid.replace("/", ".")
+            if got != [cid]:
+                return self.record(host, "spec: wave %s" % tid, False, "dispatched %s: %s" % (got, out))
+            d = out["dispatched"][0]
+            prompt_path = os.path.join(self.home, "attempts", "wcsmoke", d["id"], "prompt.md")
+            prompt = open(prompt_path).read() if os.path.exists(prompt_path) else ""
+            self.record(host, "spec: dispatch %s" % tid.rsplit("/", 1)[1], "## Requirement" in prompt and
+                        status_on_main(tid) == "in_progress", "status on main %s; requirement in the prompt %s" % (
+                            status_on_main(tid), "## Requirement" in prompt))
+            r = self.wait_end(d["id"], host)
+            self.api("POST", "/api/collect", {})
+            review = status_on_main(tid)
+            st, m = self.api("POST", "/api/refinery/merge", {})
+            merged = [x for x in (m or {}).get("results") or [] if x.get("task") == cid]
+            ok = bool(merged and merged[0]["state"] == "merged")
+            spec = [e for e in self.events() if e["kind"] == "refinery.merge" and e.get("task") == cid]
+            verified = ((spec[-1]["payload"].get("spec") or {}).get("verified")) if spec else None
+            self.record(host, "spec: merge %s" % tid.rsplit("/", 1)[1], ok and review == "in_review" and
+                        status_on_main(tid) == "done", "report %s; in_review before the merge %s; %s; done on main %s;"
+                        " requirement verified %s" % (r.get("state"), review == "in_review",
+                                                     merged[0]["state"] if merged else m, status_on_main(tid) == "done",
+                                                     verified))
+            if not ok:
+                return
+        self.record(host, "spec: requirement verified at the last merge", verified is True, "verified %s" % verified)
+        prs = json.load(open(self.env["FAKE_GH_STATE"]))["prs"]
+        trailer = [p for p in prs if "Spec-Task: %s" % b in p.get("body", "")]
+        self.record(host, "spec: PR trailers", bool(trailer), "Spec-Task in the PR body of %s" % b)
+
     @staticmethod
     def key(agent):
         import hashlib
@@ -321,12 +418,17 @@ class Smoke(object):
             vers = self.versions(hosts)
             for h in hosts:
                 for c in self.args.checks:
-                    if c == "relay":
+                    if c in ("relay", "spec"):
                         continue
                     try:
                         getattr(self, "check_" + c)(h)
                     except Exception as e:  # noqa: BLE001 - one broken check must not hide the others
                         self.record(h, c, False, "error: %s" % e)
+            if "spec" in self.args.checks:
+                try:
+                    self.check_spec()
+                except Exception as e:  # noqa: BLE001
+                    self.record("local", "spec", False, "error: %s" % e)
             if "relay" in self.args.checks:
                 try:
                     self.check_relay()
@@ -355,7 +457,8 @@ class Smoke(object):
 def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--model", default="haiku")
-    ap.add_argument("--checks", default="hint,steer,listen,relay", help="comma-separated: hint,steer,listen,relay")
+    ap.add_argument("--checks", default="hint,steer,listen,relay,spec",
+                    help="comma-separated: hint,steer,listen,relay,spec")
     ap.add_argument("--ssh", action="append", default=[], metavar="NAME=DEST[:PATH]",
                     help="an ssh host (default path ~/wc-smoke-repo); needs --origin")
     ap.add_argument("--origin", help="a git remote that this machine and the ssh hosts can push to")

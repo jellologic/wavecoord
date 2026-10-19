@@ -153,7 +153,7 @@ TOOLS = [
            "approved_protected": _BOOL}),
      lambda c, ctx, a: _lead(c, ctx, True).refinery_merge(a.get("pr"), bool(a.get("approved_protected")))),
     ("propose", "Record a plan proposal (stored as a proposal event; plan_get shows the open ones).",
-     _obj({"text": _STR, "summary": _STR, "kind": {"enum": ["plan_edit", "new_task", "split", "dependency", "other"]},
+     _obj({"text": _STR, "summary": _STR, "kind": {"enum": ["plan_edit", "new_task", "split", "dependency", "requirement_gap", "spec_change", "other"]},
            "task": _STR, "attempt": _INT, "detail": _STR}), _propose),
     ("proposals", "List plan proposals, optionally by task and state (open, accepted, rejected, deferred, done).",
      _obj({"task": _STR, "state": _STR}),

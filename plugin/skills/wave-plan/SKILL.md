@@ -1,13 +1,20 @@
 ---
 name: wave-plan
-description: Decompose a goal or phase into wavecoord task specs, each with an LLM execution plan (model, effort, budget, turns, timeout, provider, risks and mitigations, acceptance commands, worker prompt, disjoint paths), have planner and reviewer subagents draft and critique them, then open one plan PR with plan_edit. Use when the user asks to plan a phase, a milestone, a wave or a feature for parallel workers.
-argument-hint: "<goal or phase> [--phase <label>]"
+description: Decompose a goal, a phase or the requirements of a spec tree feature into wavecoord task specs, each with an LLM execution plan (model, effort, budget, turns, timeout, provider, risks and mitigations, acceptance commands, worker prompt, disjoint paths), have planner and reviewer subagents draft and critique them, then open one plan PR with plan_edit. Use when the user asks to plan a phase, a milestone, a wave or a feature for parallel workers.
+argument-hint: "<goal, phase or spec tree node> [--phase <label>]"
 allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__config
   - mcp__plugin_wavecoord_wavecoord__plan_graph
   - mcp__plugin_wavecoord_wavecoord__plan_get
   - mcp__plugin_wavecoord_wavecoord__plan_ready
   - mcp__plugin_wavecoord_wavecoord__plan_edit
+  - mcp__plugin_wavecoord_wavecoord__spec_tree
+  - mcp__plugin_wavecoord_wavecoord__spec_get
+  - mcp__plugin_wavecoord_wavecoord__spec_query
+  - mcp__plugin_wavecoord_wavecoord__spec_trace
+  - mcp__plugin_wavecoord_wavecoord__spec_waves
+  - mcp__plugin_wavecoord_wavecoord__spec_check
+  - mcp__plugin_wavecoord_wavecoord__spec_edit
   - mcp__plugin_wavecoord_wavecoord__attempts
   - Bash(wavecoord *)
   - Bash(git log *)
@@ -22,6 +29,13 @@ allowed-tools:
 Goal from the user: $ARGUMENTS
 
 The result is **one plan PR** that adds or changes task specs. You never edit the default branch and you never dispatch from this skill. The spec format is `docs/task-spec.md` in the wavecoord repo; the template with every field is in [spec-template.md](spec-template.md).
+
+**With a spec tree** (`spec_tree` lists capabilities; `docs/specs.md`): tasks live under requirements, and the plan PR is made with `spec_edit`, not `plan_edit`. Follow the steps below with these changes:
+
+- Step 1: `spec_query` with `kind=requirement` under the node in the arguments (or the requirements that no task covers yet: `spec_tree` shows progress). Read each with `spec_get`. A requirement that is missing or unclear goes back to `/wavecoord:spec`, not into a task.
+- Step 2: give each `wavecoord:planner` subagent its requirements; it returns `create` ops with ids `<requirement>/<task>`.
+- Step 3, in addition: each output a requirement promises is an output of exactly one task, with the same kind and contract; a task's inputs come `from` a task it `needs`; file outputs lie in `paths`; Acceptance includes the requirement's Verify. Run `wavecoord spec apply --dry-run` or let `spec_edit` refuse what breaks the tree.
+- Step 5: one `spec_edit` call with all ops (or calls with the same `branch`). Put `spec_waves` of the result in the PR body: the waves, the critical path and the widest wave. New tasks are `planned` (or `draft` when the user wants to review them first).
 
 ## 1. Understand the goal
 
