@@ -1,8 +1,11 @@
 # Course recording rig
 
 `rig.py` records a real, scripted Claude Code session for the video course. It
-types into a live `claude` and waits on what the screen shows. It records only
-the terminal window, then adds the narration (`say`) and subtitles.
+types into a live `claude` and waits on what the screen shows. By default it
+runs headless: `claude` runs in a pty, its output is saved as an asciicast and
+[agg](https://github.com/asciinema/agg) renders it. Nothing on your screen is
+captured, so you can keep working during a take. Then it adds the narration
+(`say`) and subtitles.
 `build.py` turns the lesson scripts in `lessons/` into the course videos
 ([docs/course](../../docs/course/README.md)): see [Building the course](#building-the-course).
 
@@ -18,23 +21,28 @@ Outputs in `--out`:
 - `<lesson>.srt`: the subtitles as a sidecar file.
 - `timeline.json`: each step with its start and end time in the video.
 - `usage.json`: the tokens Claude Code used (from its transcripts in the lesson's `CLAUDE_CONFIG_DIR`), with the API list price per model.
-- `raw.mp4` (the cropped capture without audio), `voice/` (one narration clip per line), `ctl/` (driver state, the screen text).
+- `raw.mp4` (the rendered session without audio), `session.cast` (the asciicast it was rendered from), `voice/` (one
+  narration clip per line), `ctl/` (driver state; `screen.txt` is the screen at the end, `raw.txt` the output stream).
 
 ## How it works
 
 1. Each `say` line is rendered with `say -v Samantha -o`, so its length is known in advance.
-2. A dedicated Terminal.app window opens through AppleScript, with the profile
-   `wavecoord-course` (Menlo 20, dark background), at fixed bounds (default
-   1536x864 at 16,64). The rig's driver runs in it.
-3. The driver starts the lesson command in a pty sized to the window. It mirrors
-   the pty to the window and runs the `setup` steps off camera, for example the
-   folder-trust dialog.
-4. ffmpeg (avfoundation) records the screen, cropped to the window before
-   encoding. No full-screen frame is ever written. The crop also drops the title
-   bar and the rounded corners (`inset`).
-5. The driver plays `steps` and logs a timestamp for each one.
+2. The driver starts the lesson command in a pty of `size` (118x30) and runs the
+   `setup` steps off camera, for example the folder-trust dialog. It answers the
+   terminal queries Claude Code sends (device attributes, cursor position).
+3. A small VT100 screen (`Screen`) follows the output, so `wait_for` and `when`
+   match what is shown, not only the raw stream.
+4. The driver plays `steps` and logs a timestamp for each one. Video time zero
+   is the end of setup; what setup drew is the first frame.
+5. agg renders the asciicast (Menlo, `agg_font_size` 26) and ffmpeg turns it into
+   `raw.mp4`, about 1878x1048.
 6. The rig places each voice clip at its step's time (`adelay` + `amix`), writes
-   the .srt and centers the window on a 1920x1080 canvas without scaling it.
+   the .srt and centers the video on a 1920x1080 canvas.
+
+`--window` uses the older path instead: a dedicated Terminal.app window (profile
+`wavecoord-course`, Menlo 20, at fixed bounds) recorded with ffmpeg avfoundation,
+cropped to the window before encoding. It needs the one-time setup below, and
+anything that covers the window is recorded.
 
 ## Lesson format (JSON)
 
@@ -99,6 +107,8 @@ since the last action matches. This handles dialogs that appear only sometimes.
 
 ## One-time setup
 
+Headless takes need only `brew install agg`. The rest of this section is for `--window` takes.
+
 - **Screen recording** for the app that runs the rig (the terminal or IDE that
   starts `rig.py`): System Settings > Privacy & Security > Screen & System Audio
   Recording.
@@ -113,13 +123,13 @@ since the last action matches. This handles dialogs that appear only sometimes.
 
 ## Limitations
 
-- The recording is the live screen region. Keep the window in front and don't
+- `--window` only: the recording is the live screen region. Keep the window in front and don't
   touch it during a take. Keystrokes typed into the window go nowhere (the
   driver puts its tty in raw mode), but other windows moved over it would show.
-- Bounds assume a 1920x1080, non-Retina display with the Dock at the bottom. On
+- `--window` only: bounds assume a 1920x1080, non-Retina display with the Dock at the bottom. On
   a Retina display the scale factor is detected from `system_profiler`, or set
   `--scale-factor`.
-- Video time zero is estimated as the time ffmpeg was stopped minus the clip
+- `--window` only: video time zero is estimated as the time ffmpeg was stopped minus the clip
   length. Voice onsets in the proof take matched the step log to within 10 ms.
 - Claude Code's TUI changes between versions. The `wait_for` regexes are what
   breaks first.
@@ -150,7 +160,7 @@ Strings may use `${COURSE_DEMO_DIR}`, `${COURSE_PLUGIN}`, `${COURSE_URL}`, `${CO
 
 What a recording needs:
 
-- macOS with Terminal, `say`, `ffmpeg` and `rsvg-convert`, and the one-time setup above. Mermaid diagrams
+- macOS with `say`, `ffmpeg`, `agg` and `rsvg-convert`. Mermaid diagrams
   render with `mmdc` (or `npx @mermaid-js/mermaid-cli`) when present, else `build.py` draws them.
 - A dedicated, logged-in Claude Code profile: `CLAUDE_CONFIG_DIR=~/.wavecoord-course/claude claude auth login`
   once (`COURSE_HOME` moves `~/.wavecoord-course`). Its `projects/` folder gives the cost of each take.

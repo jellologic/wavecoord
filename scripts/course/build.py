@@ -813,6 +813,18 @@ def claude_cmd(env, *args, input=None, check=False):
     return p
 
 
+def seed_profile(config_dir, version):
+    """Mark Claude Code's first-run screens (theme picker, release notes) as seen in the course profile."""
+    path = os.path.join(config_dir, ".claude.json")
+    d = read_json(path) if os.path.exists(path) else {}
+    d.update({"hasCompletedOnboarding": True, "theme": d.get("theme") or "dark"})
+    if version:
+        d.update({"lastOnboardingVersion": version, "lastReleaseNotesSeen": version})
+    with open(path + ".tmp", "w") as f:
+        json.dump(d, f, indent=2)
+    os.replace(path + ".tmp", path)
+
+
 def prepare(lesson, env, home=COURSE_HOME, port=PORT, log=print):
     """Off camera: the demo repo, fresh tokens, the plugin options, the coordinator."""
     demos = load_demos()
@@ -829,6 +841,8 @@ def prepare(lesson, env, home=COURSE_HOME, port=PORT, log=print):
     for k in list(cenv):
         if k.startswith(("CLAUDECODE", "CLAUDE_CODE_")):
             cenv.pop(k)
+    ver = re.search(r"\d+\.\d+\.\d+", claude_cmd(cenv, "--version").stdout or "")
+    seed_profile(course_paths(home)["claude"], ver.group(0) if ver else None)
     if lesson.get("plugin") == "marketplace":
         # the install lesson starts with no wavecoord plugin and no marketplace in the course profile
         claude_cmd(cenv, "plugin", "uninstall", "wavecoord@wavecoord")
@@ -857,7 +871,7 @@ def prereqs(lessons, home=COURSE_HOME, port=PORT, cards_only=False):
     if sys.platform != "darwin":
         problems.append("recording needs macOS (Terminal, `say`, avfoundation); --validate works anywhere")
     for tool, how in (("ffmpeg", "brew install ffmpeg"), ("ffprobe", "brew install ffmpeg"),
-                      ("rsvg-convert", "brew install librsvg"), ("say", "macOS"), ("osascript", "macOS"),
+                      ("rsvg-convert", "brew install librsvg"), ("agg", "brew install agg"), ("say", "macOS"), ("osascript", "macOS"),
                       ("git", "xcode-select --install")):
         if not shutil.which(tool):
             problems.append("%s is missing (%s)" % (tool, how))
@@ -890,9 +904,6 @@ def prereqs(lessons, home=COURSE_HOME, port=PORT, cards_only=False):
             notes.append("lesson 01 downloads %s: it is not reachable yet (publish the v0.3.0 tag first)" % CLI_URL)
         notes.append("lesson 01 installs the plugin from the jellologic/wavecoord marketplace and the CLI into "
                      "~/.local/bin/wavecoord")
-        if os.path.exists(os.path.expanduser("~/.wavecoord/hosts/local.token")):
-            notes.append("~/.wavecoord/hosts/local.token exists: wavecoord init keeps it and doctor reports it as "
-                         "unknown to the course coordinator (doctor and init ignore WAVECOORD_HOME)")
     return problems, notes
 
 

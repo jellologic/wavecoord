@@ -143,12 +143,24 @@
       "enter": false
     },
     {
-      "wait_for": "spec-import",
+      "wait_for": "wavecoord:setup",
       "timeout": 20,
       "idle": 1.5
     },
     {
-      "say": "Type a slash and wavecoord, and you see its skills. Setup checks your install. Spec writes requirements. Spec import brings in files from other tools. Wave plan, wave run, triage, revise, resolve and coord status run the work. You will use each of them in this course."
+      "say": "Type a slash and wavecoord, and you see its skills. Setup checks your install. Spec writes requirements. Spec import brings in files from other tools. Wave plan, wave run, triage, revise, resolve and coord status run the work. You will use each of them in this course.",
+      "wait": false
+    },
+    {
+      "pause": 1.5
+    },
+    {
+      "key": "down",
+      "repeat": 8,
+      "gap": 1.7
+    },
+    {
+      "pause": 2.5
     },
     {
       "key": "backspace",

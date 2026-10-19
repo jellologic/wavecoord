@@ -56,6 +56,26 @@ class TempDir(unittest.TestCase):
 
 # ---------------------------------------------------------------- the lesson format
 
+class ScreenTest(unittest.TestCase):
+    def test_cursor_moves_and_erases(self):
+        sc = rig.Screen(30, 4)
+        sc.feed("hello\r\x1b[1B/wave\x1b[1mco")
+        sc.feed("ord\x1b[0m:spec-im\xe2\x80"[:-2] + "port\x1b[1;1H\x1b[2KHI\x1b[3;3Hx")
+        self.assertEqual(sc.text().splitlines(), ["HI", "/wavecoord:spec-import", "  x"])
+
+    def test_split_escape_and_scroll(self):
+        sc = rig.Screen(10, 2)
+        sc.feed("a\r\nb\x1b[")
+        sc.feed("2Kc\r\nd")
+        self.assertEqual(sc.text().splitlines(), [" c", "d"])
+
+    def test_replies_only(self):
+        for t in ("\x1b[31;5R", "\x1b[?62;22c", "\x1b[?1u", "\x1bP>|Terminal\x1b\\", "\x1b]11;rgb:0/0/0\x07"):
+            self.assertTrue(rig._REPLY.fullmatch(t), repr(t))
+        for t in ("\x1b[<35;10;5M", "x", "\x1b[A"):
+            self.assertFalse(rig._REPLY.search(t), repr(t))
+
+
 class RigFormatTest(unittest.TestCase):
     def test_proof_take_is_valid(self):
         with open(os.path.join(COURSE, "proof-take.json")) as f:

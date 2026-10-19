@@ -16,6 +16,7 @@ Stdlib only, Python >= 3.9, macOS. See README.md for the lesson format.
 """
 
 import argparse
+import codecs
 import json
 import os
 import re
@@ -27,6 +28,7 @@ import subprocess
 import sys
 import threading
 import time
+import unicodedata
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 
@@ -52,6 +54,15 @@ DEFAULTS = {
     # name, paths and process titles); bottom and sides drop the rounded corners,
     # where whatever is behind the window would show through.
     "inset": [34, 2, 20, 2],          # top, right, bottom, left
+    # Headless (the default): Claude Code runs in a pty of this size and agg renders its output.
+    # Nothing on the screen is captured, so other windows and notifications never reach a take.
+    "size": [118, 30],                # columns, rows: at agg_font_size this nearly fills a 1920x1080 frame
+    "agg_font_size": 26,
+    "agg_theme": "custom",
+    "agg_colors": "16181d,e6e6e6,1d1f21,e06c75,98c379,e5c07b,61afef,c678dd,56b6c2,d4d4d4,"
+                  "5c6370,e06c75,98c379,e5c07b,61afef,c678dd,56b6c2,ffffff",
+    "agg_font": "Menlo,SF Mono,Apple Symbols,Apple Color Emoji",
+    "agg_line_height": 1.3,
 }
 
 KEYS = {
@@ -67,6 +78,9 @@ KEYS = {
 
 _CSI = re.compile(r"\x1b\[([0-?]*)([ -/]*)([@-~])")
 _OSC = re.compile(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
+# answers a terminal sends back: cursor position (CSI r;c R), device attributes (CSI ?...c / CSI >...c),
+# kitty keyboard flags (CSI ?n u), XTVERSION (DCS > | ... ST) and OSC replies
+_REPLY = re.compile(r"\x1b\[\??\d+;\d+R|\x1b\[[?>][\d;]*c|\x1b\[\?\d*u|\x1bP>\|[^\x1b]*\x1b\\|\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)")
 _ESC = re.compile(r"\x1b[()][A-Za-z0-9]|\x1b[@-Z\\-_=>78]")
 
 
@@ -87,6 +101,194 @@ def strip_ansi(s):
     s = _CSI.sub(_csi_text, s)
     s = _ESC.sub("", s)
     return s.replace("\r", "")
+
+
+class Screen:
+    """A small VT100 screen: enough of Ink's cursor moves, erases and scrolls to read what is shown."""
+
+    def __init__(self, cols, rows):
+        self.cols, self.rows = cols, rows
+        self.grid = [[" "] * cols for _ in range(rows)]
+        self.x = self.y = 0
+        self.top, self.bottom = 0, rows - 1
+        self.saved = (0, 0)
+        self.pending = ""
+
+    def _scroll_up(self, n=1):
+        for _ in range(n):
+            del self.grid[self.top]
+            self.grid.insert(self.bottom, [" "] * self.cols)
+
+    def _scroll_down(self, n=1):
+        for _ in range(n):
+            del self.grid[self.bottom]
+            self.grid.insert(self.top, [" "] * self.cols)
+
+    def _lf(self):
+        if self.y == self.bottom:
+            self._scroll_up()
+        elif self.y < self.rows - 1:
+            self.y += 1
+
+    def _put(self, ch):
+        if self.x >= self.cols:
+            self.x = 0
+            self._lf()
+        self.grid[self.y][self.x] = ch
+        self.x += 1
+
+    def _clip(self):
+        self.x = max(0, min(self.cols - 1, self.x))
+        self.y = max(0, min(self.rows - 1, self.y))
+
+    def _csi(self, params, inter, final):
+        if params.startswith("?") or inter:
+            if params in ("?1049h", "?1049l", "?47h", "?47l", "?1047h", "?1047l") or \
+                    (params.startswith("?") and params[1:] in ("1049", "47", "1047")):
+                self.grid = [[" "] * self.cols for _ in range(self.rows)]
+            return
+        args = [int(a) if a.isdigit() else 0 for a in params.split(";")] if params else []
+        a = args[0] if args else 0
+        n = a or 1
+        if final in "Hf":
+            self.y, self.x = (args[0] or 1) - 1 if args else 0, (args[1] or 1) - 1 if len(args) > 1 else 0
+        elif final == "A":
+            self.y -= n
+        elif final == "B":
+            self.y += n
+        elif final == "C":
+            self.x += n
+        elif final == "D":
+            self.x -= n
+        elif final == "E":
+            self.y, self.x = self.y + n, 0
+        elif final == "F":
+            self.y, self.x = self.y - n, 0
+        elif final == "G" or final == "`":
+            self.x = n - 1
+        elif final == "d":
+            self.y = n - 1
+        elif final == "J":
+            rows = {0: range(self.y + 1, self.rows), 1: range(0, self.y), 2: range(self.rows), 3: range(self.rows)}
+            if a == 0:
+                self.grid[self.y][self.x:] = [" "] * (self.cols - self.x)
+            elif a == 1:
+                self.grid[self.y][:self.x + 1] = [" "] * (self.x + 1)
+            for r in rows.get(a, ()):
+                self.grid[r] = [" "] * self.cols
+        elif final == "K":
+            row = self.grid[self.y]
+            if a == 0:
+                row[self.x:] = [" "] * (self.cols - self.x)
+            elif a == 1:
+                row[:self.x + 1] = [" "] * (self.x + 1)
+            else:
+                self.grid[self.y] = [" "] * self.cols
+        elif final == "X":
+            row = self.grid[self.y]
+            for c in range(self.x, min(self.cols, self.x + n)):
+                row[c] = " "
+        elif final == "P":
+            row = self.grid[self.y]
+            del row[self.x:self.x + n]
+            row.extend([" "] * (self.cols - len(row)))
+        elif final == "@":
+            row = self.grid[self.y]
+            for _ in range(n):
+                row.insert(self.x, " ")
+            del row[self.cols:]
+        elif final in "LM" and self.top <= self.y <= self.bottom:
+            top = self.top
+            self.top = self.y
+            (self._scroll_down if final == "L" else self._scroll_up)(n)
+            self.top = top
+        elif final == "S":
+            self._scroll_up(n)
+        elif final == "T":
+            self._scroll_down(n)
+        elif final == "r":
+            self.top = (args[0] or 1) - 1 if args else 0
+            self.bottom = (args[1] or self.rows) - 1 if len(args) > 1 else self.rows - 1
+            self.x = self.y = 0
+        elif final == "s":
+            self.saved = (self.x, self.y)
+        elif final == "u":
+            self.x, self.y = self.saved
+        self._clip()
+
+    def feed(self, data):
+        s = self.pending + data
+        self.pending = ""
+        i, n = 0, len(s)
+        while i < n:
+            ch = s[i]
+            if ch == "\x1b":
+                if i + 1 >= n:
+                    self.pending = s[i:]
+                    return
+                nxt = s[i + 1]
+                if nxt == "[":
+                    m = _CSI.match(s, i)
+                    if not m:
+                        if n - i < 64:
+                            self.pending = s[i:]
+                            return
+                        i += 2
+                        continue
+                    self._csi(m.group(1), m.group(2), m.group(3))
+                    i = m.end()
+                elif nxt == "]":
+                    m = _OSC.match(s, i)
+                    if not m:
+                        if n - i < 4096:
+                            self.pending = s[i:]
+                            return
+                        i += 2
+                        continue
+                    i = m.end()
+                elif nxt == "7":
+                    self.saved = (self.x, self.y)
+                    i += 2
+                elif nxt == "8":
+                    self.x, self.y = self.saved
+                    i += 2
+                elif nxt == "M":
+                    if self.y == self.top:
+                        self._scroll_down()
+                    else:
+                        self.y = max(0, self.y - 1)
+                    i += 2
+                elif nxt == "D":
+                    self._lf()
+                    i += 2
+                elif nxt in "()" and i + 2 < n:
+                    i += 3
+                else:
+                    i += 2
+            elif ch == "\r":
+                self.x = 0
+                i += 1
+            elif ch in "\n\x0b\x0c":             # Claude Code's renderer counts on a newline returning the carriage
+                self.x = 0
+                self._lf()
+                i += 1
+            elif ch == "\b":
+                self.x = max(0, self.x - 1)
+                i += 1
+            elif ch == "\t":
+                self.x = min(self.cols - 1, (self.x // 8 + 1) * 8)
+                i += 1
+            elif ch < " " or ch == "\x7f":
+                i += 1
+            else:
+                self._put(ch)
+                if unicodedata.east_asian_width(ch) in "WF" and self.x < self.cols:
+                    self.grid[self.y][self.x] = ""
+                    self.x += 1
+                i += 1
+
+    def text(self):
+        return "\n".join("".join(r).rstrip() for r in self.grid)
 
 
 # ---------------------------------------------------------------- the lesson format
@@ -249,13 +451,21 @@ class Driver:
         self.events = []
         self.pid = None
         self.fd = None
+        self.screen = None
+        self.headless = bool(plan.get("headless"))
+        self.decoder = codecs.getincrementaldecoder("utf-8")("replace")
+        self.cast = open(self.ctl + "/out.jsonl", "w") if self.headless else None
 
     # -- pty plumbing
     def start_child(self):
         import pty
-        cols, rows = os.get_terminal_size(1)
-        rows -= self.plan.get("rows_margin", 0)
+        if self.headless:
+            cols, rows = self.plan["size"]
+        else:
+            cols, rows = os.get_terminal_size(1)
+            rows -= self.plan.get("rows_margin", 0)
         self.size = (cols, rows)
+        self.screen = Screen(cols, rows)
         pid, fd = pty.fork()
         if pid == 0:
             import fcntl
@@ -291,9 +501,11 @@ class Driver:
             left = end - time.time()
             if left <= 0 or self.fd is None:
                 return
-            r, _, _ = select.select([self.fd], [], [], left)
-            if not r:
-                return
+            r, _, _ = select.select([self.fd] + ([] if self.headless else [0]), [], [], left)
+            if 0 in r:
+                self.relay_replies()
+            if self.fd not in r:
+                continue
             try:
                 data = os.read(self.fd, 65536)
             except OSError:
@@ -301,9 +513,49 @@ class Driver:
             if not data:
                 self.fd = None
                 return
-            os.write(1, data)
-            self.raw += data.decode("utf-8", "replace")
+            text = self.decoder.decode(data)       # a character can be split across reads
+            if self.headless:
+                self.cast.write(json.dumps([time.time(), text]) + "\n")
+                self.cast.flush()
+            else:
+                os.write(1, data)
+            self.raw += text
+            if self.screen is not None:
+                self.screen.feed(text)
+            if self.headless:
+                self.answer_queries(text)
             self.last_out = time.time()
+
+    def answer_queries(self, text):
+        """Headless: answer the terminal queries Claude Code sends, as a real terminal would."""
+        out = ""
+        for m in _CSI.finditer(text):
+            params, final = m.group(1), m.group(3)
+            if final == "c" and params in ("", "0"):
+                out += "\x1b[?62;22c"
+            elif final == "n" and params in ("6", "?6"):
+                out += "\x1b[%s%d;%dR" % ("?" if params == "?6" else "", self.screen.y + 1, self.screen.x + 1)
+            elif final == "n" and params == "5":
+                out += "\x1b[0n"
+        if out and self.fd is not None:
+            os.write(self.fd, out.encode())
+
+    def relay_replies(self):
+        """Pass the terminal's answers to Claude Code's queries (cursor position, device attributes, version,
+        keyboard mode) on to the child. Keystrokes and mouse reports typed into the window are dropped."""
+        try:
+            data = os.read(0, 4096).decode("utf-8", "replace")
+        except OSError:
+            return
+        buf = getattr(self, "reply_buf", "") + data
+        out, last = [], 0
+        for m in _REPLY.finditer(buf):
+            out.append(m.group(0))
+            last = m.end()
+        esc = buf.rfind("\x1b", last)
+        self.reply_buf = buf[esc:][:256] if esc >= 0 else ""   # an answer split across reads
+        if out and self.fd is not None:
+            os.write(self.fd, "".join(out).encode())
 
     def send(self, s):
         os.write(self.fd, s.encode())
@@ -314,7 +566,9 @@ class Driver:
         return env
 
     def text_since_mark(self):
-        return strip_ansi(self.raw[self.mark:])
+        """What a pattern is matched against: the output since the last keystroke, then the screen as shown."""
+        shown = self.screen.text() if self.screen is not None else ""
+        return strip_ansi(self.raw[self.mark:]) + "\n" + shown
 
     # -- steps
     def log(self, i, step, kind, t0, **extra):
@@ -415,10 +669,13 @@ class Driver:
     def main(self):
         import termios
         import tty
-        saved = termios.tcgetattr(0)
-        tty.setraw(0)                       # keystrokes in the window never reach the screen
+        saved = None
+        if not self.headless:
+            saved = termios.tcgetattr(0)
+            tty.setraw(0)                   # keystrokes in the window never reach the screen
         try:
-            os.write(1, b"\x1b[2J\x1b[3J\x1b[H")
+            if not self.headless:
+                os.write(1, b"\x1b[2J\x1b[3J\x1b[H")
             wait_file(self.ctl + "/start", 60, "start")
             self.start_child()
             for i, step in enumerate(self.plan["setup"]):
@@ -437,6 +694,10 @@ class Driver:
             with open(self.ctl + "/events.json", "w") as f:
                 json.dump({"size": getattr(self, "size", None), "events": self.events}, f, indent=1)
             with open(self.ctl + "/screen.txt", "w") as f:
+                f.write(self.screen.text() if self.screen is not None else strip_ansi(self.raw))
+            with open(self.ctl + "/raw.txt", "w", newline="") as f:
+                f.write(self.raw)
+            with open(self.ctl + "/stream.txt", "w") as f:
                 f.write(strip_ansi(self.raw))
             touch(self.ctl + "/done")
             end = time.time() + 60
@@ -454,7 +715,10 @@ class Driver:
                     self.pump(0.1)
             if self.alive():
                 os.kill(self.pid, signal.SIGTERM)
-            termios.tcsetattr(0, termios.TCSADRAIN, saved)
+            if saved is not None:
+                termios.tcsetattr(0, termios.TCSADRAIN, saved)
+            if self.cast:
+                self.cast.close()
 
 
 # ---------------------------------------------------------------- Terminal window
@@ -715,6 +979,8 @@ def mux(raw, clips, srt, out, cfg, rect_size):
     cw, ch = cfg["canvas"] or rect_size
     vw, vh = rect_size
     vf = "null" if (cw, ch) == (vw, vh) else \
+        "scale=%d:%d:force_original_aspect_ratio=decrease:flags=lanczos,pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=%s" % (
+            cw, ch, cw, ch, cfg["pad_color"]) if vw > cw or vh > ch else \
         "pad=%d:%d:(ow-iw)/2:(oh-ih)/2:color=%s" % (cw, ch, cfg["pad_color"])
     cmd = ["ffmpeg", "-hide_banner", "-y", "-i", raw]
     for c in clips:
@@ -735,6 +1001,40 @@ def mux(raw, clips, srt, out, cfg, rect_size):
             "-c:v", "libx264", "-preset", "slow", "-crf", "16", "-tune", "stillimage",
             "-pix_fmt", "yuv420p", "-r", str(cfg["fps"]), "-t", "%.3f" % media_duration(raw), "-movflags", "+faststart", out]
     subprocess.run(cmd, check=True, capture_output=True)
+
+
+# ---------------------------------------------------------------- headless render
+
+def render_cast(ctl, out, cfg, origin, end):
+    """Turn the driver's output log into an asciicast (t=0 is `origin`; output before it shows in the first frame),
+    render it with agg and convert the GIF to raw.mp4. Returns (path, (width, height))."""
+    cols, rows = cfg["size"]
+    cast = os.path.join(out, "session.cast")
+    with open(cast, "w") as f:
+        f.write(json.dumps({"version": 2, "width": cols, "height": rows, "env": {"TERM": "xterm-256color"}}) + "\n")
+        with open(os.path.join(ctl, "out.jsonl")) as src:
+            for line in src:
+                t, text = json.loads(line)
+                text = text.replace("\xa0", " ")       # agg draws a no-break space as a stray glyph
+                f.write(json.dumps([round(max(0.0, t - origin), 4), "o", text]) + "\n")
+        f.write(json.dumps([round(end - origin, 4), "o", "\x1b[0m"]) + "\n")
+    gif = os.path.join(out, "raw.gif")
+    cmd = ["agg", "--font-size", str(cfg["agg_font_size"]), "--line-height", str(cfg["agg_line_height"]),
+           "--font-family", cfg["agg_font"], "--idle-time-limit", "100000", "--fps-cap", str(cfg["fps"]),
+           "--last-frame-duration", "0", "--no-loop", "--theme", cfg["agg_theme"]]
+    if cfg["agg_theme"] == "custom":
+        cmd[-1] = cfg["agg_colors"]
+    subprocess.run(cmd + [cast, gif], check=True, capture_output=True)
+    raw = os.path.join(out, "raw.mp4")
+    subprocess.run(["ffmpeg", "-hide_banner", "-y", "-i", gif, "-vf",
+                    "fps=%d,scale=trunc(iw/2)*2:trunc(ih/2)*2:flags=neighbor,format=yuv420p" % cfg["fps"],
+                    "-c:v", "libx264", "-preset", "slow", "-crf", "14", "-tune", "stillimage",
+                    "-t", "%.3f" % (end - origin), raw], check=True, capture_output=True)
+    os.remove(gif)
+    p = subprocess.run(["ffprobe", "-v", "error", "-show_entries", "stream=width,height", "-of", "csv=p=0", raw],
+                       capture_output=True, text=True, check=True)
+    w, h = (int(x) for x in p.stdout.strip().split(",")[:2])
+    return raw, (w, h)
 
 
 # ---------------------------------------------------------------- run
@@ -769,11 +1069,15 @@ def run(args):
             st["_voice"] = p
             st["_duration"] = tts(st["say"], p, cfg["voice"], cfg["rate"])
 
+    headless = not args.window
     plan = {"cwd": cwd, "command": command, "env": lesson.get("env", {}), "ctl": ctl,
             "setup": lesson.get("setup", []), "steps": steps,
-            "say_gap": cfg["say_gap"], "type_cps": cfg["type_cps"], "rows_margin": cfg["rows_margin"]}
+            "say_gap": cfg["say_gap"], "type_cps": cfg["type_cps"], "rows_margin": cfg["rows_margin"],
+            "headless": headless, "size": cfg["size"]}
     plan_path = os.path.join(ctl, "plan.json")
     json.dump(plan, open(plan_path, "w"), indent=1)
+    if headless:
+        return run_headless(args, lesson, cfg, cwd, name, out, ctl, plan_path)
 
     # 2. the dedicated window
     driver_cmd = "clear; exec %s %s _drive %s" % (shlex.quote(sys.executable),
@@ -812,10 +1116,13 @@ def run(args):
 
     if os.path.exists(os.path.join(ctl, "error")):
         print("driver error: " + open(os.path.join(ctl, "error")).read(), file=sys.stderr)
-
-    # 4. timeline: video t=0 is the first captured frame ~ stop time minus duration
     dur = media_duration(raw)
-    t0 = rec.t_stop - dur
+    return finish(lesson, cfg, cwd, name, out, ctl, raw, rec.t_stop - dur, rec.size, rect, t_start)
+
+
+def finish(lesson, cfg, cwd, name, out, ctl, raw, t0, size, rect, t_start):
+    """Timeline, narration, subtitles and the final mux; t0 is the wall-clock time of the first video frame."""
+    dur = media_duration(raw)
     events = json.load(open(os.path.join(ctl, "events.json")))["events"]
     timeline, clips, cues = [], [], []
     for ev in events:
@@ -840,7 +1147,7 @@ def run(args):
         json.dump({"video_duration": dur, "window": rect, "steps": timeline}, f, indent=1)
 
     final = os.path.join(out, name + ".mp4")
-    mux(raw, clips, srt, final, cfg, rec.size)
+    mux(raw, clips, srt, final, cfg, size)
     usage = claude_usage(cwd, t_start, lesson.get("env"))
     if usage:
         json.dump(usage, open(os.path.join(out, "usage.json"), "w"), indent=1)
@@ -853,6 +1160,38 @@ def run(args):
     return 1 if os.path.exists(os.path.join(ctl, "error")) else 0
 
 
+def run_headless(args, lesson, cfg, cwd, name, out, ctl, plan_path):
+    t_start = time.time()
+    drv = subprocess.Popen([sys.executable, os.path.abspath(__file__), "_drive", plan_path],
+                           stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                           stderr=open(os.path.join(ctl, "driver.log"), "w"))
+    print("headless %dx%d" % tuple(cfg["size"]), flush=True)
+    try:
+        touch(os.path.join(ctl, "start"))
+        wait_ready = time.time() + lesson.get("setup_timeout", 120)
+        while not os.path.exists(os.path.join(ctl, "ready")):
+            if os.path.exists(os.path.join(ctl, "error")) or time.time() > wait_ready or drv.poll() is not None:
+                raise RuntimeError("setup failed: " + open(os.path.join(ctl, "error")).read()
+                                   if os.path.exists(os.path.join(ctl, "error")) else "setup timed out")
+            time.sleep(0.1)
+        origin = time.time()
+        time.sleep(cfg["lead_in"])
+        touch(os.path.join(ctl, "go"))
+        wait_file(os.path.join(ctl, "done"), lesson.get("timeout", 900), "lesson end")
+        time.sleep(cfg["tail"])
+        end = time.time()
+    finally:
+        touch(os.path.join(ctl, "release"))
+        try:
+            drv.wait(90)
+        except subprocess.TimeoutExpired:
+            drv.kill()
+    if os.path.exists(os.path.join(ctl, "error")):
+        print("driver error: " + open(os.path.join(ctl, "error")).read(), file=sys.stderr)
+    raw, size = render_cast(ctl, out, cfg, origin, end)
+    return finish(lesson, cfg, cwd, name, out, ctl, raw, origin, size, None, t_start)
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     sub = ap.add_subparsers(dest="cmd", required=True)
@@ -861,6 +1200,8 @@ def main():
     r.add_argument("--cwd", help="working directory for the session (overrides the lesson)")
     r.add_argument("--out", help="output directory (default ./course-out/<lesson>)")
     r.add_argument("--scale-factor", type=int, help="screen pixels per point (default: auto)")
+    r.add_argument("--window", action="store_true",
+                   help="record a Terminal window on screen instead of rendering headless with agg")
     c = sub.add_parser("check", help="check lesson files against the format; exit 1 on a problem")
     c.add_argument("lessons", nargs="+")
     d = sub.add_parser("_drive")
