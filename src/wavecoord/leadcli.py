@@ -193,6 +193,20 @@ def cmd_steer(args):
     return 0
 
 
+def cmd_lease(args):
+    from wavecoord.core import ApiError
+    from wavecoord.mcp import pick_lease
+    leases = _call("GET", "/api/leases").get("leases") or []
+    lid = int(args.target) if args.target.isdigit() else None
+    try:
+        l = pick_lease(leases, lid, None if lid is not None else args.target, args.force)
+    except ApiError as e:
+        raise SystemExit("wavecoord: %s" % e)
+    _call("POST", "/api/leases/%d/release" % l["id"], {"reason": args.reason or "released by the lead"})
+    print("released lease %s of task %s (was %s); the task can be dispatched again" % (l["id"], l["task"], l["state"]))
+    return 0
+
+
 def _const(name):
     from wavecoord import const
     return const.get(name)
@@ -235,6 +249,13 @@ def register(sub):
     sp.add_argument("model", nargs="?", help="model: the model to switch to")
     sp.add_argument("--note", help="a hint the worker reads with the action")
     sp.set_defaults(func=cmd_steer)
+
+    sp = sub.add_parser("lease", help="release a stale or parked lease so its task can be dispatched again")
+    sp.add_argument("action", choices=["release"])
+    sp.add_argument("target", help="a lease id or a task id")
+    sp.add_argument("--reason", help="why (logged with lease.release)")
+    sp.add_argument("--force", action="store_true", help="also an active lease (a worker holds it; prefer steer stop)")
+    sp.set_defaults(func=cmd_lease)
 
     sp = sub.add_parser("plan", help="read the built-in plan store of the working tree (offline)")
     sp.add_argument("action", choices=["validate", "ready", "get", "graph"])

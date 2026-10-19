@@ -98,6 +98,26 @@ class HostPrUrlTest(FlowCase):
         self.assertEqual([i["pr_url"] for i in self.lead.refinery_queue()], [self.attempt("solo", 1)["pr_url"]])
 
 
+
+class LeaseReleaseTest(FlowCase):
+    def test_lead_releases_a_parked_lease_but_not_an_active_one(self):
+        """The triage step "steal and redispatch" has a tool: lease_release (MCP) and `wavecoord lease release`."""
+        env(FAKE_CLAUDE_SLEEP="20")
+        self.lead.dispatch("head")
+        err, out = self.mcp("lease_release", {"task": "head"})
+        self.assertTrue(err, out)
+        self.assertIn("a worker holds it", str(out))
+        os.environ.pop("FAKE_CLAUDE_SLEEP", None)
+        self.run_task("solo", "solo/f.txt")
+        self.assertEqual(self.core.state.task_lease("solo")["state"], "parked")
+        err, out = self.mcp("lease_release", {"task": "solo", "reason": "redo"})
+        self.assertFalse(err, out)
+        self.assertEqual((out["state"], out["task"]), ("released", "solo"))
+        self.assertIsNone(self.core.state.task_lease("solo"))
+        err, out = self.mcp("lease_release", {})
+        self.assertTrue(err, out)
+
+
 class HeldFlatTaskTest(FlowCase):
     def test_a_dropped_task_is_not_merged(self):
         """Items 3 and 14 (flat plan): the lead dropped the task on the default branch after its PR opened."""

@@ -105,7 +105,7 @@ A task adds what a worker needs: `paths` it may change, `exec` (model, budget, t
 
 ## What can run at the same time
 
-You never write it. `wavecoord spec waves` computes it: two tasks can run together when neither needs the other, their paths do not overlap, and they do not conflict. It prints the waves, the critical path and the widest wave. Wave 1 is the tasks that can run now (or are running); a task that cannot run yet for another reason (its status, an unapproved requirement) is left out of the waves and listed under `held` with the reason by `--json` and the `spec_waves` tool (the text output does not show it; `wavecoord spec ready` gives the reason too). If two tasks could run together but write the same file, `check` tells you to add a `needs` or split the file.
+You never write it. `wavecoord spec waves` computes it: two tasks can run together when neither needs the other, their paths do not overlap, and they do not conflict. It prints the waves, the critical path and the widest wave. Wave 1 is the tasks that can run now (or are running); a task that cannot run yet for another reason (its status, an unapproved requirement) is left out of the waves and listed under `held` with the reason (`wavecoord spec ready` gives the reason too). If two tasks could run together but write the same file, `check` tells you to add a `needs` or split the file.
 
 ## Status
 

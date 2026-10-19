@@ -75,6 +75,26 @@ _EDIT = _obj({"op": {"enum": ["replace", "insert_before", "insert_after", "delet
               "anchor": {"type": "string", "description": "exact text that occurs once (or use occurrence)"},
               "text": _STR, "occurrence": {"type": "integer", "minimum": 1}}, ["op"])
 
+def pick_lease(leases, lease=None, task=None, force=False):
+    """The lease to release, from GET /api/leases' list: by id or by task (one live lease per task). Without
+    `force`, only a stale or parked lease: an active one belongs to a running worker (steer it to stop)."""
+    if (lease is None) == (task is None):
+        raise ApiError("bad_request", "give lease_id or task")
+    hits = [l for l in leases if (l["id"] == lease if lease is not None else l["task"] == task)]
+    if not hits:
+        raise ApiError("not_found", "no live lease %s" % (lease if lease is not None else "of task %s" % task))
+    l = hits[0]
+    if l["state"] not in ("stale", "parked") and not force:
+        raise ApiError("conflict", "lease %s of %s is %s: a worker holds it; stop it with steer, or pass force"
+                       % (l["id"], l["task"], l["state"]))
+    return l
+
+
+def _lease_release(c, ctx, a):
+    l = pick_lease(c.leases(ctx)["leases"], a.get("lease_id"), a.get("task"), bool(a.get("force")))
+    return c.release(ctx, l["id"], {"reason": a.get("reason") or "released by the lead"})["lease"]
+
+
 # name -> (description, input schema, handler(coord, ctx, args) -> str or JSON-able)
 TOOLS = [
     ("plan_ready", "Ready tasks: state todo, all needs done, no path overlap with live reservations; with why_not.",
@@ -134,6 +154,10 @@ TOOLS = [
      _obj({"agent": _STR}), _inbox),
     ("ack", "Ack a message.", _obj({"id": _INT}, ["id"]),
      lambda c, ctx, a: c.ack(ctx, int(a["id"]))),
+    ("lease_release", "Release a task's lease (by lease_id or task) so the task can be dispatched again: for a "
+                      "stale lease of a lost or idle worker, or a parked one. An active lease needs force (a worker "
+                      "holds it; prefer steer stop). Ask the user first.",
+     _obj({"lease_id": _INT, "task": _STR, "reason": _STR, "force": {"type": "boolean"}}), _lease_release),
     ("send", "Send a message to an agent, a task's holder, the lead or all.",
      _obj({"to": _TO, "body": _STR, "reply_to": _INT}, ["to", "body"]),
      lambda c, ctx, a: c.send(ctx, {k: a[k] for k in ("to", "body", "reply_to") if k in a})["message"]),

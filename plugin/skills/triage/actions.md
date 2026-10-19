@@ -72,7 +72,7 @@ A hint is guidance for the task; the spec stays the authority. Never use a hint 
 
 ## Stale leases
 
-- `lease.stale` by `watchdog`: the worker heartbeats but does nothing. First `send` a message. If it stays idle, ask the user before you steal the lease or redispatch, unless the user allowed that for this wave.
+- `lease.stale` by `watchdog`: the worker heartbeats but does nothing. First `send` a message. If it stays idle, ask the user before you release the lease (`lease_release`, stale or parked leases only) or redispatch, unless the user allowed that for this wave.
 
 ## Commands that ask for permission
 

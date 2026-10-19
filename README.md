@@ -126,7 +126,7 @@ The full copy-paste path is [docs/quickstart.md](docs/quickstart.md). In short, 
 3. **Server.** Run the coordinator as a user service and check it:
    ```bash
    wavecoord install-server
-   wavecoord status           # ok: http://127.0.0.1:18741 version=wavecoord 0.3.0 api=1
+   wavecoord status           # ok: http://127.0.0.1:18741 version=0.3.0 api=1
    ```
 4. **Plugin options.** In `/plugin`, set `coord_url` to `http://127.0.0.1:18741` (it has no default), `token` to the lead token (`cat ~/.wavecoord/token`), and `lead` to true on the machine you plan from.
 5. **Plan, run, merge.** In a Claude Code session in the repo: `/wavecoord:spec`, merge its PR, `/wavecoord:wave-plan`, merge its PR, then `/wavecoord:wave-run` and `/wavecoord:triage`.

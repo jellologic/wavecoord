@@ -1,4 +1,4 @@
-"""The trust rules of the spec tree at merge (0.2.1; docs/specs.md, docs/security.md, edit-fence.md section 8.1).
+"""The trust rules of the spec tree at merge (0.3.0; docs/specs.md, docs/security.md, edit-fence.md section 8.1).
 
 - The fence check (config and spec changes, the Lease: line) runs before any check that runs PR code.
 - Verify and Acceptance run on the merge result of the default branch and the head, with a scrubbed

@@ -93,7 +93,9 @@ def cmd_status(args):
     except (urllib.error.URLError, OSError, ValueError) as e:
         print("unreachable: no coordinator answers at %s (%s)" % (url, getattr(e, "reason", e)))
         return 1
-    print("ok: %s version=%s api=%s" % (url, body.get("version"), body.get("api")))
+    ver = str(body.get("version") or "")
+    print("ok: %s version=%s api=%s" % (url, ver[len("wavecoord "):] if ver.startswith("wavecoord ") else ver,
+                                         body.get("api")))
     return 0
 
 

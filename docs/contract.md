@@ -190,6 +190,7 @@ JSON bodies; every response has `now` (server time, UTC, `YYYY-MM-DDTHH:MM:SSZ`)
 | `attempt_get` | `task`, `n` | One attempt with its report and stream stats (cost, turns, retries) |
 | `inbox` | `agent?` | Unacked messages for the caller, in the frame of section 4 |
 | `ack` | `id` | Ack a message |
+| `lease_release` | `lease_id` or `task`, `reason?`, `force?` | Release a task's `stale` or `parked` lease so it can be dispatched again (`wavecoord lease release`); an `active` lease needs `force`. `conflict` when a worker holds it, `not_found` when none |
 | `send` | `to`, `body`, `reply_to?` | Send a message to an agent, a task's holder, the lead or all |
 | `conflicts` | `globs?` | `{conflicts, merge_tree, hot, open, base}`: live reservation overlaps, merge-tree conflicts of pushed attempt branches with the default branch, hot files (changed by two or more branches, or reserved by two or more tasks), open logged conflicts. With `globs`: only the overlap check |
 | `resolve` | `attempt?` (`<task>/<n>`), `branch?`, `conflict?`, `dry_run?`, `brief?` | Dispatch a resolver: a `--continue` run of the same branch (it resumes the parked lease: new epoch) with a brief of the conflicting files and both sides' intents. `brief`: the lead's decision, put first. Refused while a run of the attempt is in flight |

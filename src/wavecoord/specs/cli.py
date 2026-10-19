@@ -163,6 +163,8 @@ def r_waves(args):
         print("wave %d (%d):  %s" % (i + 1, len(w), ", ".join(w)))
     if out["unplaced"]:
         print("cannot place:  %s" % ", ".join(out["unplaced"]))
+    for t, why in sorted((out.get("held") or {}).items()):
+        print("held:          %s (%s)" % (t, why))
     print("critical path: %s (%d)" % (" -> ".join(out["critical_path"]) or "-", len(out["critical_path"])))
     print("max width: %d" % out["width"])
     return 0

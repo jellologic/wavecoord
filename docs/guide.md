@@ -116,7 +116,7 @@ This walkthrough adds token rotation and logout to an auth service. It assumes t
 /wavecoord:coord-status
 ```
 
-You see `ok: http://127.0.0.1:18741 version=wavecoord 0.3.0 api=1`, then the attempts in flight, the merge queue, open conflicts and ready tasks. Anything else (`not configured`, `unreachable`) is a setup problem: see the [quickstart](quickstart.md).
+You see `ok: http://127.0.0.1:18741 version=0.3.0 api=1`, then the attempts in flight, the merge queue, open conflicts and ready tasks. Anything else (`not configured`, `unreachable`) is a setup problem: see the [quickstart](quickstart.md).
 
 ![wavecoord status](img/status.svg)
 
@@ -428,13 +428,11 @@ Details: [rollback.md](rollback.md).
 ### Stuck leases
 
 - **A live worker that does nothing** (`lease.stale` by the watchdog): send a hint first. If it stays idle, `wavecoord steer <task> stop` or `wavecoord attempts stop <task>-<n>`. The attempt ends `stopped`, nothing is pushed, the lease is released, and the task is ready again.
-- **A worker that is gone** (attempt `lost`, lease `stale`): the lease stays `stale` and holds the task. No tool releases it yet; release it with the lead token through REST:
+- **A worker that is gone** (attempt `lost`, lease `stale`): the lease stays `stale` and holds the task. Release it, then `collect` and dispatch the task again:
   ```bash
-  curl -s -H "Authorization: Bearer $(cat ~/.wavecoord/token)" http://127.0.0.1:18741/api/leases
-  curl -s -X POST -H "Authorization: Bearer $(cat ~/.wavecoord/token)" \
-    -d '{"reason": "worker lost"}' http://127.0.0.1:18741/api/leases/<id>/release
+  wavecoord lease release <task> --reason "worker lost"    # or the lead's lease_release tool
   ```
-  Then `collect` and dispatch the task again.
+  It releases only a `stale` or `parked` lease; an `active` one needs `--force` (prefer `wavecoord steer <task> stop`).
 - **A parked lease whose PR you merged or closed by hand**: `collect` reads the PR state with `pr_state_cmd` and releases it.
 - **The coordinator is down while workers write** (fence in enforce mode): only you can let them write on, with `wavecoord fence offline --for 1h --reason "<why>"` in a terminal. `wavecoord fence online` ends it.
 

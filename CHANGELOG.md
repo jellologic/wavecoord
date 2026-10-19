@@ -52,6 +52,10 @@ Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the who
 - When the worker pushed its branch itself, the launcher still runs the fetch, merge-tree and E3 on it, so the report has its E4 fields and an E3 refusal fails the attempt.
 - A zipapp upload is checked against its hash before it takes the build's name; a cut transfer no longer leaves a broken build that is never uploaded again.
 
+### Added
+
+- `wavecoord lease release <task|id>` and the lead tool `lease_release`: release a stale or parked lease so the task can be dispatched again (a lost worker's lease used to hold its task for good). The triage skill uses it.
+
 ### Fixed
 
 - Verify and Acceptance run on the merge of the default branch and the PR head, not on the head alone, so work merged since the branch started is in the checked tree.

@@ -36,7 +36,7 @@ Only when the status is `ok`, and only when the wavecoord tools are in your tool
 3. `conflicts`: open conflicts.
 4. With a spec tree, `spec_tree`: progress per capability and feature (done of total tasks).
 5. `plan_ready`: how many tasks are ready, and `config` for `wip_cap` (free slots = `wip_cap` minus attempts in flight).
-5. `inbox`: the number of unacked messages to the lead. Do not ack them here.
+6. `inbox`: the number of unacked messages to the lead. Do not ack them here.
 
 Show one short table per part, and one line on what to do next: `/wavecoord:triage` when reports or messages wait, `/wavecoord:resolve` for conflicts, `/wavecoord:wave-run` when slots are free and tasks are ready.
 
