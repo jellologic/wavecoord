@@ -84,7 +84,7 @@ The full walk-through is [docs/quickstart.md](docs/quickstart.md). In short, in 
 | [hooks.md](docs/hooks.md) | The Claude Code hooks and git guards |
 | [security.md](docs/security.md) | Network, tokens, and why coordination text is never consent |
 | [rollback.md](docs/rollback.md) | Revert one event, roll back to a commit, rebuild the cache |
-| [specs.md](docs/specs.md) | Requirements as Markdown in your repo, linked from tasks (planned; design in [design/spec-layer.md](docs/design/spec-layer.md)) |
+| [specs.md](docs/specs.md) | The spec tree: capability, feature, requirement and task as typed Markdown records, checked by scripts (planned; design in [design/spec-layer.md](docs/design/spec-layer.md)) |
 
 ## Layout
 
