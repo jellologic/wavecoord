@@ -65,6 +65,8 @@ Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the who
 
 ### Fixed
 
+- Task prompts from `/wavecoord:wave-plan` no longer tell workers to push. A launched worker may not push (the launcher does), so such a prompt made it report `blocked`. The reviewer agent, the risk table and the watchdog nudge say the same.
+- `/wavecoord:spec` and `/wavecoord:wave-plan` write spec ops to a file for `wavecoord spec apply --dry-run`, instead of a heredoc that made Claude Code ask for permission.
 - Verify and Acceptance run on the merge of the default branch and the PR head, not on the head alone, so work merged since the branch started is in the checked tree.
 - Verification fails closed: a task or requirement record that is missing or does not parse at merge blocks with `verify_unavailable`. `verified` is recorded only when a Verify command ran.
 - A `dropped` or `on_hold` sibling no longer defers a requirement's Verify: the last merging task runs it.
