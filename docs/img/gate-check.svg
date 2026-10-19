@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="840" height="136" viewBox="0 0 840 136" role="img" aria-label="wavecoord gate-check 1">
+<title>wavecoord gate-check 1</title>
+<rect width="840" height="136" rx="10" ry="10" fill="#1e1e2e"/>
+<path d="M0 10 a10 10 0 0 1 10 -10 h820 a10 10 0 0 1 10 10 v18 h-840 z" fill="#313244"/>
+<circle cx="18" cy="14" r="6" fill="#f38ba8"/>
+<circle cx="38" cy="14" r="6" fill="#f9e2af"/>
+<circle cx="58" cy="14" r="6" fill="#a6e3a1"/>
+<text x="420" y="18.5" fill="#9399b2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="12" text-anchor="middle">wavecoord gate-check 1</text>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="13" fill="#cdd6f4" xml:space="preserve" style="white-space:pre">
+<text x="16" y="52" xml:space="preserve"><tspan fill="#a6e3a1" font-weight="bold">$ </tspan><tspan font-weight="bold">wavecoord gate-check 1</tspan></text>
+<text x="16" y="70" xml:space="preserve">wavecoord gate-check: fail: 1 violation(s) in 2 path(s)</text>
+<text x="16" y="88" xml:space="preserve">  README.md: outside_lease (no reservation of your lease #1 of task notes.search.words.index covers </text>
+<text x="16" y="106" xml:space="preserve">it)</text>
+</g></svg>
