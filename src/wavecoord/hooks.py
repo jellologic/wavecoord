@@ -46,6 +46,34 @@ EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 WAITING_TYPES = ("permission_prompt", "idle_prompt", "elicitation_dialog", "agent_needs_input")
 LEAD_EVENTS_MAX = 40  # event lines per injection; the rest wait for the next turn
 CONTEXT_MAX = 9000  # Claude Code caps additionalContext at 10,000 characters
+CONTEXT_ROOM = CONTEXT_MAX - 200  # what messages and events may fill: nothing that does not fit is acked or passed
+RELAY_CONFIRM_S = 30.0  # a relayed message not in the transcript after this long goes through the hooks
+
+
+def coord_state_dir(base, url):
+    """The hook state of one coordinator: <state dir>/coord-<sha(url)>. Message ids and event seqs are
+    per coordinator, so the shown list, the relay records and the lead cursor are too."""
+    if not base or not url:
+        return base
+    return os.path.join(base, "coord-" + hashlib.sha256(url.rstrip("/").encode("utf-8")).hexdigest()[:12])
+
+
+def configured(env, cwd=None):
+    """Rule 1: the hooks act only with WAVECOORD_URL set, or in a repo that has .claude/wavecoord.json
+    (the plugin option alone does not turn them on in every repo). -> the coordinator URL or None."""
+    from wavecoord.client import find_repo_config, resolve_coord_url
+    if not env.get("WAVECOORD_URL", "").strip():
+        try:
+            if find_repo_config(cwd or os.getcwd()) is None:
+                return None
+        except OSError:
+            return None
+    return resolve_coord_url(env, cwd)
+
+
+def launched(env):
+    """A worker that the launcher runs (its wrapper owns the worker's stdin and its steer actions)."""
+    return bool(env.get("WAVECOORD_ATTEMPT_DIR", "").strip())
 
 
 # ---------------------------------------------------------------- identity
@@ -236,6 +264,13 @@ def as_list(v):
     return v if isinstance(v, list) else []
 
 
+def const_s(name, default, env):
+    try:
+        return float(env.get("WAVECOORD_" + name) or default)
+    except ValueError:
+        return default
+
+
 # ---------------------------------------------------------------- runner
 
 class Hook(object):
@@ -246,7 +281,8 @@ class Hook(object):
         self.c = client
         self.id = ident
         self.cwd = hook_input.get("cwd") if isinstance(hook_input.get("cwd"), str) else os.getcwd()
-        self.state = State(state_dir(env), ident.agent)
+        self.sd = coord_state_dir(state_dir(env), getattr(client, "url", None))
+        self.state = State(self.sd, ident.agent)
 
     # -- coordinator calls --
 
@@ -287,11 +323,46 @@ class Hook(object):
             msgs = as_list(resp.get("messages")) if status == 200 and isinstance(resp, dict) else []
             lost = []
         shown = set(self.state.get("shown", []))
-        if self.relayed():
-            from wavecoord import relay
-            shown |= relay.read_pushed(self.env, self.id.agent)  # the relay pushed them; its ack may be late
         fresh = [m for m in msgs if isinstance(m, dict) and m.get("id") not in shown and not m.get("acked")]
+        if launched(self.env):
+            # the wrapper acts on lead steer actions (interrupt, model, stop): never show or ack one here
+            from wavecoord.launcher.steer import parse_action
+            fresh = [m for m in fresh if parse_action(m) is None]
+        if self.relayed():
+            fresh = self.relay_filter(fresh)
         return fresh, lost
+
+    def relay_filter(self, msgs):
+        """Messages that the relay pushed: one the transcript shows is acked here without showing it again;
+        one pushed less than RELAY_CONFIRM_S ago waits; an older one that never arrived is shown here."""
+        from wavecoord import relay
+        pushed = relay.read_pushed(self.env, self.id.agent, self.c.url)
+        if not pushed:
+            return msgs
+        tail = self.transcript_tail()
+        out, confirmed = [], []
+        for m in msgs:
+            at = pushed.get(m.get("id"))
+            if at is None:
+                out.append(m)
+            elif ("Coordination message #%s from" % m.get("id")) in tail:
+                confirmed.append(m)
+            elif time.time() - at >= const_s("RELAY_CONFIRM_S", RELAY_CONFIRM_S, self.env):
+                out.append(m)
+        self.mark_shown(confirmed)
+        return out
+
+    def transcript_tail(self, nbytes=2 << 20):
+        path = self.inp.get("transcript_path")
+        if not isinstance(path, str) or not path:
+            return ""
+        try:
+            with open(path, "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - nbytes))
+                return f.read().decode("utf-8", "replace")
+        except OSError:
+            return ""
 
     def relayed(self):
         """A worker session that wavecoord did not launch, with a Claude Code inbox socket: the
@@ -359,15 +430,26 @@ class Hook(object):
 
     # -- shared text --
 
-    def deliver_text(self, msgs, lost):
+    def deliver_text(self, msgs, lost, room=CONTEXT_ROOM):
+        """-> (text, the messages in it). Messages go in, oldest first, while they fit in `room`
+        characters; the rest stay unacked for the next turn (only what the model sees is acked)."""
         lines = []
         for l in lost:
             if isinstance(l, dict):
-                lines.append("Coordination notice: your lease #%s on task %s (epoch %s) is lost (%s, by %s). "
-                             "Stop work on that task and do not push to its branch."
-                             % (l.get("lease_id"), l.get("task"), l.get("epoch"), l.get("reason"), l.get("by")))
-        lines += [frame(m) for m in msgs]
-        return "\n".join(lines)
+                lines.append(("Coordination notice: your lease #%s on task %s (epoch %s) is lost (%s, by %s). "
+                              "Stop work on that task and do not push to its branch."
+                              % (l.get("lease_id"), l.get("task"), l.get("epoch"), l.get("reason"),
+                                 l.get("by")))[:600])
+        used = sum(len(x) + 1 for x in lines)
+        shown = []
+        for m in msgs:
+            line = frame(m)
+            if used + len(line) + 1 > room:
+                break
+            lines.append(line)
+            shown.append(m)
+            used += len(line) + 1
+        return "\n".join(lines), shown
 
     # -- events --
 
@@ -383,17 +465,17 @@ class Hook(object):
             if isinstance(seq, int) and self.inp.get("source") in (None, "startup", "clear"):
                 # a new lead session starts at the head; resume and compact keep the backlog
                 from wavecoord import feedback
-                feedback.write_cursor(state_dir(self.env), seq)
+                feedback.write_cursor(self.sd, seq)
         else:
             lines += self.worker_summary(live)
-        text = self.deliver_text(msgs, lost)
+        text, shown = self.deliver_text(msgs, lost, CONTEXT_ROOM - len("\n".join(lines)) - 10)
         if text:
             lines += ["Inbox:", text]
-        self.mark_shown(msgs)
+        self.mark_shown(shown)
         if self.relayed():
             from wavecoord import relay
             relay.start(self.env, self.id.agent, self.env["CLAUDE_CODE_MESSAGING_SOCKET"],
-                        self.env.get("CLAUDE_CODE_MESSAGING_TOKEN"), os.getppid())
+                        self.env.get("CLAUDE_CODE_MESSAGING_TOKEN"), os.getppid(), url=self.c.url)
         return context_output("SessionStart", "\n".join(lines))
 
     def worker_summary(self, live):
@@ -453,16 +535,17 @@ class Hook(object):
                 lines.append("%s: %d (use the wavecoord tools for details)" % (key.capitalize(), len(items)))
         return lines
 
-    def lead_events(self):
+    def lead_events(self, room=CONTEXT_ROOM):
         """Lead-relevant event lines after the shared cursor (docs/feedback.md).
 
         A Monitor on `wavecoord events --follow --for lead` moves the same
         cursor, so an event reaches the lead once through either path. The
         first run only sets the cursor to the head: SessionStart shows the
-        wave state instead of the backlog.
+        wave state instead of the backlog. The cursor moves only past the
+        lines that fit in `room` characters; the rest come next turn.
         """
         from wavecoord import feedback
-        sd = state_dir(self.env)
+        sd = self.sd
         cur = feedback.read_cursor(sd)
         if cur is None:
             live = self.live()
@@ -475,14 +558,17 @@ class Hook(object):
         try:
             for ev in feedback.sse_events(self.c.url, self.c.token, since=cur, follow=False, timeout=timeout,
                                           agent=self.id.agent):
+                to = ((ev.get("payload") or {}).get("message") or {}).get("to") or {}
+                line = None
+                if not (ev.get("kind") == "message.new" and to.get("kind") in ("lead", "all")):
+                    line = feedback.lead_line(ev)  # (a message to the lead comes from the inbox, framed)
+                if line:
+                    if len(line) + 1 > room:
+                        break  # it does not fit: the cursor stays before it
+                    lines.append(line)
+                    room -= len(line) + 1
                 if isinstance(ev.get("seq"), int):
                     top = max(top, ev["seq"])
-                to = ((ev.get("payload") or {}).get("message") or {}).get("to") or {}
-                if ev.get("kind") == "message.new" and to.get("kind") in ("lead", "all"):
-                    continue  # the inbox delivers it in the message frame
-                line = feedback.lead_line(ev)
-                if line:
-                    lines.append(line)
                 if len(lines) >= LEAD_EVENTS_MAX or self.c.deadline.remaining() < 0.5:
                     break
         except (OSError, feedback.SseError):
@@ -493,10 +579,11 @@ class Hook(object):
     def _deliver(self, event):
         hb = self.heartbeat()
         msgs, lost = self.inbox(hb)
-        text = self.deliver_text(msgs, lost)
-        self.mark_shown(msgs)
+        text, shown = self.deliver_text(msgs, lost)
+        self.mark_shown(shown)
         if self.id.lead:
-            evs = self.lead_events()
+            head = "Coordination events since your last turn:\n"
+            evs = self.lead_events(CONTEXT_ROOM - len(text) - len(head) - 1)
             if evs:
                 text = (text + "\n" if text else "") + "Coordination events since your last turn:\n" + "\n".join(evs)
         return context_output(event, text) if text else None
@@ -567,7 +654,8 @@ class Hook(object):
                 if st["dirty"]:
                     reasons.append("The worktree has %d uncommitted change(s) (%s). Commit them." %
                                    (st["dirty"], ", ".join(st["files"][:5])))
-                if unpushed(st):
+                if unpushed(st) and not launched(self.env):
+                    # a launched worker commits only: the launcher pushes after the session
                     reasons.append("The branch has commits that are not pushed. Push them.")
                 changed = self.changed_paths()
                 if changed:
@@ -575,10 +663,11 @@ class Hook(object):
                     if out:
                         reasons.append("These changes are outside your lease: %s. Revert them or tell the lead." %
                                        ", ".join(sorted(set(str(v.get("path")) for v in out))[:10]))
-        text = self.deliver_text(msgs, lost)
+        head = "You have unread coordination messages. Read them and act if needed:\n"
+        text, shown = self.deliver_text(msgs, lost, CONTEXT_ROOM - len("\n".join(reasons)) - len(head) - 40)
         if text:
-            reasons.append("You have unread coordination messages. Read them and act if needed:\n" + text)
-        self.mark_shown(msgs)
+            reasons.append(head + text)
+        self.mark_shown(shown)
         if not reasons:
             return None
         return {"decision": "block", "reason": clip("wavecoord: before you stop:\n- " + "\n- ".join(reasons))}
@@ -698,7 +787,7 @@ def handle(event, raw, env=None):
     cwd = inp.get("cwd") if isinstance(inp.get("cwd"), str) and os.path.isdir(inp["cwd"]) else None
     deadline = Deadline(budget_for(event, env))
     ident = Identity(env, inp)
-    if not ident.agent or Client.from_env(agent=ident.agent, env=env, cwd=cwd) is None:
+    if not ident.agent or not configured(env, cwd) or Client.from_env(agent=ident.agent, env=env, cwd=cwd) is None:
         if event == "PreToolUse" and inp.get("tool_name") in EDIT_TOOLS:
             from wavecoord import fence
             if fence.e1_fail_closed(env, cwd):
@@ -783,11 +872,10 @@ def main(event, stdin=None, stdout=None, env=None, stderr=None):
         fenced = event == "PreToolUse" and bool(env.get("WAVECOORD_TASK"))
     out = None
     try:
-        from wavecoord.client import resolve_coord_url
-        configured = bool(resolve_coord_url(env, cwd))
+        is_on = bool(configured(env, cwd))
     except Exception:
-        configured = False
-    if not configured:
+        is_on = False
+    if not is_on:
         if not fenced:
             return 0  # rule 1: not configured, no output
         from wavecoord import fence

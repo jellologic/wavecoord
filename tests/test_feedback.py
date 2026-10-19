@@ -130,6 +130,11 @@ class LeadFlowCase(ServerCase):
         self.assertEqual(st, 200)
         self.req("POST", "/api/notify", {"kind": "other", "agent": "lead", "text": "lead's own"})  # filtered
 
+    def cursor_dir(self):
+        """The lead cursor is per coordinator: <state dir>/coord-<sha(url)>/lead-cursor.json."""
+        from wavecoord.hooks import coord_state_dir
+        return coord_state_dir(self.state, self.srv.url)
+
     def env(self, **extra):
         e = {"WAVECOORD_URL": self.srv.url, "CLAUDE_PLUGIN_OPTION_TOKEN": "lead-secret",
              "WAVECOORD_STATE_DIR": self.state, "HOME": self.state}
@@ -152,7 +157,7 @@ class EventsForLeadTest(LeadFlowCase):
             self.assertTrue(l.startswith("wavecoord #"))
             self.assertTrue(l.endswith(DATA_ONLY))
         self.assertIn("report.post api-auth/1: status=done", lines[2])
-        self.assertEqual(feedback.read_cursor(self.state), self.coord.log.last_seq)
+        self.assertEqual(feedback.read_cursor(self.cursor_dir()), self.coord.log.last_seq)
         # The next run resumes from the cursor: nothing new.
         buf = io.StringIO()
         follow_lead(self.srv.url, follow=False, out=buf, token="lead-secret", state=self.state)
@@ -191,7 +196,7 @@ class LeadInjectionTest(LeadFlowCase):
     def test_lead_gets_events_once(self):
         env = self.env(WAVECOORD_ROLE="lead")
         self.run_hook("SessionStart", env, source="startup")
-        self.assertEqual(feedback.read_cursor(self.state), self.coord.log.last_seq)
+        self.assertEqual(feedback.read_cursor(self.cursor_dir()), self.coord.log.last_seq)
         self.worker_activity()
         ctx = self.context(self.run_hook("UserPromptSubmit", env, prompt="next"))
         self.assertIn("Coordination events since your last turn:", ctx)

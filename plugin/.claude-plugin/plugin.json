@@ -21,8 +21,7 @@
     "coord_url": {
       "type": "string",
       "title": "Coordinator URL",
-      "description": "Base URL of the wavecoord server. The server binds 127.0.0.1 by default.",
-      "default": "http://127.0.0.1:18741"
+      "description": "Base URL of the wavecoord server, for example http://127.0.0.1:18741 (the server's default). No default: the hooks act only in a repo with .claude/wavecoord.json or with WAVECOORD_URL set."
     },
     "token": {
       "type": "string",

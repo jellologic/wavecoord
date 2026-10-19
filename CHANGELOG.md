@@ -30,6 +30,11 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - `tokens provision --out` writes a mode-600 file also over an existing file with a looser mode.
 - The HTTP front: a socket timeout (`REQ_TIMEOUT_S`), at most `MAX_CONNS` connections, the token checked before the body is read, and chunked bodies refused (411), so idle connections can no longer exhaust threads and file descriptors, and a chunked body never runs a request with its defaults.
 - `tests/test_generic.py` also catches GitHub fine-grained, GitLab, Slack, OpenAI, Google and AWS STS keys.
+- Launched workers get no tool of the plugin's MCP servers (the worker settings deny `mcp__plugin_wavecoord_wavecoord` and `mcp__plugin_wavecoord_lead-feed`): Claude Code fills their token from the plugin option, which can be the lead's.
+- The plugin option `coord_url` has no default, and the hooks act only with `WAVECOORD_URL` set or in a repo with `.claude/wavecoord.json`, so sessions in other repos no longer heartbeat or post notices to the coordinator with the lead token.
+- The PR body quotes a line of the worker's text that starts with `Task:`, `Attempt:` or `Lease:`, so a worker cannot add a second header and block its PR.
+- When the worker pushed its branch itself, the launcher still runs the fetch, merge-tree and E3 on it, so the report has its E4 fields and an E3 refusal fails the attempt.
+- A zipapp upload is checked against its hash before it takes the build's name; a cut transfer no longer leaves a broken build that is never uploaded again.
 
 ### Fixed
 
@@ -98,6 +103,29 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - **Spec tree in the lead.** `SpecTreePlan.get` resolves a migrated flat id with dots before a node with the same path. A read error of the default branch fails closed (`unavailable`) instead of planning from `plan/tasks`. `spec_tree` and `spec_waves` say when `plan.adapter` keeps the tree from being dispatched (`plan_note`). `spec_edit` refuses a new task under the id of a deleted task that the coordinator merged or runs, warns (`switch:`) when its PR adds the first spec records while `plan/tasks` has tasks, and rewrites the PR body for the whole branch on a later call. `wavecoord spec apply - --dry-run --ref <ref>` checks ops against a ref.
 - `plan_graph` and plan validation no longer hit the recursion limit on a long needs chain (`plan/graph.py` cycles and critical path are iterative).
 - Skills: triage and wave-run call `collect` (PRs now open in the plugin workflow); triage names a retry path for an attempt that has a PR (continue it, or close the PR and `collect`) and the new holds; wave-plan and the planner create tasks `planned`; the spec, wave-plan and wave-run skills check `plan.selected_by`; the resolve skill and its template match the real resolver (same branch, `brief`).
+- **Launcher.**
+  - A new attempt that fails before its wrapper runs moves its state to `attempts/<project>/.failed/` and removes its worktree and branch; the attempt number counts the hosts' attempt dirs and local branches (`for-each-ref` now uses a glob). A failed launch no longer makes every later dispatch fail with `already exists`.
+  - `attempts stop` never writes a final state while the wrapper holds its run lock (it answers `stopping`); a held run lock takes a slot and keeps gc away whatever `status.json` says. A stop kills a running `prepare_cmd` (its own process group). When finish fails, the wrapper still posts a `failed` report and the finish.
+  - The finish fetch takes the worktree-admin lock and retries, and a push error that is not a refusal is retried, so a concurrent fetch no longer fails a finished attempt.
+  - Heartbeats go on during `prepare_cmd` and the push steps, so a long build no longer makes a healthy lease stale.
+  - Every remote command touches its build, so the 30-day cleanup never removes a build in use; the wrapper reads the report schema and the modules it needs at start.
+  - Worktrees are `<repo_path>/../wt/<project>/<task>-<n>`, so repos side by side do not collide (a `--continue` run reuses a worktree at the old path).
+  - The `ssh -R` tunnel is a connection of its own (`ControlMaster=no` now comes before the shared options).
+  - Remote scripts run as `sh -c '<script>'`, so a host whose login shell is csh, tcsh or fish works.
+  - A `--continue` run (a resolver) that adds no commit still gets the merge-tree check, so it is not counted clean while the branch conflicts.
+- **Steering.**
+  - A lead steer action acts only on the run that held the task's lease when it was sent: an old `steer stop` no longer stops every later attempt.
+  - The hooks of a launched worker never show or ack a steer action, so the wrapper always gets it.
+  - The inbox relay no longer acks a message because the socket write went through; the hooks ack it when the transcript shows it and deliver it themselves otherwise.
+  - The STEER_WAIT_S close guard counts only turn lines (not control responses, hooks or state changes), and a control alone (a model switch with no note) gives no extra turn: a run no longer hangs until its timeout and ends `timed_out` with a valid report.
+  - `steer interrupt` without a note stops the turn, not the run: a line that says to go on follows the interrupt.
+  - A steered turn after the report that fails or writes no report no longer replaces the worker's valid report (`late_turn` in the result).
+  - An error answer to a lead's control request (or none) is recorded in `steer.jsonl` and sent to the lead as a `steer_failed` notice.
+  - The stuck detectors: `loop` keys on the whole tool input and counts assistant messages, not parallel calls; `failing` counts failures in a row and starts again after a success or an edit.
+- **Hooks.**
+  - The `Stop` hook no longer tells a launched worker to push.
+  - Injected text is fitted before anything is acked: a message that does not fit stays unacked, and the lead cursor moves only past the event lines that went in.
+  - Hook state, the relay files and the lead cursor are per coordinator (`<state dir>/coord-<sha(url)>/`), so a second coordinator's message ids are not taken as shown.
 
 ### Changed
 
@@ -106,6 +134,9 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - The README and quickstart config no longer set `"plan": {"adapter": "builtin"}`, which kept the spec tree from being dispatched.
 - The default `pr_state_cmd` also asks for `url`.
 - The plugin option `project` is gone: nothing read it, and the project comes from `.claude/wavecoord.json`.
+- The lead cursor moved to `<state dir>/coord-<sha(url)>/lead-cursor.json`. After the upgrade a lead session starts at the head, without the old backlog. `wavecoord events --for lead --state-dir` takes the same base dir and finds the subdirectory from `--url`. Run one lead session per coordinator.
+- The plugin option `coord_url` must be set (it had the default `http://127.0.0.1:18741`).
+- Hints (plain messages) to a task still reach every later run of the task that has not seen them; this is now documented (`launcher.md`, "Listen and steer").
 
 ## 0.2.0
 

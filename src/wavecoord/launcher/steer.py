@@ -9,7 +9,8 @@ The wrapper is the parent of the worker, so it owns the worker's stdin. With
 A user line with priority `next` is read in the same turn once the running
 tools finish. A control request `interrupt` stops the running tool call and ends
 the turn; a user line queued with it runs as the next turn. Claude Code answers a control request
-with a `control_response` line on stdout (StreamStats records them). The run
+with a `control_response` line on stdout (StreamStats records them; the wrapper reports an error
+answer of a lead action to the lead). The run
 stays open until stdin closes, so the wrapper closes stdin after the final
 result (Steer.close).
 
@@ -23,7 +24,9 @@ import json
 import os
 import uuid
 
-from .common import iso
+from wavecoord.hooks import frame  # imported now: the zipapp may be replaced while the wrapper runs
+
+from .common import iso, now
 
 STEER_PREFIX = "wavecoord:"
 ACTIONS = ("interrupt", "model", "stop")
@@ -77,7 +80,6 @@ def action_body(action, model=None, note=None):
 
 
 def frame_messages(msgs):
-    from wavecoord.hooks import frame
     return "\n".join([HEADER] + [frame(m) for m in msgs])
 
 
@@ -91,6 +93,7 @@ class Steer(object):
         self.closed = False
         self.seen = set()  # message ids already sent or acted on
         self.requests = {}  # request_id -> subtype
+        self.pending = {}  # request_id -> {subtype, at, ids}: no control_response seen yet
         self.n = 0
         self.extra_turns = 0
         self.sent = set()  # uuids of the user lines sent after the prompt
@@ -124,13 +127,16 @@ class Steer(object):
             self.record("user", ids=list(ids), priority=priority, uuid=uid)
         return ok
 
-    def control(self, subtype, **fields):
+    def control(self, subtype, ids=(), **fields):
+        """A control request; `ids` are the lead messages it acts on (the wrapper checks the answer)."""
         self.n += 1
         rid = "wc-%d-%s" % (self.n, uuid.uuid4().hex[:8])
         ok = self._write(control_line(subtype, rid, **fields))
         if ok:
             self.requests[rid] = subtype
-            self.record("control", subtype=subtype, request_id=rid, **{k: v for k, v in fields.items() if k != "note"})
+            self.pending[rid] = {"subtype": subtype, "at": now(), "ids": list(ids)}
+            self.record("control", subtype=subtype, request_id=rid, ids=list(ids) or None,
+                        **{k: v for k, v in fields.items() if k != "note"})
         return rid if ok else None
 
     def close(self):

@@ -17,8 +17,8 @@ import re
 # api_retry error categories that mean the account or the API is throttled.
 THROTTLE_ERRORS = ("rate_limit", "overloaded")
 THROTTLE_RE = re.compile(r"rate.?limit|overloaded|\b(429|529)\b", re.I)
-LOOP_N = 3  # the same tool call this many times in a row is a loop
-FAIL_N = 3  # the same command failing this many times
+LOOP_N = 3  # the same tool calls in this many assistant messages in a row is a loop
+FAIL_N = 3  # the same command failing this many times in a row (no success and no edit in between)
 TEXT_MAX = 200
 EDIT_TOOLS = ("Edit", "Write", "MultiEdit", "NotebookEdit")
 
@@ -36,6 +36,7 @@ class StreamStats(object):
         self.cost_usd = None
         self.num_turns = None
         self.result = None  # the final `result` line (dict)
+        self.reports = []  # (index, result line) of every result line with a structured_output, oldest first
         self.api_retries = []
         self.rate_limits = []
         self.hook_events = 0
@@ -49,9 +50,12 @@ class StreamStats(object):
         self._tool_ids = {}  # tool_use_id -> summary
         self.last_text = None
         self.edited = []
-        self.failures = {}  # failing command -> count
+        self.failures = {}  # failing command -> consecutive failures (reset by a success or an edit)
+        self._step = None  # (message id, [tool keys]) of the assistant message being read
+        self.steps = []  # the tool keys of the last assistant messages, newest last
+        self.activity = 0  # lines that show a turn going on (not control responses, hooks or state changes)
         self.session_state = None
-        self.controls = {}  # request_id -> control response
+        self.controls = {}  # request_id -> control response (subtype success or error)
         self.context_pct = None
         self.queued_turns = 0
         self.answered = set()  # uuids of user lines that a result answered (user_message_uuids)
@@ -75,6 +79,10 @@ class StreamStats(object):
         t = e.get("type")
         st = e.get("subtype")
         notable = []
+        if t in ("assistant", "user", "result", "stream_event") or (t == "system" and st in ("init", "api_retry")):
+            self.activity += 1
+        if t != "assistant" and self._step is not None:
+            notable += self._close_step()  # an assistant message ends with the next other line
         if t == "system" and st == "init":
             self.session_id = e.get("session_id") or self.session_id
             self.model = e.get("model")
@@ -114,26 +122,36 @@ class StreamStats(object):
                 self.turns += 1
                 self._count_tokens(e.get("message") or {})
             main = e.get("parent_tool_use_id") is None
+            mid = (e.get("message") or {}).get("id")
+            if main and self._step is not None and (mid is None or mid != self._step[0]):
+                notable += self._close_step()
             for block in ((e.get("message") or {}).get("content") or []):
                 if not isinstance(block, dict):
                     continue
                 if block.get("type") == "tool_use":
                     self.last_tool = _tool_summary(block)
                     if main:
-                        notable += self._tool(block)
+                        notable += self._tool(block, mid)
                 elif block.get("type") == "text" and main and (block.get("text") or "").strip():
                     self.last_text = " ".join(block["text"].split())[:TEXT_MAX]
         elif t == "user":
             for block in ((e.get("message") or {}).get("content") or []):
-                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error"):
-                    cmd = self._tool_ids.get(block.get("tool_use_id"))
-                    if cmd and cmd.startswith("Bash: "):
-                        n = self.failures[cmd] = self.failures.get(cmd, 0) + 1
-                        if n >= FAIL_N:
-                            notable += self._stuck("failing", cmd, "%s failed %d times" % (cmd, n))
+                if not (isinstance(block, dict) and block.get("type") == "tool_result"):
+                    continue
+                cmd = self._tool_ids.get(block.get("tool_use_id"))
+                if not (cmd and cmd.startswith("Bash: ")):
+                    continue
+                if not block.get("is_error"):
+                    self.failures.pop(cmd, None)  # it passed: a red-green cycle is not stuck
+                    continue
+                n = self.failures[cmd] = self.failures.get(cmd, 0) + 1
+                if n >= FAIL_N:
+                    notable += self._stuck("failing", cmd, "%s failed %d times in a row" % (cmd, n))
         elif t == "result":
             self.result = e
             self.results += 1
+            if e.get("structured_output") is not None:
+                self.reports.append((self.results, e))
             self.queued_turns = e.get("queued_turn_count") or 0
             if isinstance(e.get("user_message_uuids"), list):
                 self.lists_answered = True
@@ -146,18 +164,32 @@ class StreamStats(object):
             self.other[key] = self.other.get(key, 0) + 1
         return notable
 
-    def _tool(self, block):
+    def _tool(self, block, mid=None):
         s = _tool_summary(block)
         if block.get("id"):
             self._tool_ids[block["id"]] = s
         if block.get("name") in EDIT_TOOLS:
+            self.failures = {}  # the worker changed something: the next red run is a new try
             path = (block.get("input") or {}).get("file_path")
             if isinstance(path, str) and path not in self.edited:
                 self.edited = (self.edited + [path])[-50:]
         self.tools = (self.tools + [s])[-20:]
-        last = self.tools[-LOOP_N:]
-        if len(last) == LOOP_N and len(set(last)) == 1:
-            return self._stuck("loop", s, "the same tool call %d times in a row: %s" % (LOOP_N, s))
+        if self._step is None:
+            self._step = (mid, [])
+        self._step[1].append((_tool_key(block), s))
+        return []
+
+    def _close_step(self):
+        """The tool calls of one assistant message are one step (parallel calls are not "in a row").
+        LOOP_N equal steps in a row is a loop."""
+        step, self._step = self._step, None
+        if not step or not step[1]:
+            return []
+        key = tuple(sorted(k for k, _ in step[1]))
+        self.steps = (self.steps + [key])[-LOOP_N:]
+        if len(self.steps) == LOOP_N and len(set(self.steps)) == 1:
+            s = "; ".join(sorted(set(x for _, x in step[1])))[:200]
+            return self._stuck("loop", key, "the same tool call %d times in a row: %s" % (LOOP_N, s))
         return []
 
     def _stuck(self, why, key, text):
@@ -187,6 +219,10 @@ class StreamStats(object):
         mid = msg.get("id") or "line-%d" % self.lines
         self.tokens += n - self._usage_ids.get(mid, 0)
         self._usage_ids[mid] = n
+
+    def flush(self):
+        """The end of the stream: close the last step. -> notable events."""
+        return self._close_step() if self._step is not None else []
 
     @property
     def structured_output(self):
@@ -244,6 +280,15 @@ class StreamStats(object):
             "lines": self.lines,
             "bad_lines": self.bad_lines,
         }
+
+
+def _tool_key(block):
+    """What makes two tool calls the same call: the name and the whole input (path, offset, glob, ...)."""
+    try:
+        inp = json.dumps(block.get("input") or {}, sort_keys=True, default=str)
+    except (TypeError, ValueError):
+        inp = repr(block.get("input"))
+    return "%s:%s" % (block.get("name") or "?", inp[:2000])
 
 
 def _tool_summary(block):

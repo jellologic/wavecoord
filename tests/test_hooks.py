@@ -370,6 +370,135 @@ class NoticeTest(Base):
         self.assertLess(self.elapsed, 7)
 
 
+def msg(mid, body, sender="lead"):
+    return {"id": mid, "ts": "2026-10-18T12:00:20Z", "sender": sender, "to": {"kind": "task", "id": "api-auth"},
+            "body": body, "reply_to": None, "acked": False}
+
+
+class ReviewFixTest(Base):
+    """Fixes from the second review: launched workers, clipping, per-coordinator state, rule 1."""
+
+    def serve(self, fc, inbox):
+        r = api_fixture("hb-response.json")
+        r["inbox"] = inbox
+        fc.routes[("POST", r"/api/hb")] = (200, r)
+        fc.routes[("GET", r"/api/inbox\?agent=.*")] = (200, {"now": "x", "messages": inbox, "more": False})
+
+    def acked(self, fc):
+        return sorted(int(r["path"].split("/")[3]) for r in fc.find("POST", r"/api/messages/\d+/ack"))
+
+    def test_launched_worker_hooks_leave_steer_actions_to_the_wrapper(self):
+        # item 44: a hook never shows or acks a lead steer action in a launched worker
+        stop = 'wavecoord:{"action":"stop","note":"stop now"}'
+        with FakeCoord() as fc:
+            self.serve(fc, [msg(99, stop), msg(100, "a plain hint")])
+            env = self.worker_env(fc.url, WAVECOORD_ATTEMPT_DIR=self.tmp)
+            ctx = self.assert_context(self.hook("PostToolBatch", self.fixture("PostToolBatch"), env), "PostToolBatch")
+            self.assertNotIn("#99", ctx)
+            self.assertIn("#100", ctx)
+            out = self.hook("Stop", self.fixture("Stop"), env)
+            self.assertNotIn("#99", json.dumps(out))
+            self.assertEqual(self.acked(fc), [100])
+            # a session that wavecoord did not launch has no wrapper: it sees the action as text
+            env = self.worker_env(fc.url, WAVECOORD_STATE_DIR=os.path.join(self.tmp, "state2"))
+            ctx = self.assert_context(self.hook("PostToolBatch", self.fixture("PostToolBatch"), env), "PostToolBatch")
+            self.assertIn("#99", ctx)
+
+    def test_launched_worker_is_not_told_to_push(self):
+        # items 48, 59, 76: the launcher pushes; the Stop hook asks only for a commit
+        bare = os.path.join(self.tmp, "remote.git")
+        git(self.tmp, "init", "-q", "--bare", bare)
+        git(self.repo, "remote", "add", "origin", bare)
+        git(self.repo, "push", "-q", "origin", "main")
+        git(self.repo, "remote", "set-head", "origin", "main")
+        git(self.repo, "checkout", "-q", "--no-track", "-b", "wave/api-auth-1", "origin/main")
+        git(self.repo, "commit", "-q", "--allow-empty", "-m", "work")
+        with FakeCoord() as fc:
+            self.serve(fc, [])
+            env = self.worker_env(fc.url, WAVECOORD_ATTEMPT_DIR=self.tmp)
+            self.assertIsNone(self.hook("Stop", self.fixture("Stop"), env))
+            with open(os.path.join(self.repo, "new.py"), "w") as f:
+                f.write("x = 1\n")
+            out = self.hook("Stop", self.fixture("Stop"), env)
+        self.assertIn("uncommitted", out["reason"])
+        self.assertNotIn("Push", out["reason"])
+
+    def test_messages_that_do_not_fit_stay_unacked(self):
+        # item 75: only what the model sees is acked; the rest comes next turn
+        long = [msg(i, ("message %d " % i) + "x" * 3000) for i in range(1, 6)]
+        with FakeCoord() as fc:
+            self.serve(fc, long)
+            env = self.worker_env(fc.url, WAVECOORD_HOOK_MIN_INTERVAL_S="0")
+            ctx = self.assert_context(self.hook("UserPromptSubmit", self.fixture("UserPromptSubmit"), env),
+                                      "UserPromptSubmit")
+            self.assertNotIn("truncated", ctx)
+            first = self.acked(fc)
+            self.assertEqual(first, [1, 2])
+            self.assertIn("#2 from", ctx)
+            self.serve(fc, long[2:])
+            ctx = self.assert_context(self.hook("UserPromptSubmit", self.fixture("UserPromptSubmit"), env),
+                                      "UserPromptSubmit")
+            self.assertIn("#3 from", ctx)
+            self.assertEqual(self.acked(fc), [1, 2, 3, 4])
+
+    def test_lead_cursor_stops_at_what_fits(self):
+        # item 75: the lead cursor moves only past the event lines that went into the context
+        from wavecoord import feedback, hooks
+
+        class C(object):
+            url, token, timeout = "http://127.0.0.1:1", "t", 3.0
+
+            class deadline(object):
+                @staticmethod
+                def remaining():
+                    return 5.0
+        sd = os.path.join(self.tmp, "sd")
+        h = object.__new__(hooks.Hook)
+        h.c, h.sd, h.env = C(), sd, {}
+        h.id = type("I", (), {"agent": "lead"})()
+        feedback.write_cursor(sd, 10)
+        evs = [{"seq": 10 + i, "kind": "report.post", "payload": {}} for i in range(1, 41)]
+        orig = (feedback.sse_events, feedback.lead_line)
+        feedback.sse_events = lambda *a, **k: iter(evs)
+        feedback.lead_line = lambda ev: "event %d " % ev["seq"] + "y" * 500
+        try:
+            got = h.lead_events(room=2000)
+        finally:
+            feedback.sse_events, feedback.lead_line = orig
+        self.assertEqual(len(got), 3)
+        self.assertEqual(feedback.read_cursor(sd), 13)
+
+    def test_state_is_per_coordinator(self):
+        # item 77: message #12 of a second coordinator is not "already shown"
+        with FakeCoord() as a, FakeCoord() as b:
+            for fc in (a, b):
+                self.assert_context(self.hook("UserPromptSubmit", self.fixture("UserPromptSubmit"),
+                                              self.worker_env(fc.url)), "UserPromptSubmit")
+            self.assertEqual(self.acked(a), [12])
+            self.assertEqual(self.acked(b), [12])
+        from wavecoord.hooks import coord_state_dir
+        state = os.path.join(self.tmp, "state")
+        self.assertNotEqual(coord_state_dir(state, a.url), coord_state_dir(state, b.url))
+        self.assertTrue(os.path.isdir(coord_state_dir(state, a.url)))
+
+    def test_plugin_option_alone_is_inert_outside_a_configured_repo(self):
+        # item 78: no WAVECOORD_URL and no .claude/wavecoord.json: rule 1, nothing happens
+        with FakeCoord() as fc:
+            env = self.env(None, CLAUDE_PLUGIN_OPTION_COORD_URL=fc.url, CLAUDE_PLUGIN_OPTION_TOKEN=TOKEN)
+            self.assertIsNone(self.hook("SessionStart", self.fixture("SessionStart"), env))
+            self.assertEqual(fc.requests, [])
+            os.makedirs(os.path.join(self.repo, ".claude"))
+            with open(os.path.join(self.repo, ".claude", "wavecoord.json"), "w") as f:
+                f.write('{"project": "demo"}\n')
+            self.hook("SessionStart", self.fixture("SessionStart"), env)
+            self.assertEqual(len(fc.find("POST", "/api/hb")), 1)
+
+    def test_coord_url_option_has_no_default(self):
+        with open(os.path.join(_paths.ROOT, "plugin", ".claude-plugin", "plugin.json")) as f:
+            opt = json.load(f)["userConfig"]["coord_url"]
+        self.assertNotIn("default", opt)
+
+
 class HooksJsonTest(unittest.TestCase):
     def test_events_modes_and_timeouts(self):
         with open(os.path.join(_paths.ROOT, "plugin", "hooks", "hooks.json")) as f:

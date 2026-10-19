@@ -37,7 +37,7 @@ Commit `.claude/wavecoord.json` (no secrets in it; schema: `schemas/config.schem
 ```
 
 - Workers run `claude -p` unattended, so `claude_flags` must allow what they need: edits, `git add`, `git commit` and your test command. Workers never push; the launcher does.
-- Worktrees go to `<repo_path>/../wt/<task>-<n>`.
+- Worktrees go to `<repo_path>/../wt/<project>/<task>-<n>`.
 - There is no `plan` key: the lead plans from the spec tree (`specs/`, `/wavecoord:spec`) once the default branch has spec records, else from the task files in `plan/tasks`. `"plan": {"adapter": "builtin"}` would pin `plan/tasks`, and the spec tree would then never be dispatched (`adapters.md`).
 - `wavecoord plan validate` checks the spec files offline (for CI).
 
@@ -69,11 +69,11 @@ In `/plugin`, set for wavecoord:
 
 | Option | Value |
 |---|---|
-| `coord_url` | `http://127.0.0.1:18741` (the default) |
+| `coord_url` | `http://127.0.0.1:18741` (the server's default; the option has no default) |
 | `token` | the lead token: `cat ~/.wavecoord/token` |
 | `lead` | `true` on the machine you plan from |
 
-Or leave `lead` off and start the lead session with `WAVECOORD_ROLE=lead claude`. Workers are never the lead, whatever the option says (`feedback.md`).
+Or leave `lead` off and start the lead session with `WAVECOORD_ROLE=lead claude`. Workers are never the lead, whatever the option says (`feedback.md`). The hooks act only in a repo with `.claude/wavecoord.json` (or with `WAVECOORD_URL` set), so other repos are not affected by these options. Run one lead session per coordinator: lead sessions share the lead cursor.
 
 ## 6. Plan
 

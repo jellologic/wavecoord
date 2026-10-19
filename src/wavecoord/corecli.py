@@ -308,8 +308,10 @@ def follow_lead(url, since=None, follow=True, out=None, token=None, state=None, 
     """
     from wavecoord import feedback
     from wavecoord.client import state_dir
+    from wavecoord.hooks import coord_state_dir
     out = out or sys.stdout
-    state = state if state is not None else state_dir(env)
+    # the cursor of this coordinator, as the hooks keep it: <state dir>/coord-<sha(url)>/lead-cursor.json
+    state = coord_state_dir(state if state is not None else state_dir(env), url)
     if since is None and cursor:
         since = feedback.read_cursor(state)
     count = 0
