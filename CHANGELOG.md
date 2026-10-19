@@ -39,6 +39,7 @@ The spec tree: requirements and plans as typed Markdown records in your repo, me
 
 ### Fixed
 
+- **A too-large request could reset the connection instead of answering 413.** The server refused a body over `REQ_MAX_BYTES` before reading it, so a client still writing it got `Connection reset by peer` (seen in CI on macOS with Python 3.12). It now reads and drops up to 1 MiB of the body first, then answers 413 and closes the connection.
 - **A launched worker's `SessionEnd` hook released its own lease before the launcher pushed.** Real Claude Code runs `SessionEnd` when a worker ends; the hook sent `finish` with `pushed: false`, so the server released the lease, the attempt went to the refinery with no parked lease (blocked as `stale_lease`), and a task never showed as in review. The fake claude runs no `SessionEnd` hook, so only the live smoke test found it. The hook now leaves the finish to the launcher when `WAVECOORD_ATTEMPT_DIR` is set.
 - **Verify at merge on a requirement with several tasks.** The requirement's Verify describes the finished requirement, so it now runs with the merge of the last open task under it; earlier merges run the task's Acceptance and record the tasks still pending (`requirement_pending`).
 

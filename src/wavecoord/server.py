@@ -160,6 +160,9 @@ def _dispatch(lead, b):
     return lead.dispatch(b["task"], b.get("host"), b.get("overrides"), bool(b.get("dry_run")))
 
 
+DRAIN_MAX = 1 << 20  # bytes of an oversized body the server reads before it answers 413
+
+
 # (method, path regex, handler(app, ctx, match, body, query, idem) -> response dict)
 def _routes():
     c = lambda app: app.coord  # noqa: E731
@@ -313,6 +316,15 @@ class Handler(BaseHTTPRequestHandler):
         except ValueError:
             raise ApiError("bad_request", "bad Content-Length")
         if length > const.get("REQ_MAX_BYTES") or length < 0:
+            # read (and drop) a body up to DRAIN_MAX first, so the client gets the 413 instead of a reset of a
+            # connection it is still writing to; a larger body is cut off
+            left = min(max(length, 0), DRAIN_MAX)
+            while left > 0:
+                chunk = self.rfile.read(min(left, 65536))
+                if not chunk:
+                    break
+                left -= len(chunk)
+            self.close_connection = True
             raise ApiError("too_large", "the request body is larger than %d bytes" % const.get("REQ_MAX_BYTES"))
         raw = self.rfile.read(length) if length else b""
         url = urllib.parse.urlsplit(self.path)
