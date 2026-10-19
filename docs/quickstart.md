@@ -2,6 +2,8 @@
 
 From install to a merged wave on one machine, in copy-and-paste steps. Workers on SSH hosts are one config entry more (step 11). For what each step means and how to use wavecoord well, read [guide.md](guide.md).
 
+Prefer to watch first? [quickstart.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/quickstart.mp4) and [spec-to-merge.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/spec-to-merge.mp4) show these steps on a demo repo.
+
 You need: Claude Code with a login, `git`, `python3` (3.9 or later), and a repo with an `origin` remote. The default `pr_cmd` and `merge_cmd` use the GitHub CLI `gh`; set your own for another forge (`adapters.md`).
 
 ## 1. Install the plugin and the CLI
@@ -96,7 +98,9 @@ Start Claude Code in the repo and run:
 /wavecoord:coord-status
 ```
 
-It prints the `ok:` line and the (empty) wave. The `config` tool shows `plan.selected_by`: before the first spec PR merges, the lead plans from `plan/tasks`.
+It prints the `ok:` line and the (empty) wave. The `config` tool shows `plan.selected_by`: before the first spec PR merges, the lead plans from `plan/tasks`. In a terminal, `wavecoord status` checks the server and `wavecoord hosts` probes the hosts:
+
+![wavecoord status and wavecoord hosts](img/anim-quickstart.svg)
 
 ## 7. Specify the feature
 
@@ -127,6 +131,8 @@ git pull
 wavecoord spec waves       # wave 1 (2): ..., critical path, max width
 ```
 
+![spec check, spec waves and spec ready](img/anim-plan.svg)
+
 ## 9. Run the wave
 
 ```
@@ -146,6 +152,10 @@ wavecoord #42 2026-10-19T12:30:00Z report.post auth.sessions.token-rotation.rota
 ```
 
 The hooks also add new events to your next prompt, so nothing is lost when the Monitor expires (30 min; start it again). To watch a worker: `wavecoord attempts ls --active` and `wavecoord attempts logs <task>-<n> -f`.
+
+A wave from dispatch to merge, in a demo repo:
+
+![dispatch, attempts, collect, refinery merge and gate-check](img/wave.gif)
 
 ## 10. Triage until the wave is merged
 

@@ -1,0 +1,30 @@
+# Narration for steering.mp4. One [section] per chapter (see VIDEOS in scripts/docs_video.py).
+# Each sentence is spoken on its own and becomes one subtitle. Keep sentences short.
+
+[intro]
+Sometimes a worker needs a nudge while it runs.
+This video shows how the lead steers one, without stopping the wave.
+
+[running]
+attempts ls, with the active flag, shows the workers in flight.
+The replay task is running on the local host.
+
+[hint]
+wavecoord hint sends a short message to that worker.
+The worker reads it within a few seconds and keeps going.
+
+[model]
+steer model switches the worker to another model in the middle of its run.
+Here, we move it to opus for a harder part.
+
+[interrupt]
+steer interrupt stops the current turn.
+The note goes with it, so the worker knows what to do next.
+
+[logs]
+The attempt log shows each action arrive.
+First the hint, then the model switch and the interrupt, all from the lead.
+
+[feed]
+When the worker finishes, its report reaches the lead's events feed, like any other.
+The lead collects it and merges it as usual.

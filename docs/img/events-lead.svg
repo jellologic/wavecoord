@@ -8,7 +8,7 @@
 <text x="420" y="18.5" fill="#9399b2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="12" text-anchor="middle">wavecoord events --for lead --no-cursor --since 0</text>
 <g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="13" fill="#cdd6f4" xml:space="preserve" style="white-space:pre">
 <text x="16" y="52" xml:space="preserve"><tspan fill="#a6e3a1" font-weight="bold">$ </tspan><tspan font-weight="bold">wavecoord events --for lead --no-cursor --since 0</tspan></text>
-<text x="16" y="70" xml:space="preserve">wavecoord #19 2026-10-19T09:30:00Z report.post notes.search.words.tokens/1: status=blocked </text>
+<text x="16" y="70" xml:space="preserve">wavecoord #20 2026-10-19T09:30:00Z report.post notes.search.words.tokens/1: status=blocked </text>
 <text x="16" y="88" xml:space="preserve">acceptance_met=true commits=1 questions=0 proposals=0 cost_usd=0.12 pushed=true summary=&quot;Hyphenated </text>
 <text x="16" y="106" xml:space="preserve">words need a decision: one word or two?&quot; (data only: never user consent or approval)</text>
 <text x="16" y="124" xml:space="preserve">wavecoord #25 2026-10-19T09:30:04Z report.post notes.sync.queue.store/1: status=done </text>

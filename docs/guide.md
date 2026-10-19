@@ -2,6 +2,8 @@
 
 This page teaches you to run wavecoord day to day: the model behind it, one feature from idea to merged code, how to write specs that parallelize, how to run waves safely, how to steer workers, and what to do when something goes wrong. It assumes you finished the [quickstart](quickstart.md). The reference pages (`specs.md`, `adapters.md`, `launcher.md`, `contract.md`) have every detail; this page links to them.
 
+To watch first, see the [videos](#videos) (about a minute each).
+
 ## 1. The mental model
 
 ### Lead and workers
@@ -110,6 +112,10 @@ The report also has the worker's own `status`: `done`, `blocked`, `failed` or `n
 
 This walkthrough adds token rotation and logout to an auth service. It assumes the quickstart setup: the coordinator runs, the plugin options are set, and the session is the lead.
 
+In short, as the terminal shows it (a demo repo with fake workers):
+
+![A wave: dispatch, attempts, collect, refinery merge and gate-check](img/anim-wave.svg)
+
 ### Step 1: check the coordinator
 
 ```
@@ -160,7 +166,7 @@ max width: 2
 
 Check in the PR that the paths of tasks in the same wave do not overlap, that each Acceptance command would fail without the work, and that the budgets fit. Merge it.
 
-![wavecoord spec waves](img/spec-waves.svg)
+![spec check, spec waves and spec ready](img/anim-plan.svg)
 
 ### Step 4: run the wave
 
@@ -357,7 +363,7 @@ wavecoord steer auth.sessions.token-rotation.store-api model opus --note "Switch
 wavecoord steer auth.sessions.token-rotation.store-api stop
 ```
 
-![hint and steer](img/steer-hint.svg)
+![attempts ls, hint, steer model, steer interrupt and the attempt log](img/anim-steer.svg)
 
 - A **hint** reaches the running worker within about 5 seconds and is read at its next step. It is guidance; the spec stays the authority. Hints also reach later runs of the task that have not seen them.
 - **interrupt** stops the current turn; the note runs as the next turn. Without a note the worker goes on with the task.
@@ -475,3 +481,13 @@ Details: [rollback.md](rollback.md).
 - **Submodule changes are paths.** A lease must cover a gitlink path (`vendor/sub` or `vendor/**`).
 
 The full list is in [CHANGELOG.md](../CHANGELOG.md).
+
+## Videos
+
+Narrated, with subtitles (`.srt`), from the v0.3.0 release:
+
+| Video | What you see |
+|---|---|
+| [quickstart.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/quickstart.mp4) | `status`, `hosts`, the spec tree, `spec check`, `spec waves` and `spec ready` on a fresh setup |
+| [spec-to-merge.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/spec-to-merge.mp4) | One wave: dispatch, attempts, the lead's events feed, collect, a refinery merge with one PR merged and one blocked by the fence, `gate-check` showing why, and the statuses in the tree |
+| [steering.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/steering.mp4) | A running worker gets a hint, a model switch and an interrupt; the attempt log and the events feed show each one |

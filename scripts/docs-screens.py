@@ -3,11 +3,13 @@
 
     python3 scripts/docs-screens.py                 # writes docs/img/*.svg
     python3 scripts/docs-screens.py --out /tmp/img --keep
+    python3 scripts/docs-screens.py --all           # also animated SVGs, GIFs and narrated MP4s (docs_video.py)
 
 It builds a throwaway consumer repo (a small "notes" app spec tree, a bare origin), starts a real coordinator
 (`wavecoord serve`) on a free loopback port, and drives a wave of work with the fakes of tests/ on PATH
 (tests/fake-claude/claude, tests/fake-gh/gh): no model, no network. At each moment it runs the real CLI and
-renders its stdout as a terminal window. Temp paths show as ~/demo, the port as 18741, and times and ids that
+renders its stdout as a terminal window. Each capture is also recorded as a scene (the commands, their output and
+how long they took), which scripts/docs_video.py turns into animated SVGs, GIFs and videos. Temp paths show as ~/demo, the port as 18741, and times and ids that
 change from run to run are pinned, so a re-run gives near-identical files. Stdlib only.
 """
 
@@ -29,6 +31,7 @@ SHOWN_PORT = 18741
 DEMO = "~/demo"
 GIT_DATE = "2026-10-19T09:30:00+00:00"
 TS_RE = re.compile(r"\d{4}-\d\d-\d\dT\d\d:\d\d:\d\d(?:\.\d+)?Z")
+UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\b")
 PARENT_ENV = ("CLAUDECODE", "CLAUDE_CODE_ENTRYPOINT", "CLAUDE_CODE_SSE_PORT", "CLAUDE_CODE_MESSAGING_SOCKET",
               "CLAUDE_CODE_MESSAGING_TOKEN", "CLAUDE_PLUGIN_OPTION_TOKEN", "CLAUDE_PLUGIN_OPTION_COORD_URL",
               "WAVECOORD_URL", "WAVECOORD_TOKEN", "WAVECOORD_TOKEN_FILE", "WAVECOORD_ROLE", "WAVECOORD_TASK",
@@ -275,6 +278,7 @@ class Demo(object):
         self.server = None
         self.url = None
         self.written = []
+        self.scenes = {}  # name -> {"title", "cols", "steps": [{"cmd", "out", "secs"}]} for docs_video.py
         self.modes_path = os.path.join(self.tmp, "modes.json")
         self.gate = os.path.join(self.tmp, "release-replay")
         env = {k: v for k, v in os.environ.items() if k not in PARENT_ENV and not k.startswith(("FAKE_", "GIT_"))}
@@ -314,16 +318,19 @@ class Demo(object):
         text = re.sub(r"127\.0\.0\.1:%d\b" % self.port, "127.0.0.1:%d" % SHOWN_PORT, text)
         for i, ts in enumerate(sorted(set(TS_RE.findall(text)))):
             text = text.replace(ts, "2026-10-19T09:%02d:%02dZ" % (30 + (i * 4) // 60, (i * 4) % 60))
-        return text
+        return UUID_RE.sub("6f143497-aeac-4725-a76a-ede85cf79026", text)
 
-    def capture(self, name, title, cmds, check=True, cols=100):
-        """Run each wavecoord command (a list of args), mask, render, write <name>.svg. Returns the outputs."""
-        blocks, outs = [], []
+    def capture(self, name, title, cmds, check=True, cols=100, static=True):
+        """Run each wavecoord command (a list of args), mask, render, write <name>.svg (static=False: only record
+        the scene). Returns the outputs."""
+        blocks, outs, secs = [], [], []
         for args in cmds:
+            t0 = time.time()
             # as a terminal shows it: stdout and stderr interleaved
             p = subprocess.run([sys.executable, "-m", "wavecoord"] + list(args), cwd=self.repo, env=self.env,
                                stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True,
                                timeout=180)
+            secs.append(round(time.time() - t0, 2))
             if check and p.returncode not in (0, 1):
                 raise RuntimeError("wavecoord %s: exit %s\n%s" % (" ".join(args), p.returncode, p.stdout))
             text = p.stdout
@@ -332,11 +339,14 @@ class Demo(object):
                     m.group(1), "32.0", m.group(2), "512"), text, flags=re.M)
             outs.append(p)
             blocks.append(("wavecoord " + " ".join(_quote(a) for a in args), self.mask(text)))
-        svg = render_svg(title or blocks[0][0], blocks, cols=cols)
-        path = os.path.join(self.out_dir, name + ".svg")
-        with open(path, "w") as f:
-            f.write(svg)
-        self.written.append(path)
+        self.scenes[name] = {"title": title or blocks[0][0], "cols": cols, "steps": [
+            {"cmd": c, "out": t, "secs": s} for (c, t), s in zip(blocks, secs)]}
+        if static:
+            svg = render_svg(title or blocks[0][0], blocks, cols=cols)
+            path = os.path.join(self.out_dir, name + ".svg")
+            with open(path, "w") as f:
+                f.write(svg)
+            self.written.append(path)
         sys.stdout.write("== %s\n" % name)
         for c, t in blocks:
             sys.stdout.write("$ %s\n%s\n" % (c, t))
@@ -438,6 +448,7 @@ class Demo(object):
     def run(self):
         self.setup()
         self.capture("status", "wavecoord status && wavecoord hosts", [["status"], ["hosts"]], cols=120)
+        self.capture("spec-tree-start", None, [["spec", "tree"]], static=False)
         self.capture("spec-check", None, [["spec", "check"]])
         self.capture("spec-waves", None, [["spec", "waves"]])
         self.capture("plan-ready", None, [["spec", "ready"]])
@@ -452,10 +463,12 @@ class Demo(object):
             TOKENIZE: {"commit": {"src/search/tokenize.py": "def words(text): return text.lower().split()\n"},
                        "cost": 0.12, "report": {"status": "blocked",
                                                 "summary": "Hyphenated words need a decision: one word or two?"}},
-            REPLAY: {"wait_for": self.gate, "commit": {"src/sync/replay.py": "def replay(q): pass\n"}},
+            REPLAY: {"wait_for": self.gate, "commit": {"src/sync/replay.py": "def replay(q): pass\n"}, "cost": 0.44,
+                     "report": {"summary": "Replay drains the queue oldest first; a test covers an empty queue"}},
         })
         self.capture("dispatch", None, [["dispatch"]], cols=110)
         self.wait(lambda: self.ended(QUEUE + "-1") and self.ended(TOKENIZE + "-1"), "wave 1 reports")
+        self.capture("attempts-wave1", None, [["attempts", "ls"]], static=False)  # the index still runs
         self.capture("steer-hint", "wavecoord steer && wavecoord hint",
                      [["steer", INDEX, "model", "opus"],
                       ["hint", INDEX, "Export the index through notes.search.index only."]])
@@ -473,9 +486,24 @@ class Demo(object):
         self.git("pull", "-q", "--ff-only", "origin", "main")
         self.capture("spec-tree", None, [["spec", "tree"]])
         self.capture("events-lead", None, [["events", "--for", "lead", "--no-cursor", "--since", "0"]])
+        # steering (video and animation only): the replay worker waits, the lead hints, switches its model and
+        # interrupts it, the attempt log shows each action arrive, then the worker reports
+        self.capture("steer-running", None, [["attempts", "ls", "--active"]], static=False)
+        self.capture("steer-hint2", None, [["hint", REPLAY, "Replay the edits oldest first, one at a time."]],
+                     static=False)
+        self.capture("steer-model", None, [["steer", REPLAY, "model", "opus"]], static=False)
+        self.capture("steer-interrupt", None, [["steer", REPLAY, "interrupt", "--note",
+                                                "Add a test for an empty queue first."]], static=False)
+        self.wait(lambda: "from lead: interrupt" in self.wc("attempts", "logs", REPLAY + "-1", check=False).stdout,
+                  "the steer actions in the attempt log")
+        self.capture("steer-logs", None, [["attempts", "logs", REPLAY + "-1", "--tail", "4"]], static=False)
+        seq = max([json.loads(l).get("seq", 0) for l in self.wc("events", "--since", "0").stdout.splitlines()
+                   if l.startswith("{")] or [0])
         with open(self.gate, "w") as f:
             f.write("go\n")
         self.wait(lambda: self.ended(REPLAY + "-1"), "the replay attempt")
+        self.capture("steer-feed", None, [["events", "--for", "lead", "--no-cursor", "--since", str(seq)]],
+                     static=False)
 
 
 def _quote(a):
@@ -486,18 +514,54 @@ def main(argv=None):
     ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     ap.add_argument("--out", default=os.path.join(ROOT, "docs", "img"), help="output directory (default docs/img)")
     ap.add_argument("--keep", action="store_true", help="keep the demo directory")
+    media = ap.add_argument_group("animations and videos (scripts/docs_video.py)")
+    media.add_argument("--all", action="store_true", help="also --anim, --gif and --video")
+    media.add_argument("--anim", action="store_true", help="animated SVGs, docs/img/anim-<name>.svg")
+    media.add_argument("--gif", action="store_true", help="GIFs, docs/img/<name>.gif (needs rsvg-convert, ffmpeg)")
+    media.add_argument("--video", action="store_true",
+                       help="narrated MP4s and .srt in --video-out (needs rsvg-convert, ffmpeg and a TTS)")
+    media.add_argument("--video-out", default=os.path.join(ROOT, "dist", "videos"),
+                       help="where the MP4s go (default dist/videos, not committed)")
+    media.add_argument("--tts", choices=["say", "openai", "elevenlabs"], default="say",
+                       help="voice: macOS say (default), or OpenAI / ElevenLabs with OPENAI_API_KEY / ELEVENLABS_API_KEY")
+    media.add_argument("--voice", help="the TTS voice (default: Samantha, alloy, or a stock ElevenLabs voice)")
+    media.add_argument("--only", action="append", default=[], metavar="NAME",
+                       help="only this video or animation (repeatable)")
+    media.add_argument("--scenes", metavar="JSON", help="write the recorded scenes to this file")
+    media.add_argument("--from-scenes", metavar="JSON",
+                       help="skip the demo: build animations and videos from scenes saved with --scenes")
     args = ap.parse_args(argv)
+    if args.all:
+        args.anim = args.gif = args.video = True
+    wants_media = args.anim or args.gif or args.video
+    if wants_media:
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        import docs_video
+        docs_video.check_tools(args)  # fail before the demo runs
     os.makedirs(args.out, exist_ok=True)
-    d = Demo(os.path.abspath(args.out))
-    try:
-        d.run()
-    finally:
-        d.stop()
-        if args.keep:
-            sys.stdout.write("demo kept: %s\n" % d.tmp)
-        else:
-            shutil.rmtree(d.tmp, ignore_errors=True)
-    sys.stdout.write("wrote %d SVGs to %s\n" % (len(d.written), args.out))
+    if args.from_scenes:
+        if not wants_media:
+            raise SystemExit("docs-screens: --from-scenes needs --anim, --gif, --video or --all")
+        with open(args.from_scenes) as f:
+            scenes = json.load(f)
+    else:
+        d = Demo(os.path.abspath(args.out))
+        try:
+            d.run()
+        finally:
+            d.stop()
+            if args.keep:
+                sys.stdout.write("demo kept: %s\n" % d.tmp)
+            else:
+                shutil.rmtree(d.tmp, ignore_errors=True)
+        sys.stdout.write("wrote %d SVGs to %s\n" % (len(d.written), args.out))
+        scenes = d.scenes
+    if args.scenes:
+        with open(args.scenes, "w") as f:
+            json.dump(scenes, f, indent=1, sort_keys=True)
+            f.write("\n")
+    if wants_media:
+        docs_video.build(scenes, args)
     return 0
 
 

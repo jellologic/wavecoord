@@ -4,7 +4,9 @@ wavecoord is a Claude Code plugin for plan-driven, parallel agent work. A **lead
 
 No runtime dependencies: the coordinator, launcher, hooks and CLI are one stdlib Python zipapp (Python 3.9 or later).
 
-![wavecoord status: the coordinator answers](docs/img/status.svg)
+![A wave: dispatch, attempts, collect, refinery merge and gate-check](docs/img/anim-wave.svg)
+
+<sub>Real output of a demo repo (fake workers, no model). Also as a [GIF](docs/img/wave.gif); narrated videos are under [Videos](#videos).</sub>
 
 ## How it fits together
 
@@ -146,6 +148,16 @@ Repeat 3 to 5 until the wave is merged; `/loop 10m /wavecoord:triage` does it wh
 ![wavecoord events for the lead](docs/img/events-lead.svg)
 
 To read this first: [docs/guide.md](docs/guide.md) explains the model, walks one feature from idea to merged code, and covers specs, safe runs, steering, triage and recovery.
+
+## Videos
+
+Short narrated videos with subtitles (`.srt` next to each), attached to the v0.3.0 release:
+
+| Video | What you see |
+|---|---|
+| [quickstart.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/quickstart.mp4) | `status`, `hosts`, the spec tree, `spec check`, `spec waves` and `spec ready` on a fresh setup |
+| [spec-to-merge.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/spec-to-merge.mp4) | One wave: dispatch, attempts, the lead's events feed, collect, a refinery merge with one PR merged and one blocked by the fence, `gate-check` showing why, and the statuses in the tree |
+| [steering.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/steering.mp4) | A running worker gets a hint, a model switch and an interrupt; the attempt log and the events feed show each one |
 
 ## Docs
 
