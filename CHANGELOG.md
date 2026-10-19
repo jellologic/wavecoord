@@ -153,6 +153,13 @@ Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the who
   - The `Stop` hook no longer tells a launched worker to push.
   - Injected text is fitted before anything is acked: a message that does not fit stays unacked, and the lead cursor moves only past the event lines that went in.
   - Hook state, the relay files and the lead cursor are per coordinator (`<state dir>/coord-<sha(url)>/`), so a second coordinator's message ids are not taken as shown.
+- **Setup** (found while writing the course).
+  - `wavecoord init` and `wavecoord doctor` put and look for host tokens where the launcher reads them, `$WAVECOORD_HOME/hosts/` when it is set (one function, `launcher.common.host_token_file`), not always `~/.wavecoord/hosts/`.
+  - `init --server` starts the service on the port of the config's `coord_url` (`serve --port`), not always on 18741; for a `coord_url` with another host it prints the `install-server --bind` command instead of widening the bind.
+  - `WAVECOORD_HOME` is the launcher's root folder but one project's state folder for the server; `docs/launcher.md` says so, and doctor's new `homes` line names both folders.
+  - A `claude --plugin-dir` session's plugin (`wavecoord@inline`) is no longer reported as not installed: doctor finds it through `CLAUDE_PLUGIN_ROOT` or `--plugin-id`, and `init --configure-plugin --plugin-id <id>` configures that id (in a `--plugin-dir` session it picks `wavecoord@inline` by itself).
+  - doctor no longer says `gh` is "not needed" when `pr_cmd`, `merge_cmd` and `pr_state_cmd` are set: the refinery's fence check, a resolver's `Lease:` line and plan PR bodies still use `gh` (`warn`; `fail` in fence merge mode `enforce`). `docs/adapters.md`, "Other forges", lists these calls.
+  - The refinery's merge order between tasks that unblock the same amount of work is the attempt that finished first, then the task id (unchanged, now documented and tested).
 
 ### Changed
 

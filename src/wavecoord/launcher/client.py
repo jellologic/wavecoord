@@ -14,8 +14,8 @@ from wavecoord import zipapp
 
 from . import coord as coordmod
 from .providers import ANTHROPIC, cost_basis
-from .common import (FINAL, TASK_RE, LauncherError, Unreachable, ensure_dir, git_run, now, rand4, read_json,
-                     run_cmd, wc_home, write_json)
+from .common import (FINAL, TASK_RE, LauncherError, Unreachable, ensure_dir, git_run, host_token_file, now, rand4,
+                     read_json, run_cmd, wc_home, write_json)
 from .transport import SSH_OPTS, Host, ssh_exe
 
 POLL_S = 10.0
@@ -245,11 +245,11 @@ class Launcher(object):
                 raise LauncherError("%s: plugin upload failed: %s" % (h.name, out.get("error")))
 
     def local_token_file(self, name):
-        """A local host's agent token file (~/.wavecoord/hosts/<name>.token), or None.
+        """A local host's agent token file (<wc_home>/hosts/<name>.token, `host_token_file`), or None.
 
         A local host shares ~/.wavecoord/token with the lead's own CLI, so its workers
         get their agent token by path instead of a copy (security.md, "Tokens")."""
-        p = os.path.join(wc_home(), "hosts", name + ".token")
+        p = host_token_file(name)
         if os.path.isfile(p):
             return p
         # None yet: provision one in the tokens file of the coordinator on this machine (the quickstart
@@ -272,7 +272,7 @@ class Launcher(object):
         """Copy this host's agent token (~/.wavecoord/hosts/<name>.token) when the host lacks it."""
         if h.local:
             return
-        src = os.path.join(wc_home(), "hosts", h.name + ".token")
+        src = host_token_file(h.name)
         try:
             with open(src, "rb") as f:
                 tok = f.read().strip()

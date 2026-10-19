@@ -64,7 +64,7 @@ Merge the config pull request and pull: the launcher and the merge queue read th
 gh pr merge <number> --merge && git pull
 ```
 
-In the video we pass `--coord-url http://127.0.0.1:18793` and start the coordinator by hand, because the default port 18741 is busy on the recording machine. You do not need that.
+In the video we pass `--coord-url http://127.0.0.1:18793` and start the coordinator by hand, because the default port 18741 is busy on the recording machine. You do not need that. (With `--server`, init starts the service on the port of `--coord-url`.)
 
 ### 5. Check with doctor
 
@@ -72,7 +72,7 @@ In the video we pass `--coord-url http://127.0.0.1:18793` and start the coordina
 wavecoord doctor
 ```
 
-Each line is `ok`, `warn` or `fail`, and every problem has a `fix:` line with the command to run. The last line counts them: `0 failed, 0 warnings, 18 ok`. `--quick` skips the host probes, `--json` prints JSON, and the exit code is 1 when a check fails.
+Each line is `ok`, `warn` or `fail`, and every problem has a `fix:` line with the command to run. The last line counts them: `0 failed, 0 warnings, 19 ok`. The `homes` line names the folders that `WAVECOORD_HOME` stands for ([launcher.md](../launcher.md#wavecoord_home)). `--quick` skips the host probes, `--json` prints JSON, and the exit code is 1 when a check fails.
 
 ### 6. Check from Claude Code
 
@@ -92,9 +92,12 @@ What you see: the skill runs `wavecoord doctor`, shows a short table of the prob
 | `python` fail | Python older than 3.9 | Install Python 3.9 or later |
 | `repo`, `origin`, `default branch` fail | Not a git repo, no `origin`, or nothing pushed | `git init`; `git remote add origin <url> && git push -u origin HEAD`; `git remote set-head origin --auto` |
 | `gh` fail | `gh` missing or not logged in | Install gh, then `gh auth login` (or set `pr_cmd`, `merge_cmd` and `pr_state_cmd` for another forge: [adapters.md](../adapters.md)) |
+| `gh` warn with another forge | `pr_cmd`, `merge_cmd` and `pr_state_cmd` are set, but the refinery still reads PR bodies with `gh` | Keep `gh` logged in, or read "Other forges" in [adapters.md](../adapters.md#other-forges) |
 | `claude` fail | Claude Code missing or not logged in | `claude auth login` |
 | `plugin` fail or warn | Not installed, disabled, or older than the CLI | Step 2; `claude plugin enable wavecoord@wavecoord`; `claude plugin update wavecoord@wavecoord`, then restart Claude Code |
+| `plugin` fail, but you started `claude --plugin-dir <folder>` | That plugin is `wavecoord@inline`, not in `claude plugin list` | `wavecoord doctor --plugin-id wavecoord@inline`; set its options with `wavecoord init --configure-plugin --plugin-id wavecoord@inline` |
 | `plugin options` fail | Claude Code does not know `coord_url` or `token` | `wavecoord init --configure-plugin` (or `/plugin configure wavecoord@wavecoord`), then restart Claude Code |
+| `host token <name>` warn or fail, with `WAVECOORD_HOME` set | The launcher reads host tokens in `$WAVECOORD_HOME/hosts/` | Run `wavecoord init` in the same shell; the `homes` line shows the folder |
 | `plugin options` warn: lead is off | This machine is not the lead | Set `lead` to true, or start with `WAVECOORD_ROLE=lead claude` |
 | `config` fail: not on origin | The config is only in your working tree | Merge the config PR (or commit and push it) |
 | `coord_url` fail, or `wavecoord status` says `not configured` | No coordinator URL | `wavecoord init` (adds `coord_url`) or `export WAVECOORD_URL=http://127.0.0.1:18741` |

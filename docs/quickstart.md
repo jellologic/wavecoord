@@ -4,7 +4,7 @@ From install to a merged wave on one machine. Setup is two commands and one rest
 
 Prefer to watch first? [quickstart.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/quickstart.mp4) and [spec-to-merge.mp4](https://github.com/jellologic/wavecoord/releases/download/v0.3.0/spec-to-merge.mp4) show these steps on a demo repo.
 
-You need: Claude Code with a login, `git`, `python3` (3.9 or later), and a repo with an `origin` remote that has a default branch. The default `pr_cmd` and `merge_cmd` use the GitHub CLI `gh` (logged in); set your own for another forge (`adapters.md`). `wavecoord doctor` checks all of these.
+You need: Claude Code with a login, `git`, `python3` (3.9 or later), and a repo with an `origin` remote that has a default branch. The default `pr_cmd` and `merge_cmd` use the GitHub CLI `gh` (logged in); set your own for another forge (`adapters.md`; a few PR body reads and edits still use `gh`, see "Other forges" there). `wavecoord doctor` checks all of these.
 
 ## 1. Install the plugin and the CLI
 
@@ -35,13 +35,13 @@ wavecoord init --server --configure-plugin --pr
 `init` is safe to run again; `--dry-run` shows what it would do and writes nothing. It:
 
 - writes `.claude/wavecoord.json` with `coord_url` (`http://127.0.0.1:18741`), `project` (the origin repo's name), one local host with 2 slots, `wip_cap` and the edit fence in `advisory` mode. An existing file only gets the keys it lacks: a key that is there never changes;
-- makes the lead token `~/.wavecoord/token` and the local host's agent token `~/.wavecoord/hosts/local.token` (mode 600) when they are missing. It never replaces a token file;
-- `--server`: installs and starts the coordinator as a user service (`install-server`);
-- `--configure-plugin`: sets the plugin options `coord_url`, `lead` (`true`) and `token` in Claude Code with `claude plugin configure`. The token goes from its file to Claude Code's secure storage and is never printed;
+- makes the lead token `~/.wavecoord/token` and the local host's agent token `~/.wavecoord/hosts/local.token` (mode 600) when they are missing. It never replaces a token file. With `WAVECOORD_HOME` set, the host token goes to `$WAVECOORD_HOME/hosts/`, where the launcher reads it ([launcher.md](launcher.md#wavecoord_home));
+- `--server`: installs and starts the coordinator as a user service (`install-server`). It listens on the port of the config's `coord_url` (`--port`), on 127.0.0.1; for a `coord_url` with another host, init prints the `install-server --bind` command to run after reading `security.md`;
+- `--configure-plugin`: sets the plugin options `coord_url`, `lead` (`true`) and `token` in Claude Code with `claude plugin configure`. The token goes from its file to Claude Code's secure storage and is never printed. It configures the plugin id that `claude plugin list` shows (`wavecoord@wavecoord`); in a `claude --plugin-dir` session the id is `wavecoord@inline`: pass `--plugin-id wavecoord@inline`;
 - `--pr`: commits the config on a branch `wavecoord/setup` and opens a PR (`pr_cmd`). Merge it: the launcher and the refinery read the config on the default branch. Without `--pr`, init prints the `git` commands to commit it;
 - `--specs`: creates `specs/` with a README that points to `/wavecoord:spec`.
 
-Other flags: `--project`, `--coord-url`, `--slots`, `--fence`, `--check-cmd "<your test command>"` (the refinery runs it before each merge), `--interactive` (asks on a terminal), `--show-token` (prints the lead token with the plugin options), `--no-doctor`. Then it runs `wavecoord doctor --quick`.
+Other flags: `--project`, `--coord-url`, `--plugin-id`, `--slots`, `--fence`, `--check-cmd "<your test command>"` (the refinery runs it before each merge), `--interactive` (asks on a terminal), `--show-token` (prints the lead token with the plugin options), `--no-doctor`. Then it runs `wavecoord doctor --quick`.
 
 ```
 $ wavecoord init --server --configure-plugin --pr
@@ -96,15 +96,16 @@ ok    config            .claude/wavecoord.json, valid, committed on origin/main 
 ok    coord_url         http://127.0.0.1:18741 (from .claude/wavecoord.json)
 ok    coordinator       http://127.0.0.1:18741, version 0.3.0, api 1
 ok    token             the coordinator accepts the token
+ok    homes             launcher root ~/.wavecoord (hosts/, attempts/, client/; default); server state of myapp: ~/.wavecoord/myapp (default)
 ok    lead token        ~/.wavecoord/token, mode 600, a lead token
 ok    host token local  ~/.wavecoord/hosts/local.token, mode 600, an agent token
 ok    host local        0/2 slots, claude 2.1.0, auth logged-in
 ok    service           ~/.config/systemd/user/wavecoord-myapp.service (build 3f9c0a2b7d1e4c58)
 ok    plan              flat tasks plan/tasks: no specs/ on the default branch (from the coordinator); no spec tree yet: start one with /wavecoord:spec
-0 failed, 0 warnings, 18 ok
+0 failed, 0 warnings, 19 ok
 ```
 
-Each problem has a `fix:` line under it with the command to run. `--json` prints the checks as JSON, `--quick` skips the host probes, and the exit code is 1 when a check fails. `plan` says which store the lead plans from and why: `plan/tasks` until the first spec PR merges, then the spec tree.
+Each problem has a `fix:` line under it with the command to run. `--json` prints the checks as JSON, `--quick` skips the host probes, and the exit code is 1 when a check fails. `homes` names the folders `WAVECOORD_HOME` stands for in this shell. In a `claude --plugin-dir` session the plugin is `wavecoord@inline` and not in `claude plugin list`: doctor sees it through `CLAUDE_PLUGIN_ROOT`, or pass `--plugin-id wavecoord@inline`. `plan` says which store the lead plans from and why: `plan/tasks` until the first spec PR merges, then the spec tree.
 
 Run one lead session per coordinator: lead sessions share the lead cursor. Workers are never the lead, whatever the option says (`feedback.md`).
 

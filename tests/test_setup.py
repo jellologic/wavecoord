@@ -386,10 +386,22 @@ class DoctorTest(SetupCase):
         with open(unit, "w") as f:
             f.write("ExecStart=python3 -I /x/.wavecoord/bin/wavecoord-0123456789abcdef serve\n")
         p, c, _ = self.doctor(gh=False)
-        self.assertEqual(c["gh"]["status"], "ok")
-        self.assertIn("not needed", c["gh"]["detail"])
+        # the refinery's fence check still reads the PR body with gh pr view: needed, not "not needed"
+        self.assertEqual(c["gh"]["status"], "warn")
+        self.assertIn("gh pr view", c["gh"]["detail"])
+        self.assertIn("Other forges", c["gh"]["fix"])
         self.assertEqual(c["service"]["status"], "warn")
         self.assertIn("runs build 0123456789abcdef", c["service"]["detail"])
+        p, c, _ = self.doctor()
+        self.assertEqual(c["gh"]["status"], "ok")
+        self.assertIn("used for the refinery's fence check", c["gh"]["detail"])
+        # fence merge mode enforce holds every merge whose PR body it cannot read: a failure
+        with open(os.path.join(self.repo, ".claude", "wavecoord.json"), "w") as f:
+            json.dump({"project": "demo", "pr_cmd": "my-forge pr open", "merge_cmd": ["my-forge", "merge"],
+                       "pr_state_cmd": ["my-forge", "state"], "fence": {"merge": "enforce"}}, f)
+        p, c, _ = self.doctor(gh=False)
+        self.assertEqual(c["gh"]["status"], "fail")
+        self.assertIn("enforce", c["gh"]["detail"])
 
     def test_host_probe(self):
         self.wc("init", "--no-doctor")
@@ -397,6 +409,100 @@ class DoctorTest(SetupCase):
         c = {x["name"]: x for x in json.loads(p.stdout)["checks"]}
         self.assertEqual(c["host local"]["status"], "ok", c["host local"])
         self.assertIn("slots", c["host local"]["detail"])
+
+
+class SetupPathsTest(SetupCase):
+    """Course findings: WAVECOORD_HOME, the service port, the plugin id of a --plugin-dir session."""
+
+    def test_host_tokens_follow_wavecoord_home(self):
+        wch = os.path.join(self.tmp, "wc-root")
+        p = self.wc("init", "--no-doctor", WAVECOORD_HOME=wch)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        # the launcher reads <WAVECOORD_HOME>/hosts/<host>.token: init writes it there
+        from wavecoord.launcher.common import host_token_file
+        self.assertEqual(host_token_file("local", {"WAVECOORD_HOME": wch}), os.path.join(wch, "hosts", "local.token"))
+        self.assertTrue(os.path.isfile(os.path.join(wch, "hosts", "local.token")))
+        self.assertFalse(os.path.exists(os.path.join(self.home, ".wavecoord", "hosts")))
+        self.assertTrue(os.path.isfile(os.path.join(self.home, ".wavecoord", "token")))  # the lead's stays
+        p, c, _ = self.doctor(WAVECOORD_HOME=wch)
+        self.assertEqual(c["host token local"]["status"], "ok", c["host token local"])
+        self.assertIn(os.path.join(wch, "hosts", "local.token"), c["host token local"]["detail"])
+        self.assertIn("launcher root %s" % wch, c["homes"]["detail"])
+        self.assertIn("server state of remote: %s (WAVECOORD_HOME)" % wch, c["homes"]["detail"])
+        # without it, doctor looks in ~/.wavecoord/hosts/, says so, and finds no token there
+        p, c, _ = self.doctor()
+        self.assertEqual(c["host token local"]["status"], "warn")
+        self.assertIn("~/.wavecoord/hosts/local.token", c["host token local"]["detail"])
+        self.assertIn("launcher root ~/.wavecoord (hosts/, attempts/, client/; default)", c["homes"]["detail"])
+        self.assertIn("server state of remote: ~/.wavecoord/remote (default)", c["homes"]["detail"])
+
+    def test_server_port_from_coord_url(self):
+        from unittest import mock
+        from wavecoord import initrepo, installsrv
+        self.assertEqual(initrepo.serve_address("http://127.0.0.1:18800"), (18800, None))
+        self.assertEqual(initrepo.serve_address("http://localhost:18741"), (None, None))
+        port, note = initrepo.serve_address("http://coord.example.internal:18800")
+        self.assertEqual(port, 18800)
+        self.assertIn("--bind <address> --port 18800", note)
+        self.assertEqual(initrepo.serve_address("https://coord.example.internal")[0], None)
+        p = self.wc("init", "--no-doctor", "--dry-run", "--server", "--coord-url", "http://127.0.0.1:18800")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("(wavecoord install-server --port 18800)", p.stdout)
+        # the installed unit runs serve --port <the URL's port>
+        seen = {}
+
+        def fake_plan(repo, **kw):
+            seen.clear()
+            seen.update(kw)
+            raise ValueError("stop here")
+        with open(os.devnull, "w") as devnull:
+            init = initrepo.Init(mock.Mock(dry_run=False), out=devnull)
+            init.top = self.repo
+            with mock.patch.object(installsrv, "plan", fake_plan):
+                init.step_server({"coord_url": "http://127.0.0.1:18800"})
+                self.assertEqual(seen.get("port"), 18800)
+                init.step_server({"coord_url": "http://127.0.0.1:18741"})
+                self.assertIsNone(seen.get("port"))
+        argv = installsrv.plan(self.repo, platform="linux", port=18800, zipapp_bytes=b"x")["argv"]
+        self.assertEqual(argv[argv.index("--port") + 1], "18800")
+
+    def test_inline_plugin(self):
+        plugin_dir = os.path.join(_paths.ROOT, "plugin")
+        log = os.path.join(self.tmp, "configure.log")
+        # nothing installed, no hint: not installed, and the message names the --plugin-id way
+        p, c, _ = self.doctor()
+        self.assertEqual(c["plugin"]["status"], "fail")
+        self.assertIn("--plugin-id wavecoord@inline", c["plugin"]["detail"])
+        # a claude --plugin-dir session: CLAUDE_PLUGIN_ROOT names the plugin folder
+        p, c, _ = self.doctor(CLAUDE_PLUGIN_ROOT=plugin_dir, FAKE_CLAUDE_CONFIGURE_LOG=log)
+        self.assertEqual(c["plugin"]["status"], "ok", c["plugin"])
+        self.assertIn("wavecoord@inline", c["plugin"]["detail"])
+        self.assertIn("--plugin-id wavecoord@inline", c["plugin options"]["fix"])
+        self.assertIn("wavecoord@inline --json", read(log))
+        # or the flag
+        p, c, _ = self.doctor("--plugin-id", "wavecoord@inline")
+        self.assertEqual(c["plugin"]["status"], "ok", c["plugin"])
+        p, c, _ = self.doctor("--plugin-id", "wavecoord@elsewhere")
+        self.assertEqual(c["plugin"]["status"], "fail")
+        self.assertIn("no plugin wavecoord@elsewhere", c["plugin"]["detail"])
+        # init --configure-plugin --plugin-id configures that id
+        os.remove(log)
+        p = self.wc("init", "--no-doctor", "--configure-plugin", "--plugin-id", "wavecoord@inline",
+                    FAKE_CLAUDE_CONFIGURE_LOG=log)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("Plugin options for wavecoord@inline", p.stdout)
+        self.assertEqual(read(log), "wavecoord@inline --values-stdin\n")
+        self.assertEqual(json.loads(read(self.options))["lead"], "true")
+        # and finds it by itself in a --plugin-dir session
+        os.remove(log)
+        p = self.wc("init", "--no-doctor", "--configure-plugin", CLAUDE_PLUGIN_ROOT=plugin_dir,
+                    FAKE_CLAUDE_CONFIGURE_LOG=log)
+        self.assertEqual(read(log), "wavecoord@inline --values-stdin\n")
+        # an installed plugin keeps its id
+        self.install_plugin()
+        os.remove(log)
+        p = self.wc("init", "--no-doctor", "--configure-plugin", FAKE_CLAUDE_CONFIGURE_LOG=log)
+        self.assertEqual(read(log), "wavecoord@wavecoord --values-stdin\n")
 
 
 if __name__ == "__main__":

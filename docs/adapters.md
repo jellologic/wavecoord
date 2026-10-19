@@ -91,3 +91,13 @@ Each change is logged once (idempotency keys `pr-merged:<task>/<n>`, `pr-abandon
 ## Merge command
 
 `merge_cmd` runs on the lead machine in the consumer repo root, one PR at a time (the refinery loop). In an array command these placeholders are replaced: `{pr}` (the PR number, from the last `/pull/<n>` of the URL), `{pr_url}`, `{sha}` (the head the refinery checked), `{branch}`, `{base}`, `{task}`, `{attempt}`. An array with neither `{pr}` nor `{pr_url}` gets the PR number as the last argument. Every command also gets `WAVECOORD_PR`, `WAVECOORD_PR_URL`, `WAVECOORD_SHA`, `WAVECOORD_BRANCH`, `WAVECOORD_BASE`, `WAVECOORD_TASK` and `WAVECOORD_ATTEMPT`. Use the sha (for example `--match-head-commit`), so a push after the checks cannot merge unchecked. `check_cmd` runs before it in a temporary detached worktree of that sha, with the same variables. `protected_paths_cmd` runs in the repo root; the files that the PR changes are matched against its globs.
+
+## Other forges
+
+`pr_cmd`, `merge_cmd` and `pr_state_cmd` cover opening, merging and reading the state of a PR. Three calls still use the GitHub CLI `gh` directly, on the lead machine, whatever these keys say:
+
+- The refinery's fence check (E5) reads the PR body with `gh pr view <pr> --json body`, for the `Lease:` line. When it cannot, fence merge mode `advisory` notes `cannot read the PR body` on the merge, and `enforce` holds every merge (`fence`). `wavecoord gate-check <pr number or URL>` reads it the same way; for another forge, pass the range and the body (`gate-check origin/main..<sha> --pr-body <file>`).
+- After a resolver run, `collect` sets the PR's `Lease:` line to the resolver's lease with `gh pr view` and `gh pr edit`. Without `gh`, the result has `pr_lease_error` and the refinery then sees a stale lease: edit the line by hand.
+- A later `plan_edit` or `spec_edit` on an existing plan branch rewrites its PR body with `gh pr edit` (`pr_body_error` without it). The commit is pushed either way.
+
+So for another forge, keep `gh` installed and logged in for these calls if your forge serves the GitHub API, or set the fence merge mode to `advisory` or `off` and fix the `Lease:` lines by hand. `wavecoord doctor` reports `gh` as `warn` (`fail` in merge mode `enforce`) when the three keys are set but `gh` cannot run.

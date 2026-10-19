@@ -84,6 +84,7 @@ Setup commands (for `wavecoord doctor` and `init`; no model, like the real ones)
   claude plugin configure <id> --json          {"pluginId", "inputs", "configured", "unconfigured"} from
                                     the JSON file $FAKE_CLAUDE_PLUGIN_OPTIONS ({option: value}; absent: none set)
   claude plugin configure <id> --values-stdin  merges the stdin object into that file
+                                    (each configure call appends its arguments to $FAKE_CLAUDE_CONFIGURE_LOG)
 
 --input-format stream-json (as the launcher runs workers): the first stdin line is the prompt, a
 user message. Later lines are read in a thread while the run goes on: a control_request gets a
@@ -441,6 +442,10 @@ def setup_command(argv):
             with open(path) as f:
                 opts = json.load(f)
         names = ["coord_url", "token", "lead"]
+        log = os.environ.get("FAKE_CLAUDE_CONFIGURE_LOG")
+        if log:
+            with open(log, "a") as f:
+                f.write(" ".join(argv[2:]) + "\n")
         if "--values-stdin" in argv:
             opts.update(json.loads(sys.stdin.read()))
             if path:

@@ -688,5 +688,34 @@ class DispatchLoopCliTest(LeadTestCase):
         self.assertTrue(all(ln.endswith(": merged") for ln in p.stdout.splitlines()), p.stdout)
 
 
+class RefineryOrderTest(unittest.TestCase):
+    """The merge order: most unblocked work first, then the attempt that finished first, then task id and
+    attempt number. Pure: the same snapshot gives the same order, whatever order the attempts come in."""
+
+    def queue(self, attempts, unblocks):
+        from wavecoord.lead.refinery import RefineryMixin
+
+        class Q(RefineryMixin):
+            def snapshot(self):
+                return {"refinery": [], "attempts": attempts}
+
+            def plan_graph(self):
+                return {"nodes": [{"id": k, "unblocks": v} for k, v in unblocks.items()]}
+
+        return [(i["task"], i["attempt"]) for i in Q().refinery_queue()]
+
+    def test_order(self):
+        def att(task, n, ended):
+            return {"task": task, "n": n, "state": "reported", "pr_url": "https://example.invalid/pull/%s%d"
+                    % (task, n), "pushed": True, "ended": ended, "branch": "wc/%s-%d" % (task, n)}
+        attempts = [att("b", 1, "2026-01-01T00:00:05Z"), att("a", 1, "2026-01-01T00:00:09Z"),
+                    att("c", 1, "2026-01-01T00:00:05Z"), att("hub", 1, "2026-01-01T00:00:10Z"),
+                    att("a", 2, "2026-01-01T00:00:09Z")]
+        unblocks = {"hub": 3, "a": 0, "b": 0, "c": 0}
+        want = [("hub", 1), ("b", 1), ("c", 1), ("a", 1), ("a", 2)]
+        self.assertEqual(self.queue(attempts, unblocks), want)
+        self.assertEqual(self.queue(list(reversed(attempts)), unblocks), want)
+
+
 if __name__ == "__main__":
     unittest.main()

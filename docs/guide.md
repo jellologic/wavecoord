@@ -211,7 +211,7 @@ The skill calls `collect` first. That ends finished attempts, opens the PR of ea
 
 ### Step 6: merge through the refinery
 
-`refinery_merge` takes one PR at a time, in funnel order (tasks that unblock the most work first). For each it checks, in this order:
+`refinery_merge` takes one PR at a time, in funnel order (tasks that unblock the most work first; between equals, the attempt that finished first, then by task id). For each it checks, in this order:
 
 1. the report is `done` and the task is not `dropped`, `on_hold` or `draft` on the default branch;
 2. the branch still merges cleanly into the current default branch (`git merge-tree`);

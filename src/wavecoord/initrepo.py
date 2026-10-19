@@ -8,12 +8,14 @@ Claude Code (`--configure-plugin`) and opens a config PR (`--pr`). Then it print
 left to do and runs `wavecoord doctor`. `--dry-run` prints the same plan and writes nothing.
 """
 
+import ipaddress
 import json
 import os
 import re
 import shlex
 import sys
 import tempfile
+import urllib.parse
 
 from wavecoord import __version__, const, doctor
 
@@ -74,6 +76,33 @@ def merge(existing, wanted):
         elif out[k] != v:
             kept.append((k, out[k], v))
     return out, added, kept
+
+
+def serve_address(coord_url):
+    """-> (port or None, note or None): what the server service must listen on so that `coord_url` reaches it.
+
+    The port of the URL goes to `serve --port` when it is not the default. The service binds 127.0.0.1;
+    a URL with another host gets a note instead of a wider bind (security.md)."""
+    try:
+        parts = urllib.parse.urlsplit(coord_url or "")
+        host, port = parts.hostname, parts.port
+    except ValueError:
+        return None, "coord_url %s is not a URL; the service listens on 127.0.0.1:%d" % (coord_url, const.DEFAULT_PORT)
+    if parts.scheme != "http":
+        # https: a proxy in front of the plain-http server (security.md); its port is not the server's
+        return None, ("coord_url %s is not plain http; the service listens on http://127.0.0.1:%d, behind your"
+                      " proxy" % (coord_url, const.DEFAULT_PORT))
+    note = None
+    loopback = host in ("localhost",)
+    try:
+        loopback = loopback or ipaddress.ip_address(host or "").is_loopback
+    except ValueError:
+        pass
+    if not loopback:
+        note = ("coord_url names %s; the service listens on 127.0.0.1 only. To serve other machines, read"
+                " docs/security.md, then: wavecoord install-server --bind <address>%s"
+                % (host, " --port %d" % port if port else ""))
+    return (port if port and port != const.DEFAULT_PORT else None), note
 
 
 def dump(cfg):
@@ -159,7 +188,7 @@ class Init(object):
         cfg = self.step_config(path, existing, a.project or project)
         self.step_tokens(cfg)
         if a.server:
-            self.step_server()
+            self.step_server(cfg)
         if a.specs:
             self.step_specs(cfg)
         self.step_plugin(cfg)
@@ -228,10 +257,13 @@ class Init(object):
                 self.say("ssh host %s has no token yet: wavecoord tokens provision --role agent --host %s --out %s"
                          % (n, n, doctor.tilde(p)))
 
-    def step_server(self):
+    def step_server(self, cfg):
         from wavecoord import installsrv
+        port, note = serve_address(cfg.get("coord_url"))
+        if note:
+            self.say("server: " + note)
         try:
-            p = installsrv.plan(self.top, extra_env=installsrv.carry_env(os.environ))
+            p = installsrv.plan(self.top, port=port, extra_env=installsrv.carry_env(os.environ))
         except ValueError as e:
             self.say("server: %s; run `wavecoord serve` yourself" % e)
             return
@@ -244,7 +276,8 @@ class Init(object):
         if current == p["unit"] and os.path.isfile(p["zipapp"]):
             self.say("server service: up to date (%s)" % doctor.tilde(p["unit_path"]))
             return
-        self.act("install the server service %s (wavecoord install-server)" % doctor.tilde(p["unit_path"]))
+        self.act("install the server service %s (wavecoord install-server%s)"
+                 % (doctor.tilde(p["unit_path"]), " --port %d" % port if port else ""))
         if self.dry:
             return
         try:
@@ -270,10 +303,7 @@ class Init(object):
 
     def plugin_id(self):
         exe = doctor.claude_exe()
-        if not exe:
-            return None, doctor.DEFAULT_PLUGIN_ID
-        entry, _ = doctor.plugin_entry(exe)
-        return exe, (entry or {}).get("id") or doctor.DEFAULT_PLUGIN_ID
+        return exe, doctor.plugin_id_for(exe, explicit=getattr(self.a, "plugin_id", None))
 
     def step_plugin(self, cfg):
         a = self.a
@@ -429,7 +459,7 @@ def cmd_init(args):
     if not args.no_doctor:
         print("\nwavecoord doctor:")
         sys.stdout.flush()
-        checks = doctor.run_doctor(quick=True)
+        checks = doctor.run_doctor(quick=True, plugin_id=args.plugin_id)
         doctor.render(checks, color=doctor.use_color("auto"))
     return rc
 
@@ -446,6 +476,9 @@ def register(sub):
     sp.add_argument("--specs", action="store_true", help="create the spec folder with a README")
     sp.add_argument("--configure-plugin", action="store_true",
                     help="set the plugin options coord_url, lead and token with `claude plugin configure`")
+    sp.add_argument("--plugin-id", help="the plugin id that --configure-plugin sets, for example %s for a claude"
+                                        " --plugin-dir session (default: the id claude plugin list shows, else %s)"
+                                        % (doctor.INLINE_PLUGIN_ID, doctor.DEFAULT_PLUGIN_ID))
     sp.add_argument("--pr", action="store_true", help="commit the config on a branch and open a PR (pr_cmd)")
     sp.add_argument("--show-token", action="store_true", help="print the lead token with the plugin options")
     sp.add_argument("--interactive", action="store_true", help="ask the questions on a terminal")

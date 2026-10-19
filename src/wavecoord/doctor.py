@@ -24,6 +24,7 @@ OK, WARN, FAIL = "ok", "warn", "fail"
 CONFIG_REL = ".claude/wavecoord.json"
 PLUGIN_NAME = "wavecoord"
 DEFAULT_PLUGIN_ID = "wavecoord@wavecoord"
+INLINE_PLUGIN_ID = "wavecoord@inline"  # the id of a plugin that `claude --plugin-dir <dir>` loads
 INSTALL_PLUGIN = "claude plugin marketplace add jellologic/wavecoord && claude plugin install wavecoord@wavecoord"
 HTTP_TIMEOUT_S = 3.0
 CMD_TIMEOUT_S = 30
@@ -52,7 +53,14 @@ def git(args, cwd, timeout=CMD_TIMEOUT_S):
 
 
 def home_wc():
+    """~/.wavecoord: where the lead token and the tokens file live (WAVECOORD_HOME does not move them)."""
     return os.path.join(os.path.expanduser("~"), ".wavecoord")
+
+
+def launcher_root(env=None):
+    """The launcher's root folder (hosts/, attempts/, client/): $WAVECOORD_HOME, else ~/.wavecoord."""
+    from wavecoord.launcher.common import wc_home
+    return wc_home(env)
 
 
 def lead_token_path(env=None):
@@ -60,8 +68,10 @@ def lead_token_path(env=None):
     return env.get("WAVECOORD_TOKEN_FILE") or os.path.join(home_wc(), "token")
 
 
-def host_token_path(host):
-    return os.path.join(home_wc(), "hosts", host + ".token")
+def host_token_path(host, env=None):
+    """The agent token file of a host, where the launcher reads it: <launcher root>/hosts/<host>.token."""
+    from wavecoord.launcher.common import host_token_file
+    return host_token_file(host, env)
 
 
 def tilde(path):
@@ -148,8 +158,10 @@ def claude_exe(env=None):
     return shutil.which(claude_bin(env), path=env.get("PATH"))
 
 
-def plugin_entry(exe):
-    """-> (entry or None, error or None) from `claude plugin list --json`: the enabled wavecoord entry first."""
+def plugin_entry(exe, plugin_id=None):
+    """-> (entry or None, error or None) from `claude plugin list --json`: the enabled wavecoord entry first.
+
+    With `plugin_id`, only the entry of that id."""
     rc, out, err = run([exe, "plugin", "list", "--json"])
     if rc != 0:
         return None, (err or out).strip()[-200:] or "claude plugin list failed"
@@ -157,9 +169,46 @@ def plugin_entry(exe):
         rows = json.loads(out)
     except ValueError:
         return None, "claude plugin list printed no JSON"
-    hits = [r for r in rows if isinstance(r, dict) and str(r.get("id", "")).split("@")[0] == PLUGIN_NAME]
+    hits = [r for r in rows if isinstance(r, dict) and (str(r.get("id", "")) == plugin_id if plugin_id else
+                                                         str(r.get("id", "")).split("@")[0] == PLUGIN_NAME)]
     hits.sort(key=lambda r: not r.get("enabled"))
     return (hits[0] if hits else None), None
+
+
+def inline_root(env=None):
+    """The wavecoord plugin folder of this session when Claude Code says so (CLAUDE_PLUGIN_ROOT), or None.
+
+    Claude Code sets CLAUDE_PLUGIN_ROOT for the plugin's own commands; the plugin of a `claude --plugin-dir`
+    session has the id wavecoord@inline and is not in `claude plugin list`."""
+    env = os.environ if env is None else env
+    root = (env.get("CLAUDE_PLUGIN_ROOT") or "").strip()
+    if not root:
+        return None
+    try:
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            data = json.load(f)
+    except (OSError, ValueError):
+        return None
+    return root if isinstance(data, dict) and data.get("name") == PLUGIN_NAME else None
+
+
+def plugin_dir_version(root):
+    try:
+        with open(os.path.join(root, ".claude-plugin", "plugin.json"), encoding="utf-8") as f:
+            return str((json.load(f) or {}).get("version") or "?")
+    except (OSError, ValueError, AttributeError):
+        return "?"
+
+
+def plugin_id_for(exe, env=None, explicit=None):
+    """The plugin id to configure: `explicit`, else the one `claude plugin list` shows, else wavecoord@inline
+    when this session loaded the plugin from a folder (CLAUDE_PLUGIN_ROOT), else wavecoord@wavecoord."""
+    if explicit:
+        return explicit
+    entry = plugin_entry(exe)[0] if exe else None
+    if entry and entry.get("id"):
+        return entry["id"]
+    return INLINE_PLUGIN_ID if inline_root(env) else DEFAULT_PLUGIN_ID
 
 
 def plugin_options(exe, plugin_id):
@@ -193,10 +242,11 @@ def settings_enable(top):
 
 
 class Doctor(object):
-    def __init__(self, cwd=None, env=None, quick=False):
+    def __init__(self, cwd=None, env=None, quick=False, plugin_id=None):
         self.cwd = os.path.abspath(cwd or os.getcwd())
         self.env = os.environ if env is None else env
         self.quick = quick
+        self.want_plugin = plugin_id
         self.top = None
         self.default = None
         self.cfg_raw = None
@@ -213,7 +263,8 @@ class Doctor(object):
 
     def run(self):
         for step in (self.c_python, self.c_git, self.c_gh, self.c_claude, self.c_plugin, self.c_config,
-                     self.c_coord_url, self.c_coordinator, self.c_lead_token, self.c_host_tokens, self.c_hosts,
+                     self.c_coord_url, self.c_coordinator, self.c_homes, self.c_lead_token, self.c_host_tokens,
+                     self.c_hosts,
                      self.c_service, self.c_plan):
             try:
                 step()
@@ -278,23 +329,34 @@ class Doctor(object):
             first = v[0] if isinstance(v, list) else (v.split() or [""])[0]
             return os.path.basename(first) == "gh"
         needs = [k for k in ("pr_cmd", "merge_cmd", "pr_state_cmd") if uses_gh(self._cfg_cmd(k))]
-        if not needs:
-            self.add("gh", OK, "not needed: pr_cmd, merge_cmd and pr_state_cmd are set")
-            return
+        # gh calls that no command key replaces (docs/adapters.md, "Other forges"): the refinery's fence check
+        # reads the PR body (gh pr view); a resolver's Lease: line and a plan branch's PR body are set with gh
+        from wavecoord import fencecore
+        merge_mode = fencecore.parse_modes(self._cfg_cmd("fence"))["merge"]
+        fixed = "the refinery's fence check (gh pr view), a resolver's Lease: line and plan PR bodies (gh pr edit)"
+        if needs:
+            status, why = FAIL, "%s use%s it" % (", ".join(needs), "s" if len(needs) == 1 else "")
+            fix_more = " (or set pr_cmd, merge_cmd and pr_state_cmd, docs/adapters.md)"
+        else:
+            # every command key names another tool, but the PR bodies are still read and written with gh;
+            # in fence merge mode enforce the refinery holds every merge whose body it cannot read
+            status = FAIL if merge_mode == "enforce" else WARN
+            why = "pr_cmd, merge_cmd and pr_state_cmd are set, but %s still use gh%s" % (
+                fixed, "; fence merge mode enforce holds every merge without it" if merge_mode == "enforce" else "")
+            fix_more = " (docs/adapters.md, \"Other forges\")"
         exe = shutil.which("gh", path=self.env.get("PATH"))
         if not exe:
-            self.add("gh", FAIL, "the GitHub CLI is not on PATH; %s use%s it" % (
-                ", ".join(needs), "s" if len(needs) == 1 else ""),
-                "install gh (https://cli.github.com), then: gh auth login"
-                " (or set pr_cmd, merge_cmd and pr_state_cmd, docs/adapters.md)")
+            self.add("gh", status, "the GitHub CLI is not on PATH; %s" % why,
+                     "install gh (https://cli.github.com), then: gh auth login" + fix_more)
             return
         rc, out, err = run([exe, "auth", "status"])
         if rc != 0:
-            self.add("gh", FAIL, "gh is not logged in (%s)" % ((err or out).strip().splitlines() or ["?"])[0][:120],
-                     "gh auth login")
+            self.add("gh", status, "gh is not logged in (%s); %s" % (
+                ((err or out).strip().splitlines() or ["?"])[0][:120], why), "gh auth login")
             return
         rc, ver, _ = run([exe, "--version"])
-        self.add("gh", OK, "%s, logged in" % ((ver.strip().splitlines() or ["gh"])[0]))
+        used = "" if needs else "; used for %s" % fixed
+        self.add("gh", OK, "%s, logged in%s" % ((ver.strip().splitlines() or ["gh"])[0], used))
 
     def c_claude(self):
         exe = claude_exe(self.env)
@@ -332,7 +394,23 @@ class Doctor(object):
         exe = self.claude
         if not exe:
             return
-        entry, err = plugin_entry(exe)
+        want = self.want_plugin
+        entry, err = plugin_entry(exe, want)
+        root = inline_root(self.env)
+        if entry is None and ((want or "").endswith("@inline") or (root and not want)):
+            # a `claude --plugin-dir` session: the plugin is loaded, under the id wavecoord@inline
+            pid = want or INLINE_PLUGIN_ID
+            self.plugin_id = pid
+            ver = plugin_dir_version(root) if root else "?"
+            where = ("from %s" % tilde(root)) if root else "from a plugin folder"
+            text = "%s, loaded %s (claude --plugin-dir; not in claude plugin list)" % (pid, where)
+            if ver not in ("?", __version__):
+                self.add("plugin", WARN, "%s; its version is %s, this CLI is %s" % (text, ver, __version__),
+                         "start Claude Code with the plugin folder of this build")
+            else:
+                self.add("plugin", OK, text + ("" if ver == "?" else ", version %s" % ver))
+            self._plugin_options(exe, pid)
+            return
         if entry is None and err:
             where = settings_enable(self.top)
             if where:
@@ -342,7 +420,12 @@ class Doctor(object):
                          "claude plugin list")
             return
         if entry is None:
-            self.add("plugin", FAIL, "the wavecoord plugin is not installed in Claude Code", INSTALL_PLUGIN)
+            if want:
+                self.add("plugin", FAIL, "claude plugin list has no plugin %s" % want,
+                         "claude plugin list (and pass the id it shows: --plugin-id <id>), or: " + INSTALL_PLUGIN)
+            else:
+                self.add("plugin", FAIL, "the wavecoord plugin is not installed in Claude Code (for a claude"
+                         " --plugin-dir session: wavecoord doctor --plugin-id %s)" % INLINE_PLUGIN_ID, INSTALL_PLUGIN)
             return
         pid = entry.get("id") or DEFAULT_PLUGIN_ID
         self.plugin_id = pid
@@ -354,15 +437,20 @@ class Doctor(object):
                      "claude plugin update %s (then restart Claude Code)" % pid)
         else:
             self.add("plugin", OK, "%s %s, enabled (%s scope)" % (pid, ver, entry.get("scope") or "?"))
+        self._plugin_options(exe, pid)
+
+    def _plugin_options(self, exe, pid):
         opts = plugin_options(exe, pid)
         if opts is None:
-            self.add("plugin options", WARN, "cannot read the plugin options", "claude plugin configure %s" % pid)
+            self.add("plugin options", WARN, "cannot read the plugin options of %s" % pid,
+                     "claude plugin configure %s" % pid)
             return
         done = set(opts.get("configured") or [])
         inputs = opts.get("inputs") or {}
         missing = [k for k in ("coord_url", "token") if k not in done]
         lead = str(inputs.get("lead", "")).lower() == "true"
-        fix = "wavecoord init --configure-plugin (or /plugin configure %s in Claude Code)" % pid
+        init = "wavecoord init --configure-plugin" + ("" if pid == DEFAULT_PLUGIN_ID else " --plugin-id " + pid)
+        fix = "%s (or /plugin configure %s in Claude Code)" % (init, pid)
         if missing:
             self.add("plugin options", FAIL, "not set: %s" % ", ".join(missing), fix)
             return
@@ -372,7 +460,7 @@ class Doctor(object):
             self.add("plugin options", WARN, "coord_url is %s but the repo uses %s" % (have, want), fix)
         elif not lead:
             self.add("plugin options", WARN, "coord_url and token are set; lead is off",
-                     "set lead to true on the machine you plan from (wavecoord init --configure-plugin),"
+                     "set lead to true on the machine you plan from (%s)," % init +
                      " or start the lead with: WAVECOORD_ROLE=lead claude")
         else:
             self.add("plugin options", OK, "coord_url=%s, token set, lead=true" % (have or "?"))
@@ -541,6 +629,19 @@ class Doctor(object):
         else:
             self.add(name, OK, "%s, mode 600, %s %s token" % (tilde(path), "an" if role[0] in "aeiou" else "a", role))
 
+    def c_homes(self):
+        """The folders WAVECOORD_HOME means here: the launcher root, and the server's state folder."""
+        if not self.top:
+            return
+        set_ = bool((self.env.get("WAVECOORD_HOME") or "").strip())
+        src = "WAVECOORD_HOME" if set_ else "default"
+        project = (self.cfg_raw or self._peek_config() or {}).get("project") or os.path.basename(self.top)
+        text = "launcher root %s (hosts/, attempts/, client/; %s); server state of %s: %s (%s)" % (
+            tilde(launcher_root(self.env)), src, project, tilde(const.home_dir(project, env=self.env)), src)
+        if set_:
+            text += "; WAVECOORD_HOME is both, so it holds the server of one project only"
+        self.add("homes", OK, text)
+
     def c_lead_token(self):
         path = lead_token_path(self.env)
         self._token_check("lead token", path, "lead", None, FAIL,
@@ -555,7 +656,7 @@ class Doctor(object):
     def c_host_tokens(self):
         for h in self._hosts():
             n = h["name"]
-            path = host_token_path(n)
+            path = host_token_path(n, self.env)
             fix = "wavecoord tokens provision --role agent --host %s --out %s" % (n, tilde(path))
             if h.get("ssh"):
                 self._token_check("host token %s" % n, path, "agent", "host:" + n, FAIL, fix)
@@ -690,8 +791,8 @@ class Doctor(object):
         return "builtin", "no spec records in %s/ on the default branch" % spec_dir
 
 
-def run_doctor(cwd=None, env=None, quick=False):
-    return Doctor(cwd=cwd, env=env, quick=quick).run()
+def run_doctor(cwd=None, env=None, quick=False, plugin_id=None):
+    return Doctor(cwd=cwd, env=env, quick=quick, plugin_id=plugin_id).run()
 
 
 def summary(checks):
@@ -727,7 +828,7 @@ def use_color(mode, stream=None):
 
 
 def cmd_doctor(args):
-    checks = run_doctor(quick=args.quick)
+    checks = run_doctor(quick=args.quick, plugin_id=args.plugin_id)
     failed = any(c["status"] == FAIL for c in checks)
     if args.json:
         print(json.dumps({"version": __version__, "ok": not failed, "counts": summary(checks), "checks": checks},
@@ -742,5 +843,7 @@ def register(sub):
     sp = sub.add_parser("doctor", help="check every prerequisite of the setup; print the fix for each problem")
     sp.add_argument("--json", action="store_true", help="print the checks as JSON")
     sp.add_argument("--quick", action="store_true", help="do not probe the hosts")
+    sp.add_argument("--plugin-id", help="the plugin id to check, for example %s for a claude --plugin-dir session"
+                                        " (default: the wavecoord entry of claude plugin list)" % INLINE_PLUGIN_ID)
     sp.add_argument("--color", choices=("auto", "always", "never"), default="auto")
     sp.set_defaults(func=cmd_doctor)

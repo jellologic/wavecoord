@@ -47,7 +47,7 @@ Every host command is `python3 -I ~/.wavecoord/bin/wavecoord-<hash> _remote <cmd
 
 The client also pins the plugin: it builds a deterministic tar of the plugin directory with `bin/wavecoord` replaced by this exact zipapp, and installs it as `~/.wavecoord/plugin-<hash>/` on the host when missing. Every worker gets that copy as `--plugin-dir`, so all workers run the same plugin version; rolling back is moving the pin.
 
-**Coordinator access from a host.** The client sends the coordinator URL. When the host cannot reach a loopback coordinator, the client starts `ssh -f -N -R <port>:127.0.0.1:<port>` to it, on a connection of its own (`ControlMaster=no`, `ControlPath=none`), so the tunnel does not end with the shared ControlMaster. When `~/.wavecoord/hosts/<host>.token` exists on the client, it copies that agent token to the host's `~/.wavecoord/token` (mode 600) through stdin, never on a command line, when the host's copy differs. A local host shares `~/.wavecoord` with the client, so nothing is copied: the wrapper uses `~/.wavecoord/hosts/<host>.token` directly (`WAVECOORD_TOKEN_FILE`), so local workers do not use the lead's `~/.wavecoord/token` (`security.md`). When that file is missing and the tokens file is on the client, the launcher provisions an agent token for the host first (0.3.0). On a remote host the probe asks the coordinator to prove itself (`security.md`, "Remote hosts"); when another process answers on the port, the launch on that host is refused.
+**Coordinator access from a host.** The client sends the coordinator URL. When the host cannot reach a loopback coordinator, the client starts `ssh -f -N -R <port>:127.0.0.1:<port>` to it, on a connection of its own (`ControlMaster=no`, `ControlPath=none`), so the tunnel does not end with the shared ControlMaster. When `~/.wavecoord/hosts/<host>.token` (`$WAVECOORD_HOME/hosts/` when set: [WAVECOORD_HOME](#wavecoord_home)) exists on the client, it copies that agent token to the host's `~/.wavecoord/token` (mode 600) through stdin, never on a command line, when the host's copy differs. A local host shares `~/.wavecoord` with the client, so nothing is copied: the wrapper uses `~/.wavecoord/hosts/<host>.token` directly (`WAVECOORD_TOKEN_FILE`), so local workers do not use the lead's `~/.wavecoord/token` (`security.md`). When that file is missing and the tokens file is on the client, the launcher provisions an agent token for the host first (0.3.0). On a remote host the probe asks the coordinator to prove itself (`security.md`, "Remote hosts"); when another process answers on the port, the launch on that host is refused.
 
 ## Attempt lifecycle (host side)
 
@@ -126,7 +126,18 @@ Claude Code answers each control request with a `control_response`. When a lead 
 
 ### State directory
 
-`~/.wavecoord/attempts/<project>/<task>-<n>/` on the host: `status.json`, `task.json`, `prompt.md`, `worker-settings.json`, `prepare.log`, `stream.jsonl`, `steer.jsonl`, `stderr.log`, `wrapper.log`, `report.json`, `pr-body.md`, `result.json`. A `--continue` run moves the earlier files to `prev-<ms>/`. `WAVECOORD_HOME` replaces `~/.wavecoord` (tests use it).
+`~/.wavecoord/attempts/<project>/<task>-<n>/` on the host: `status.json`, `task.json`, `prompt.md`, `worker-settings.json`, `prepare.log`, `stream.jsonl`, `steer.jsonl`, `stderr.log`, `wrapper.log`, `report.json`, `pr-body.md`, `result.json`. A `--continue` run moves the earlier files to `prev-<ms>/`. `WAVECOORD_HOME` replaces `~/.wavecoord` (tests use it; next section).
+
+### WAVECOORD_HOME
+
+The variable has two meanings, by program:
+
+| Who reads it | It is | Without it |
+|---|---|---|
+| The launcher (client and host side), `wavecoord init`, `wavecoord doctor`, the fence offline override | The **root folder**: `hosts/<host>.token`, `attempts/`, `client/`, `plugin-<hash>/`, `bin/`, `fence-override.json` | `~/.wavecoord` |
+| The server (`wavecoord serve`) | **One project's state folder**: `log/`, `cache.sqlite`, `server.json` | `~/.wavecoord/<project>` |
+
+So a shell with `WAVECOORD_HOME` set puts the launcher's files and one server's state in the same folder; use one value per project. The lead token (`~/.wavecoord/token`) and the tokens file (`~/.wavecoord/tokens.json`) do not move with it (`WAVECOORD_TOKEN_FILE` and `WAVECOORD_TOKENS_FILE` do that). `install-server` carries the variable into the service, and keeps its zipapp copy in `~/.wavecoord/bin/` and its log in `~/.wavecoord/<project>/serve.log` either way. `wavecoord doctor` prints both folders on its `homes` line, and checks the host tokens where the launcher reads them.
 
 ## Coordinator calls
 

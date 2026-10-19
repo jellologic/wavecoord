@@ -84,7 +84,7 @@ claude
 
 The service that `--server` installs keeps this PATH, so it also uses the stand-in. When you are done: `wavecoord install-server --uninstall` in the demo folder, then `rm -rf /tmp/wavecoord-demo`.
 
-Already run wavecoord for a real project? The plugin options (`coord_url`, `token`) are per Claude Code profile, so practice in a separate one (`export CLAUDE_CONFIG_DIR=~/.claude-practice`, then log in there once). If your coordinator uses port 18741, build the demo with another `--port` and start its server with `wavecoord install-server --port <that port>` instead of `init --server`.
+Already run wavecoord for a real project? The plugin options (`coord_url`, `token`) are per Claude Code profile, so practice in a separate one (`export CLAUDE_CONFIG_DIR=~/.claude-practice`, then log in there once). If your coordinator uses port 18741, build the demo with another `--port`: its `coord_url` names that port, and `init --server` starts the demo's server on it.
 
 ## How the videos are made
 

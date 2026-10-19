@@ -27,13 +27,14 @@ Each line is `ok`, `warn` or `fail`, with a `fix:` line under each problem. Show
 |---|---|
 | `python`, `git` | A tool wavecoord needs is missing or too old |
 | `repo`, `origin`, `default branch` | wavecoord works on a git repo whose `origin` remote has a default branch: workers fetch from it and push their branches to it |
-| `gh` | The GitHub CLI opens and merges the PRs. Not needed when the config sets `pr_cmd`, `merge_cmd` and `pr_state_cmd` for another forge |
+| `gh` | The GitHub CLI opens and merges the PRs. With `pr_cmd`, `merge_cmd` and `pr_state_cmd` set for another forge, the refinery still reads PR bodies with it: a `warn` (a `fail` in fence merge mode `enforce`) |
 | `claude` | Claude Code runs the workers. It must be logged in on every host |
-| `plugin` | The wavecoord plugin is missing, disabled or older than the CLI |
+| `plugin` | The wavecoord plugin is missing, disabled or older than the CLI. A session started with `claude --plugin-dir` has the plugin id `wavecoord@inline`: run `wavecoord doctor --plugin-id wavecoord@inline` |
 | `plugin options` | Claude Code does not know where the coordinator is (`coord_url`) or which token to use (`token`), or this session is not the lead (`lead`) |
 | config | `.claude/wavecoord.json` is missing, invalid, or not yet on the default branch, where the launcher and the merge queue read it |
 | `coord_url`, `coordinator`, `token` | No coordinator URL, no server answering there, a server of another version, or a token it refuses |
-| `lead token`, `host token <name>` | The token files under `~/.wavecoord/` are missing, readable by others, or unknown to the server |
+| `homes` | Which folders `WAVECOORD_HOME` stands for here: the launcher's root and the server's state folder (information only) |
+| `lead token`, `host token <name>` | The token files under `~/.wavecoord/` (host tokens under `$WAVECOORD_HOME/hosts/` when it is set) are missing, readable by others, or unknown to the server |
 | `host <name>` | A worker host cannot run workers now (no login, unreachable over ssh) |
 | `service` | The coordinator is not installed as a user service, or runs an older build |
 | `plan` | Which plan store the lead uses and why: the spec tree, or `plan/tasks` until the first spec is merged |
@@ -52,8 +53,8 @@ Add `--specs` when the repo has no spec folder yet, and `--pr` when the user wan
 
 - `.claude/wavecoord.json` gets the keys it lacks; keys already there never change. A fresh file has `coord_url`, `project`, one local host, `wip_cap` and the fence in `advisory` mode.
 - The lead token and the local host's agent token are made only when their files are missing (mode 600). Existing tokens are never replaced.
-- `--server` installs and starts the coordinator as a user service (launchd or systemd).
-- `--configure-plugin` sets the plugin options `coord_url`, `lead` and `token` in Claude Code. The token goes from its file to Claude Code's secure storage; it is never printed.
+- `--server` installs and starts the coordinator as a user service (launchd or systemd), on the port of `coord_url`.
+- `--configure-plugin` sets the plugin options `coord_url`, `lead` and `token` in Claude Code. The token goes from its file to Claude Code's secure storage; it is never printed. In a `claude --plugin-dir` session, add `--plugin-id wavecoord@inline`.
 - `--pr` commits the config on a branch `wavecoord/setup` and opens a PR. Without it, init prints the `git` commands to commit it.
 
 Ask the user which of these to do. Run `wavecoord init` with only the flags they agreed to, and never with `--show-token`: the token must not enter this chat. If the user wants to set the plugin options by hand, they use `/plugin configure wavecoord@wavecoord` (or the `printf ... | claude plugin configure` line that init prints) themselves, and paste nothing secret here.

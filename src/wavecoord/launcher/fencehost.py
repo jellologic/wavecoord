@@ -57,10 +57,10 @@ def worker_token_file(host_cfg, host_name, env=None):
     installed token is the lead's own (~/.wavecoord/token), so it is never a candidate. A token that
     the tokens file on this machine lists with another role than agent is refused.
     """
-    from .common import wc_home
+    from .common import host_token_file, wc_home
     from . import coord as coordmod
     env = os.environ if env is None else env
-    cands = [os.path.join(wc_home(), "hosts", host_name + ".token")]
+    cands = [host_token_file(host_name)]
     if host_cfg.get("ssh"):
         cands.append(coordmod.token_path())
     lead = _read(os.path.join(wc_home(), "token")) if not host_cfg.get("ssh") else None
