@@ -54,6 +54,10 @@ Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the who
 
 ### Added
 
+- **Setup in two commands.** `wavecoord init` sets up a repo: it writes `.claude/wavecoord.json` (or adds only the missing keys to an existing one), makes the lead token and the local host's agent token when their files are missing (never over an existing file), and on request installs the server service (`--server`), creates the spec folder (`--specs`), sets the plugin options with `claude plugin configure` (`--configure-plugin`; the token is never printed unless `--show-token`) and opens a config PR on `wavecoord/setup` (`--pr`). `--dry-run` writes nothing; `--interactive` asks on a terminal. It ends with `wavecoord doctor --quick`.
+- `wavecoord doctor` checks every prerequisite, one line each (`ok`, `warn`, `fail`) with the command that fixes it: Python, git, origin and its default branch, `gh` and its login (or a custom `pr_cmd`), the claude version and login (`claude auth status`, no model call), the plugin and its options, the config (valid, committed on the default branch), `coord_url`, the coordinator (reachable, same version, the token accepted), the token files and their modes, the hosts (the `hosts` probe; `--quick` skips it), the server service and its pinned build, and the plan store with the reason. `--json` prints the checks; the exit code is 1 when one fails.
+- The `/wavecoord:setup` skill runs doctor, explains each problem, runs `wavecoord init` after asking, re-checks and points to `/wavecoord:spec`. It pre-approves only `wavecoord doctor`, `wavecoord init`, `wavecoord status` and read-only git.
+- The quickstart starts with `wavecoord init` and `/wavecoord:setup`; the manual steps moved to its end.
 - `wavecoord lease release <task|id>` and the lead tool `lease_release`: release a stale or parked lease so the task can be dispatched again (a lost worker's lease used to hold its task for good). The triage skill uses it.
 
 ### Fixed

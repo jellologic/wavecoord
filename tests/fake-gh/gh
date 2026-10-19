@@ -14,7 +14,10 @@
       fails unless origin's B is at <sha>; merges B into the base in a temp clone of
       origin (git merge --no-ff) and pushes the base; fails on a conflict
 
-$FAKE_GH_STATE is a JSON file {"prs": [...], "calls": [...]}."""
+  gh auth status                      exit 0, or 1 ("not logged in") with FAKE_GH_AUTH=0
+  gh --version                        prints a version line
+
+$FAKE_GH_STATE is a JSON file {"prs": [...], "calls": [...]}; `auth status` and `--version` do not need it."""
 
 import json
 import os
@@ -53,6 +56,15 @@ def number(st, arg):
 
 
 def main(argv):
+    if argv[:2] == ["auth", "status"]:
+        if os.environ.get("FAKE_GH_AUTH", "1") == "0":
+            sys.stderr.write("You are not logged into any GitHub hosts. To log in, run: gh auth login\n")
+            return 1
+        print("github.com\n  Logged in to github.com account fake (keyring)")
+        return 0
+    if argv[:1] == ["--version"]:
+        print("gh version 0.0.0 (fake-gh)")
+        return 0
     path = os.environ["FAKE_GH_STATE"]
     st = load(path)
     st["calls"].append(argv)

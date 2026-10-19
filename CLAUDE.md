@@ -36,7 +36,7 @@ Fence test knobs: `WAVECOORD_FENCE_SEED=<n>` reruns one seed, `WAVECOORD_FENCE_R
 
 ## Architecture
 
-One program, `wavecoord` (`cli.py` dispatches), plays every role: coordinator server, launcher, hook handler, git guard and lead CLI.
+One program, `wavecoord` (`cli.py` dispatches), plays every role: coordinator server, launcher, hook handler, git guard and lead CLI. Setup: `doctor.py` (`wavecoord doctor`, read-only checks) and `initrepo.py` (`wavecoord init`, idempotent; never replaces a token or a config key).
 
 **Coordinator (runs on the lead machine).**
 - `server.py`: REST, SSE and MCP on one port. It checks the peer address, the Host allowlist, the body size and a bearer token.
@@ -64,7 +64,7 @@ One program, `wavecoord` (`cli.py` dispatches), plays every role: coordinator se
 - The fence mode and the overrides come only from places the agent cannot write: the default branch's config and the launcher env. Never use the worktree copy.
 - Fence changes are design-first. Tests (`tests/fence/README.md`) are a randomized invariant sim with an independent oracle (`fenceworld.py`, `fencesim.py`), seeded defects D01–D24 (`fencedefects.py`; each needs a catching test), and table tests (`test_fence_points.py`). Add a failing seed to the fixed list together with its fix.
 
-**Plugin surface:** `plugin/skills/` (`wave-plan`, `wave-run`, `triage`, `revise`, `resolve`, `coord-status`) and `plugin/agents/` (`planner`, `reviewer`) are the lead's prompts. They drive the tools above through MCP and the CLI.
+**Plugin surface:** `plugin/skills/` (`setup`, `spec`, `wave-plan`, `wave-run`, `triage`, `revise`, `resolve`, `coord-status`) and `plugin/agents/` (`planner`, `reviewer`) are the lead's prompts. They drive the tools above through MCP and the CLI.
 
 ## Docs
 

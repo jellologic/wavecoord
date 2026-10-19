@@ -6,7 +6,7 @@ Start with the [quickstart](quickstart.md) to get a coordinator running, then re
 
 | Page | What |
 |---|---|
-| [quickstart.md](quickstart.md) | Install, configure, and merge a first wave on one machine, in copy-and-paste steps |
+| [quickstart.md](quickstart.md) | Install, set up with `wavecoord init` and `/wavecoord:setup`, and merge a first wave on one machine |
 | [guide.md](guide.md) | Using wavecoord well: the model, one feature from idea to merged code, good specs, safe waves, steering, triage, recovery, FAQ and upgrade notes |
 
 ## Plan

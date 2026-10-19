@@ -100,36 +100,20 @@ chmod +x ~/.local/bin/wavecoord
 wavecoord version          # wavecoord 0.3.0
 ```
 
-You also need `git`, `python3`, a logged-in `claude`, a repo with an `origin` remote, and the GitHub CLI `gh` (or your own `pr_cmd` and `merge_cmd`).
+You also need `git`, `python3`, a logged-in `claude`, a repo with an `origin` remote, and the GitHub CLI `gh` (or your own `pr_cmd` and `merge_cmd`). `wavecoord doctor` checks them all.
 
-## Quickstart (10 minutes)
+## Quickstart (5 minutes)
 
-The full copy-paste path is [docs/quickstart.md](docs/quickstart.md). In short, in your repo:
+The full path is [docs/quickstart.md](docs/quickstart.md). In short, in your repo:
 
-1. **Config.** Commit `.claude/wavecoord.json`:
-   ```json
-   {
-     "coord_url": "http://127.0.0.1:18741",
-     "project": "myapp",
-     "hosts": [{"name": "local", "slots": 3, "repo_path": ".",
-                "claude_flags": ["--permission-mode", "acceptEdits",
-                                 "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(python3 -m unittest *)"]}],
-     "wip_cap": 3,
-     "check_cmd": "python3 -m unittest discover -s tests"
-   }
-   ```
-2. **Tokens.** A lead token for you, an agent token per host:
+1. **Set up.** One command writes `.claude/wavecoord.json`, makes the tokens, starts the coordinator as a user service, sets the plugin options in Claude Code and opens a PR with the config:
    ```bash
-   wavecoord tokens provision --role lead --out ~/.wavecoord/token
-   wavecoord tokens provision --role agent --host local --out ~/.wavecoord/hosts/local.token
+   wavecoord init --server --configure-plugin --pr
    ```
-3. **Server.** Run the coordinator as a user service and check it:
-   ```bash
-   wavecoord install-server
-   wavecoord status           # ok: http://127.0.0.1:18741 version=0.3.0 api=1
-   ```
-4. **Plugin options.** In `/plugin`, set `coord_url` to `http://127.0.0.1:18741` (it has no default), `token` to the lead token (`cat ~/.wavecoord/token`), and `lead` to true on the machine you plan from.
-5. **Plan, run, merge.** In a Claude Code session in the repo: `/wavecoord:spec`, merge its PR, `/wavecoord:wave-plan`, merge its PR, then `/wavecoord:wave-run` and `/wavecoord:triage`.
+   It is safe to run again: it only adds what is missing and never replaces a token. `--dry-run` shows the plan.
+2. **Merge** the config PR and restart Claude Code in the repo.
+3. **Check.** `/wavecoord:setup` in Claude Code (or `wavecoord doctor` in a terminal) checks every prerequisite, from `git` and `gh` to the coordinator and the token, and says how to fix what is missing.
+4. **Plan, run, merge.** `/wavecoord:spec`, merge its PR, `/wavecoord:wave-plan`, merge its PR, then `/wavecoord:wave-run` and `/wavecoord:triage`.
 
 ## The day-to-day loop
 
