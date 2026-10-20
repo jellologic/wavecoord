@@ -34,18 +34,14 @@ The demo is `todo`: a small Python CLI (`todo/store.py`, `todo/cli.py`) with fiv
 
 ```
 /wavecoord:spec add due dates to to-do items: todo add --due YYYY-MM-DD, and todo list --overdue. Read
-the code first, and specify only this feature.
+the code first, and specify only this feature. Users: the same terminal users. Done when add --due saves
+the date with the item, and list --overdue prints only the open items due before today. Out of scope:
+reminders and times of day. The existing tests must keep passing. Each Verify should run a new test
+module with python3 -m unittest, such as tests.test_due_store. When the records are right, approve the
+requirements and activate the capability and feature in this PR. Do not ask me anything else.
 ```
 
-What you see: the skill reads the entry points, the tests and the test command, then asks what the code cannot tell it. The video answers:
-
-```
-Users: the same terminal users. Done when add --due saves the date with the item, and list --overdue
-prints only the open items due before today. Out of scope: reminders and times of day. The existing tests
-must keep passing. Each Verify should run a new test module with python3 -m unittest, such as
-tests.test_due_store. When the records are right, approve the requirements and activate the capability
-and feature in this PR.
-```
+What you see: the skill reads the entry points, the tests and the test command first. The request already says who uses the feature, what done means, what is out of scope and what must keep passing; leave any of these out and the skill asks for it before it writes records.
 
 Then one plan PR. Read the Verify lines:
 
@@ -63,7 +59,8 @@ Each names a new test module. Merge it:
 
 ```
 /wavecoord:wave-plan todo. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for
-every task, and keep each task to one module and its test.
+every task, and keep each task to one module and its test. Write each Acceptance command as one plain
+python3 command. Do not ask me anything.
 ```
 
 The planner reads the code to pick each task's `paths`: the files it may change. Look at them in the PR:

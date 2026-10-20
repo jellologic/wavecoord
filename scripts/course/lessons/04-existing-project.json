@@ -104,7 +104,7 @@
       "say": "Tell the skill the feature, who uses it, what done means and what is out of scope. Here the code already exists, so we also say which tests must keep passing."
     },
     {
-      "type": "/wavecoord:spec add due dates to to-do items: todo add --due YYYY-MM-DD, and todo list --overdue. Read the code first, and specify only this feature. Users: the same terminal users. Done when add --due saves the date with the item, and list --overdue prints only the open items due before today. Out of scope: reminders and times of day. The existing tests must keep passing. Each Verify should run a new test module with python3 -m unittest, such as tests.test_due_store. When the records are right, approve the requirements and activate the capability and feature in this PR.",
+      "type": "/wavecoord:spec add due dates to to-do items: todo add --due YYYY-MM-DD, and todo list --overdue. Read the code first, and specify only this feature. Users: the same terminal users. Done when add --due saves the date with the item, and list --overdue prints only the open items due before today. Out of scope: reminders and times of day. The existing tests must keep passing. Each Verify should run a new test module with python3 -m unittest, such as tests.test_due_store. When the records are right, approve the requirements and activate the capability and feature in this PR. Do not ask me anything else.",
       "enter": true
     },
     {
@@ -150,7 +150,7 @@
       "say": "Now the tasks. This is where the paths are chosen."
     },
     {
-      "type": "/wavecoord:wave-plan todo. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task, and keep each task to one module and its test.",
+      "type": "/wavecoord:wave-plan todo. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task, and keep each task to one module and its test. Write each Acceptance command as one plain python3 command. Do not ask me anything.",
       "enter": true
     },
     {

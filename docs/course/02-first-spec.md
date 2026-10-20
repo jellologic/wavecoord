@@ -25,9 +25,9 @@ The demo is the `bookmarks` repo: a README with the idea, the wavecoord config, 
 
 Name one feature, not the whole product. The skill first reads the spec tree, the config and the code (`spec_tree`, `config`, `Glob`, `Read`). If it finds files of Spec Kit, Kiro or OpenSpec, it suggests `/wavecoord:spec-import` instead (lesson 5).
 
-### 2. Answer the questions
+### 2. Say what the skill would ask
 
-What you see: a short list of questions. They are always about the same four things:
+Before it writes records, the skill asks what the code cannot tell it. The questions are always about the same four things:
 
 | Question | A good answer |
 |---|---|
@@ -36,7 +36,7 @@ What you see: a short list of questions. They are always about the same four thi
 | What is out of scope? | "Find, tags and any web page." It becomes the feature's Non-goals. |
 | Which interfaces do others depend on? | "None yet." Name one only if other work builds on it. Never let the agent invent one. |
 
-The video answers in one message:
+Put the answers in the same request and it does not need to ask. The video sends this as one message, together with the request from step 1:
 
 ```
 Users: one person in a terminal. Done when: python3 -m bookmarks add <url> --title <title> saves the
