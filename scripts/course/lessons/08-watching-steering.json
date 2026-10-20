@@ -103,41 +103,13 @@
     },
     {
       "wait_shell": "${COURSE_WAIT} running --min 1",
-      "timeout": 300,
+      "timeout": 60,
       "interval": 5,
       "optional": true
     },
     {
-      "say": "Two workers are running. First, the overview."
-    },
-    {
-      "type": "/wavecoord:coord-status",
-      "enter": true
-    },
-    {
-      "wait_for": "(?i)ok:",
-      "timeout": 300,
-      "idle": 0.5,
-      "optional": true
-    },
-    {
-      "idle": 6,
-      "timeout": 600
-    },
-    {
-      "say": "Coord status shows the coordinator, the attempts in flight, the merge queue, conflicts, and what is ready."
-    },
-    {
-      "type": "! wavecoord events --for lead --no-cursor | tail -6",
-      "enter": true
-    },
-    {
-      "wait_for": "wavecoord #",
-      "timeout": 60,
-      "idle": 2
-    },
-    {
-      "say": "This is the lead's event feed: one line per event, the same lines the monitor brings into the session."
+      "say": "Two workers are running. While they work, we nudge them.",
+      "wait": false
     },
     {
       "type": "! wavecoord hint todo.due-dates.overdue.dates 'Parse the due date with datetime.date.fromisoformat, and treat a bad date as not overdue.'",
@@ -149,7 +121,8 @@
       "idle": 2
     },
     {
-      "say": "A hint reaches the running worker within about five seconds. It reads it at its next step. Note the task name: the tree path, with dots instead of slashes."
+      "say": "A hint reaches the running worker within about five seconds. It reads it at its next step. Note the task name: the tree path, with dots instead of slashes.",
+      "wait": false
     },
     {
       "type": "! wavecoord steer todo.due-dates.store-due.store interrupt --note 'Add one test that loads an old item without a due key, then go on.'",
@@ -175,6 +148,38 @@
       "say": "The attempt log shows what the worker is doing, step by step."
     },
     {
+      "say": "Now the overview."
+    },
+    {
+      "type": "/wavecoord:coord-status",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)ok:",
+      "timeout": 300,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 6,
+      "timeout": 600
+    },
+    {
+      "say": "Coord status shows the coordinator, the attempts in flight, the merge queue, conflicts, and what is ready."
+    },
+    {
+      "type": "! wavecoord events --for lead --no-cursor --since 0 | tail -6",
+      "enter": true
+    },
+    {
+      "wait_for": "wavecoord #",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "This is the lead's event feed: one line per event, the same lines the monitor brings into the session."
+    },
+    {
       "say": "Now we let them finish.",
       "wait": false
     },
@@ -191,7 +196,7 @@
       "optional": true
     },
     {
-      "type": "! wavecoord events --for lead --no-cursor | tail -4",
+      "type": "! wavecoord events --for lead --no-cursor --since 0 | tail -4",
       "enter": true
     },
     {

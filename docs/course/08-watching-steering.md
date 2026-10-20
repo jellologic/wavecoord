@@ -55,20 +55,13 @@ Interrupts and model switches always wait for you. The coordinator's watchdog al
 
 ## Steps
 
-### 1. Start a wave and look
+### 1. Start a wave
 
 ```
 /wavecoord:wave-run
-/wavecoord:coord-status
 ```
 
-`coord-status` shows `ok: <url> ...`, then tables: attempts in flight, the merge queue, open conflicts, progress per feature, ready tasks and free slots, and unread messages. It ends with the next step.
-
-```
-! wavecoord events --for lead --no-cursor | tail -6
-```
-
-(`--no-cursor` reads without moving the lead's shared cursor, so the session still gets these events.)
+Small tasks can finish in a minute or two, so nudge the workers right after the dispatch.
 
 ### 2. Hint
 
@@ -97,6 +90,20 @@ What you see: `hint #<n> to task todo.due-dates.overdue.dates: the running worke
 ```
 ! wavecoord attempts logs todo.due-dates.store-due.store-1 --tail 12
 ```
+
+### 5. The overview
+
+```
+/wavecoord:coord-status
+```
+
+`coord-status` shows `ok: <url> ...`, then tables: attempts in flight, the merge queue, open conflicts, progress per feature, ready tasks and free slots, and unread messages. It ends with the next step.
+
+```
+! wavecoord events --for lead --no-cursor --since 0 | tail -6
+```
+
+The lead's event feed, one line per event: the same lines the Monitor brings into the session. `--since 0` reads from the start of the log; without it the command waits for the next event. `--no-cursor` reads without moving the lead's shared cursor, so the session still gets these events.
 
 ## Common mistakes
 
