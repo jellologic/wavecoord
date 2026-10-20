@@ -51,7 +51,7 @@ DEMO_ROOT = "/tmp/wavecoord-demo"
 PORT = int(os.environ.get("COURSE_PORT", "18793"))
 COURSE_HOME = os.path.expanduser(os.environ.get("COURSE_HOME", "~/.wavecoord-course"))
 VIDEO_URL = "https://github.com/jellologic/wavecoord/releases/download/v0.3.0/course-%s.mp4"
-CLI_URL = "https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.0/plugin/bin/wavecoord"
+CLI_URL = "https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.1/plugin/bin/wavecoord"
 MERMAID_CLI = "@mermaid-js/mermaid-cli@11.4.0"
 
 BUILD_KEYS = ("slug", "demo", "plugin", "server", "server_env", "cards", "estimate")
@@ -913,7 +913,7 @@ def prereqs(lessons, home=COURSE_HOME, port=PORT, cards_only=False):
             req = urllib.request.Request(CLI_URL, method="HEAD")
             urllib.request.urlopen(req, timeout=10)
         except Exception:  # noqa: BLE001
-            notes.append("lesson 01 downloads %s: it is not reachable yet (publish the v0.3.0 tag first)" % CLI_URL)
+            notes.append("lesson 01 downloads %s: it is not reachable yet (publish the v0.3.1 tag first)" % CLI_URL)
         notes.append("lesson 01 installs the plugin from the jellologic/wavecoord marketplace and the CLI into "
                      "~/.local/bin/wavecoord")
     return problems, notes

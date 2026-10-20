@@ -406,6 +406,12 @@ class Init(object):
         except EditError as e:
             raise InitError(str(e))
         self.say("  pushed %s" % branch)
+        # stage the same content here: an untracked copy would make `git pull` refuse to overwrite it after the
+        # merge; a staged copy that matches the merged file lets the pull fast-forward over it
+        rc, _, err = doctor.git(["add", "--"] + list(files), self.top)
+        if rc != 0:
+            self.say("  could not stage %s (%s); after the merge, remove the local copy before git pull"
+                     % (", ".join(files), err.strip()[-200:]))
         cfg = load_config(os.path.join(self.top, CONFIG_REL))
         fd, body_file = tempfile.mkstemp(prefix="wavecoord-init-", suffix=".md")
         os.close(fd)

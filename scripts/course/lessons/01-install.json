@@ -188,7 +188,7 @@
       "say": "Next, the wavecoord command line. It is the same program as the plugin. We put a copy in a folder on the PATH."
     },
     {
-      "type": "mkdir -p ~/.local/bin && curl -fsSL -o ~/.local/bin/wavecoord https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.0/plugin/bin/wavecoord",
+      "type": "mkdir -p ~/.local/bin && curl -fsSL -o ~/.local/bin/wavecoord https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.1/plugin/bin/wavecoord",
       "enter": true
     },
     {

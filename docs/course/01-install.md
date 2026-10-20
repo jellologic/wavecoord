@@ -41,9 +41,9 @@ The marketplace and the plugin are both named `wavecoord`. If Claude Code asks f
 ```bash
 mkdir -p ~/.local/bin
 curl -fsSL -o ~/.local/bin/wavecoord \
-  https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.0/plugin/bin/wavecoord
+  https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.1/plugin/bin/wavecoord
 chmod +x ~/.local/bin/wavecoord
-wavecoord version          # wavecoord 0.3.0
+wavecoord version          # wavecoord 0.3.1
 ```
 
 It is one Python file with no dependencies. `~/.local/bin` must be on your PATH (see Troubleshooting).
