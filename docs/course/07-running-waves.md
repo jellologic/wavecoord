@@ -79,7 +79,7 @@ Task ids: the tree path `todo/due-dates/overdue/dates` is the coordinator task `
 ### 3. What a worker does
 
 ```
-! wavecoord attempts ls --active
+! wavecoord attempts ls
 ! git worktree list
 ```
 

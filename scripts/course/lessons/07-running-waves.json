@@ -130,7 +130,7 @@
       "say": "Two tasks started. The third needs both, so it waits for the next wave."
     },
     {
-      "type": "! wavecoord attempts ls --active",
+      "type": "! wavecoord attempts ls",
       "enter": true
     },
     {
