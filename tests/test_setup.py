@@ -136,6 +136,10 @@ class SetupCase(unittest.TestCase):
 
 
 class InitTest(SetupCase):
+    def test_workers_may_merge_for_a_resolver(self):
+        from wavecoord import initrepo
+        self.assertIn("Bash(git merge *)", initrepo.WORKER_TOOLS.split(","))
+
     def test_dry_run_writes_nothing(self):
         before = self.files(self.home, self.repo)
         p = self.wc("init", "--dry-run", "--server", "--specs", "--pr", "--configure-plugin")

@@ -66,7 +66,7 @@ commit .claude/wavecoord.json on wavecoord/setup and open a PR (pr_cmd)
 ...
 ```
 
-Workers run `claude -p` unattended, so the host's `claude_flags` must allow what they need. init allows edits and `git add`, `git commit`, `git status` and `git diff`; add your test command to `--allowedTools` in `.claude/wavecoord.json` (`adapters.md`, Hosts).
+Workers run `claude -p` unattended, so the host's `claude_flags` must allow what they need. init allows edits and `git add`, `git commit`, `git status`, `git diff`, `git log` and `git merge` (a resolver merges the default branch into its branch); add your test command to `--allowedTools` in `.claude/wavecoord.json` (`adapters.md`, Hosts).
 
 On Linux, run `loginctl enable-linger $USER` once if the server must run while you are logged out.
 
@@ -217,7 +217,7 @@ What `wavecoord init` does, step by step, for when you want to do it yourself or
   "hosts": [
     {"name": "local", "slots": 3, "repo_path": ".",
      "claude_flags": ["--permission-mode", "acceptEdits",
-                      "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(python3 -m unittest *)"]}
+                      "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(git merge *),Bash(python3 -m unittest *)"]}
   ],
   "wip_cap": 3,
   "check_cmd": "python3 -m unittest discover -s tests"

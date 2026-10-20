@@ -110,8 +110,10 @@ When the resolver reports, triage again. The resolved PR still touches the chang
 ```
 /wavecoord:triage
 ! wavecoord refinery status
-! wavecoord spec tree
+! git pull -q && wavecoord spec tree
 ```
+
+The resolver runs `git merge`, so the host's `--allowedTools` must allow `Bash(git merge *)`; `wavecoord init` adds it. Pull first: the task status is committed to the default branch on origin.
 
 ### 4. Proposals and verify_failed
 

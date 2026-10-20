@@ -22,7 +22,8 @@ from wavecoord import __version__, const, doctor
 CONFIG_REL = doctor.CONFIG_REL
 SETUP_BRANCH = "wavecoord/setup"
 DEFAULT_SLOTS = 2
-WORKER_TOOLS = "Bash(git add *),Bash(git commit *),Bash(git status *),Bash(git diff *)"
+# git merge: a resolver (a --continue run after a conflict) merges the default branch into its branch
+WORKER_TOOLS = "Bash(git add *),Bash(git commit *),Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git merge *)"
 SPEC_README = """# Specs
 
 This folder holds the wavecoord spec tree: capabilities, features, requirements and tasks as

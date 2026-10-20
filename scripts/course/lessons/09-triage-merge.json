@@ -175,12 +175,6 @@
       "say": "A resolver is the same attempt, continued. It merges main into its branch, keeps both changelog lines, and keeps its pull request. We wait for it."
     },
     {
-      "wait_shell": "${COURSE_WAIT} running --min 1",
-      "timeout": 300,
-      "interval": 5,
-      "optional": true
-    },
-    {
       "wait_shell": "${COURSE_WAIT} idle --min 2",
       "timeout": 2400,
       "interval": 15,
@@ -218,7 +212,7 @@
       "timeout": 60
     },
     {
-      "type": "! wavecoord spec tree",
+      "type": "! git pull -q && wavecoord spec tree",
       "enter": true
     },
     {

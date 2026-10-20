@@ -41,7 +41,7 @@ ROOT = os.path.dirname(os.path.dirname(os.path.dirname(HERE)))
 WAVECOORD = os.path.join(ROOT, "plugin", "bin", "wavecoord")
 DEFAULT_PORT = 18793
 GIT_DATE = "2026-10-01T09:00:00+00:00"
-WORKER_TOOLS = ("Bash(git add *),Bash(git commit *),Bash(git status *),Bash(git diff *),Bash(git log *),"
+WORKER_TOOLS = ("Bash(git add *),Bash(git commit *),Bash(git status *),Bash(git diff *),Bash(git log *),Bash(git merge *),"
                 "Bash(python3 *)")
 HAIKU = {"model": "haiku", "effort": "low", "max_turns": 30, "budget_usd": 1, "timeout_min": 20}
 # workers that are still running a minute later, for the lesson that steers them

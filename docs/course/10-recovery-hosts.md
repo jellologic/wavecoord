@@ -80,7 +80,7 @@ wavecoord fence online
    ```json
    {"name": "build-1", "ssh": "builder@build-1.example.internal", "slots": 4, "repo_path": "~/src/myapp",
     "claude_flags": ["--permission-mode", "acceptEdits",
-                     "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(python3 -m unittest *)"]}
+                     "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(git merge *),Bash(python3 -m unittest *)"]}
    ```
 3. Give it its own token:
    ```bash

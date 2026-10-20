@@ -405,7 +405,7 @@ Retry rules that keep waves healthy: at most 2 attempts per task without you; ea
    ```json
    {"name": "build-1", "ssh": "builder@build-1.example.internal", "slots": 4, "repo_path": "~/src/myapp",
     "claude_flags": ["--permission-mode", "acceptEdits",
-                     "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(python3 -m unittest *)"],
+                     "--allowedTools", "Bash(git add *),Bash(git commit *),Bash(git merge *),Bash(python3 -m unittest *)"],
     "labels": ["python3"]}
    ```
 3. **Give it a token**: `wavecoord tokens provision --role agent --host build-1 --out ~/.wavecoord/hosts/build-1.token`. The launcher copies it to the host's `~/.wavecoord/token` over ssh, never on a command line.

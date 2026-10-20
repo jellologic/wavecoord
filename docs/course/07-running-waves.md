@@ -21,7 +21,7 @@ In `.claude/wavecoord.json` (on the default branch; a task PR can never change t
 {
   "hosts": [{"name": "local", "slots": 2, "repo_path": ".",
              "claude_flags": ["--permission-mode", "acceptEdits", "--allowedTools",
-                              "Bash(git add *),Bash(git commit *),Bash(python3 *)"]}],
+                              "Bash(git add *),Bash(git commit *),Bash(git merge *),Bash(python3 *)"]}],
   "wip_cap": 2,
   "fence": "advisory",
   "check_cmd": "python3 -m unittest discover -s tests"
