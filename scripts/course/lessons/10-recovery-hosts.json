@@ -64,18 +64,6 @@
       "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
     },
     {
-      "type": "wavecoord log -n 4",
-      "enter": true
-    },
-    {
-      "wait_for": "\\$ ?$",
-      "timeout": 30,
-      "idle": 1.5
-    },
-    {
-      "say": "wavecoord log reads the event log from git. Every lease, report and merge is there."
-    },
-    {
       "say": "Let's start one worker by hand, and then stop it."
     },
     {
@@ -125,6 +113,18 @@
     },
     {
       "say": "Lease release is for a lease that nobody holds any more: stale, or parked. Here stop already released it. Use release when a worker's machine died."
+    },
+    {
+      "type": "wavecoord log -n 8",
+      "enter": true
+    },
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "say": "wavecoord log reads the event log from git: the lease, the steer and the stop are all there. Every lease, report and merge is a commit."
     },
     {
       "say": "Next, the cache. The coordinator's database is only a cache of the log. Rebuild replays the log and changes nothing."

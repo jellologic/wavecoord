@@ -15,15 +15,7 @@ Machines die, networks drop and people make mistakes. Because every coordination
 
 ## Steps
 
-### 1. See what happened
-
-```bash
-wavecoord log -n 4
-```
-
-`log` reads `coord/log` from git; it needs no server. Each event has a sequence number (`seq`).
-
-### 2. Stop a worker, and release a lease
+### 1. Stop a worker, and release a lease
 
 ```bash
 wavecoord dispatch todo.due-dates.overdue.dates
@@ -46,6 +38,14 @@ It releases only a `stale` or `parked` lease; an active one needs `--force` (pre
 | `active` | A worker holds it | Nothing; `steer stop` to end it |
 | `parked` | The work waits in a PR; its paths stay reserved | Merge or close the PR; `collect` then releases it |
 | `stale` | No activity for the TTL, or the watchdog marked it | Hint the worker; if it is gone, `lease release` |
+
+### 2. See what happened
+
+```bash
+wavecoord log -n 8
+```
+
+`log` reads `coord/log` from git; it needs no server. Each event has a sequence number (`seq`): the dispatch's lease, the steer and the stop are there.
 
 ### 3. Undo coordination state
 
