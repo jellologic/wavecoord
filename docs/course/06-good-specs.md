@@ -86,6 +86,7 @@ What you see: findings marked `must` or `should`, each with the record, the prob
 /wavecoord:revise fix the plan under todo/due-dates: narrow the paths of the dates task to todo/dates.py
 and tests/test_dates.py, make its Acceptance python3 -m unittest tests.test_dates, review the suspect
 store task against the changed requirement and rebase its basis, and leave the reminders draft as it is.
+Do not ask me anything.
 ```
 
 What you see: one plan PR with `spec_edit` ops (`set`, `set_section`, `rebase_basis`) and the check result in its body. Merge it and check again:

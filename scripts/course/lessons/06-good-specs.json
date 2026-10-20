@@ -145,7 +145,7 @@
       "say": "Now fix it, through the revise skill. All fixes go into one plan pull request."
     },
     {
-      "type": "/wavecoord:revise fix the plan under todo/due-dates: narrow the paths of the dates task to todo/dates.py and tests/test_dates.py, make its Acceptance python3 -m unittest tests.test_dates, review the suspect store task against the changed requirement and rebase its basis, and leave the reminders draft as it is.",
+      "type": "/wavecoord:revise fix the plan under todo/due-dates: narrow the paths of the dates task to todo/dates.py and tests/test_dates.py, make its Acceptance python3 -m unittest tests.test_dates, review the suspect store task against the changed requirement and rebase its basis, and leave the reminders draft as it is. Do not ask me anything.",
       "enter": true
     },
     {
