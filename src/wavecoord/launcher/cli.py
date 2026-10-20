@@ -149,6 +149,13 @@ def cmd_hosts(args):
     return 0
 
 
+def _usd(v):
+    """A cost for the table: $0.0097, $1.23, or - when there is none."""
+    if not isinstance(v, (int, float)) or isinstance(v, bool):
+        return "-" if v is None else str(v)
+    return "$%.4f" % v if v < 0.1 else "$%.2f" % v
+
+
 def _table(rows):
     """Text rows with each column (but the last) as wide as its widest cell, two spaces apart; no trailing space."""
     rows = [["%s" % c for c in r] for r in rows]
@@ -194,7 +201,7 @@ def cmd_attempts(args):
             _fill_pr_urls(L, rows)
             table = [("ATTEMPT", "HOST", "STATE", "TURNS", "COST", "PR / NOTE")] + [
                 (r["id"], r["host"], r["state"], r.get("turns") or "-",
-                 r.get("cost_usd") if r.get("cost_usd") is not None else "-", r.get("pr_url") or r.get("note") or "")
+                 _usd(r.get("cost_usd")), r.get("pr_url") or r.get("note") or "")
                 for r in rows]
             for line in _table(table):
                 print(line)

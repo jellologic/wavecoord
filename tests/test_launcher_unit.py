@@ -10,7 +10,7 @@ import zipfile
 
 import _paths
 from wavecoord import zipapp
-from wavecoord.launcher import client, config, coord, stream
+from wavecoord.launcher import cli, client, config, coord, stream
 from wavecoord.launcher.common import LauncherError
 from wavecoord.launcher.worktrees import check_branch
 from wavecoord.launcher.wrapper import continue_cut, synthetic_report, validate_report
@@ -19,6 +19,12 @@ from wavecoord.launcher.wrapper import continue_cut, synthetic_report, validate_
 def probe(free=1, mem=8.0, ok=True, auth="logged-in", installed=True, repo_ok=True, slots=2):
     return {"ok": ok, "free": free, "active": slots - free, "slots": slots, "mem_avail_gib": mem,
             "repo_ok": repo_ok, "claude": {"installed": installed, "auth": auth}, "error": None if ok else "down"}
+
+
+class UsdTest(unittest.TestCase):
+    def test_cost_column(self):
+        self.assertEqual([cli._usd(v) for v in (0.009694669999999999, 0.35, 2, None)],
+                         ["$0.0097", "$0.35", "$2.00", "-"])
 
 
 class PlacementTest(unittest.TestCase):
