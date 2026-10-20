@@ -2,6 +2,12 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
+## 0.3.1
+
+### Fixed
+
+- `wavecoord init --pr` stages the files it puts in the PR. An untracked copy made the `git pull` after the merge refuse to overwrite it.
+
 ## 0.3.0
 
 Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the whole plugin (#32-#36). The trust boundary between workers and the lead is tighter, the refinery merges only work that should land, and the launcher, steering and hooks survive restarts, retries and stops. Some changes need action on upgrade.

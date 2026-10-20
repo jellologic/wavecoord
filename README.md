@@ -101,9 +101,9 @@ The coordinator and the terminal commands use the same program as the plugin. Pu
 
 ```bash
 curl -fsSL -o ~/.local/bin/wavecoord \
-  https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.0/plugin/bin/wavecoord
+  https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.1/plugin/bin/wavecoord
 chmod +x ~/.local/bin/wavecoord
-wavecoord version          # wavecoord 0.3.0
+wavecoord version          # wavecoord 0.3.1
 ```
 
 You also need `git`, `python3`, a logged-in `claude`, a repo with an `origin` remote, and the GitHub CLI `gh` (or your own `pr_cmd` and `merge_cmd`). `wavecoord doctor` checks them all.

@@ -150,10 +150,27 @@
       "when": "(?i)user scope|install for you|❯ Install"
     },
     {
-      "wait_for": "(?i)installed|restart",
+      "wait_for": "(?i)Configure wavecoord|installed wavecoord|restart to",
       "timeout": 120,
-      "idle": 3,
-      "optional": true
+      "idle": 2
+    },
+    {
+      "when": "Configure wavecoord",
+      "say": "Claude Code now asks for the plugin's options. We skip them with escape: wavecoord init sets them in a minute."
+    },
+    {
+      "when": "Configure wavecoord",
+      "key": "escape"
+    },
+    {
+      "pause": 1.5
+    },
+    {
+      "when": "Discover +Installed",
+      "key": "escape"
+    },
+    {
+      "pause": 1
     },
     {
       "say": "Installed. Claude Code loads a new plugin when it starts, so we exit for now."
@@ -171,7 +188,7 @@
       "say": "Next, the wavecoord command line. It is the same program as the plugin. We put a copy in a folder on the PATH."
     },
     {
-      "type": "mkdir -p ~/.local/bin && curl -fsSL -o ~/.local/bin/wavecoord https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.0/plugin/bin/wavecoord",
+      "type": "mkdir -p ~/.local/bin && curl -fsSL -o ~/.local/bin/wavecoord https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.1/plugin/bin/wavecoord",
       "enter": true
     },
     {

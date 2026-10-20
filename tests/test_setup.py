@@ -258,6 +258,18 @@ class InitTest(SetupCase):
         self.assertEqual(p.returncode, 0, p.stderr)
         self.assertIn("wavecoord/setup-2", p.stdout)
 
+    def test_pr_then_pull(self):
+        """After the PR merges, the `git pull` that init prints works: the local copy is staged, not untracked."""
+        p = self.wc("init", "--no-doctor", "--pr")
+        self.assertEqual(p.returncode, 0, p.stderr)
+        self.assertIn("A  .claude/wavecoord.json", git(self.repo, "status", "--porcelain"))
+        merger = os.path.join(self.tmp, "merger")
+        git(self.tmp, "clone", "-q", self.remote, merger)
+        git(merger, "merge", "-q", "--no-ff", "-m", "merge the setup PR", "origin/wavecoord/setup")
+        git(merger, "push", "-q", "origin", "HEAD:main")
+        git(self.repo, "pull", "-q")
+        self.assertEqual(git(self.repo, "status", "--porcelain", "--untracked-files=no"), "")
+
     def test_runs_doctor_at_the_end(self):
         p = self.wc("init")
         self.assertEqual(p.returncode, 0, p.stderr)
