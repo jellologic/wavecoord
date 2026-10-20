@@ -407,6 +407,21 @@ class DoctorTest(SetupCase):
         self.assertEqual(c["gh"]["status"], "fail")
         self.assertIn("enforce", c["gh"]["detail"])
 
+    def test_gh_not_logged_in_still_points_at_other_forges(self):
+        """CI runners have a gh that is not logged in: the fix line keeps the pointer to "Other forges"."""
+        os.makedirs(os.path.join(self.repo, ".claude"))
+        with open(os.path.join(self.repo, ".claude", "wavecoord.json"), "w") as f:
+            json.dump({"project": "demo", "pr_cmd": "my-forge pr open", "merge_cmd": ["my-forge", "merge"],
+                       "pr_state_cmd": ["my-forge", "state"]}, f)
+        gh = os.path.join(self.bin, "gh")
+        with open(gh, "w") as f:
+            f.write("#!/bin/sh\necho 'You are not logged into any GitHub hosts.' >&2\nexit 1\n")
+        os.chmod(gh, 0o755)
+        p, c, _ = self.doctor(gh=False)
+        self.assertEqual(c["gh"]["status"], "warn")
+        self.assertIn("not logged in", c["gh"]["detail"])
+        self.assertIn("Other forges", c["gh"]["fix"])
+
     def test_host_probe(self):
         self.wc("init", "--no-doctor")
         p = self.wc("doctor", "--json", CLAUDE_CODE_OAUTH_TOKEN="fake-not-a-secret")

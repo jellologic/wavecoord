@@ -352,7 +352,7 @@ class Doctor(object):
         rc, out, err = run([exe, "auth", "status"])
         if rc != 0:
             self.add("gh", status, "gh is not logged in (%s); %s" % (
-                ((err or out).strip().splitlines() or ["?"])[0][:120], why), "gh auth login")
+                ((err or out).strip().splitlines() or ["?"])[0][:120], why), "gh auth login" + fix_more)
             return
         rc, ver, _ = run([exe, "--version"])
         used = "" if needs else "; used for %s" % fixed
