@@ -813,6 +813,14 @@ def claude_cmd(env, *args, input=None, check=False):
     return p
 
 
+BANG_RULE = """# Shell commands I run myself
+
+When I run a shell command with `!` and you see only its output, answer in at most two sentences: what
+the output shows. Do not change files, run commands or call tools after a `!` command; wait for my next
+request.
+"""
+
+
 def seed_profile(config_dir, version):
     """Mark Claude Code's first-run screens (theme picker, release notes) as seen in the course profile."""
     path = os.path.join(config_dir, ".claude.json")
@@ -823,6 +831,10 @@ def seed_profile(config_dir, version):
     with open(path + ".tmp", "w") as f:
         json.dump(d, f, indent=2)
     os.replace(path + ".tmp", path)
+    # Claude Code answers the output of a `!` command with a turn of its own; in a take that turn must not
+    # act (one lead fixed the plan itself before the lesson asked for it). Workers never see a `!` command.
+    with open(os.path.join(config_dir, "CLAUDE.md"), "w") as f:
+        f.write(BANG_RULE)
 
 
 def prepare(lesson, env, home=COURSE_HOME, port=PORT, log=print):

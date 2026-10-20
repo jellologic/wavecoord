@@ -279,6 +279,15 @@ class CardsTest(unittest.TestCase):
 
 # ---------------------------------------------------------------- demos
 
+class ProfileTest(TempDir):
+    def test_seed_profile(self):
+        build.seed_profile(self.tmp, "9.9.9")
+        d = json.load(open(os.path.join(self.tmp, ".claude.json")))
+        self.assertEqual((d["hasCompletedOnboarding"], d["lastReleaseNotesSeen"]), (True, "9.9.9"))
+        with open(os.path.join(self.tmp, "CLAUDE.md")) as f:
+            self.assertIn("Do not change files", f.read())
+
+
 class DemosTest(TempDir):
     def demo(self, name, state=None):
         repo = os.path.join(self.tmp, "wavecoord-demo", name + (state or ""))
