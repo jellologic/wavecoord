@@ -34,7 +34,7 @@ In Claude Code, in any folder:
 /plugin install wavecoord@wavecoord
 ```
 
-The marketplace and the plugin are both named `wavecoord`. If Claude Code asks for a scope, pick the user scope. Then exit (`/exit`): a new plugin loads when a session starts. From a terminal, the same is `claude plugin marketplace add jellologic/wavecoord` and `claude plugin install wavecoord@wavecoord`.
+The marketplace and the plugin are both named `wavecoord`. If Claude Code asks for a scope, pick the user scope. When it then asks for the plugin options (Coordinator URL, token, lead session), press Esc: `wavecoord init --configure-plugin` sets them in step 4. Then exit (`/exit`): a new plugin loads when a session starts. From a terminal, the same is `claude plugin marketplace add jellologic/wavecoord` and `claude plugin install wavecoord@wavecoord`.
 
 ### 3. Install the command line
 
