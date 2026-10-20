@@ -1,0 +1,174 @@
+# Course recording rig
+
+`rig.py` records a real, scripted Claude Code session for the video course. It
+types into a live `claude` and waits on what the screen shows. By default it
+runs headless: `claude` runs in a pty, its output is saved as an asciicast and
+[agg](https://github.com/asciinema/agg) renders it. Nothing on your screen is
+captured, so you can keep working during a take. Then it adds the narration
+(`say`) and subtitles.
+`build.py` turns the lesson scripts in `lessons/` into the course videos
+([docs/course](../../docs/course/README.md)): see [Building the course](#building-the-course).
+
+```bash
+COURSE_DEMO_DIR=/tmp/wavecoord-demo \
+  python3 scripts/course/rig.py run scripts/course/proof-take.json --out /tmp/course-out/proof
+python3 scripts/course/rig.py check scripts/course/lessons/*.json     # the format only; records nothing
+```
+
+Outputs in `--out`:
+
+- `<lesson>.mp4`: the final video, 1920x1080, 30 fps, H.264 + AAC, with soft English subtitles.
+- `<lesson>.srt`: the subtitles as a sidecar file.
+- `timeline.json`: each step with its start and end time in the video.
+- `usage.json`: the tokens Claude Code used (from its transcripts in the lesson's `CLAUDE_CONFIG_DIR`), with the API list price per model.
+- `raw.mp4` (the rendered session without audio), `session.cast` (the asciicast it was rendered from), `voice/` (one
+  narration clip per line), `ctl/` (driver state; `screen.txt` is the screen at the end, `raw.txt` the output stream).
+
+## How it works
+
+1. Each `say` line is rendered with `say -v Samantha -o`, so its length is known in advance.
+2. The driver starts the lesson command in a pty of `size` (118x30) and runs the
+   `setup` steps off camera, for example the folder-trust dialog. It answers the
+   terminal queries Claude Code sends (device attributes, cursor position).
+3. A small VT100 screen (`Screen`) follows the output, so `wait_for` and `when`
+   match what is shown, not only the raw stream.
+4. The driver plays `steps` and logs a timestamp for each one. Video time zero
+   is the end of setup; what setup drew is the first frame.
+5. agg renders the asciicast (Menlo, `agg_font_size` 26) and ffmpeg turns it into
+   `raw.mp4`, about 1878x1048.
+6. The rig places each voice clip at its step's time (`adelay` + `amix`), writes
+   the .srt and centers the video on a 1920x1080 canvas.
+
+`--window` uses the older path instead: a dedicated Terminal.app window (profile
+`wavecoord-course`, Menlo 20, at fixed bounds) recorded with ffmpeg avfoundation,
+cropped to the window before encoding. It needs the one-time setup below, and
+anything that covers the window is recorded.
+
+## Lesson format (JSON)
+
+```json
+{
+  "cwd": "$COURSE_DEMO_DIR",
+  "command": ["claude", "--model", "haiku", "--permission-mode", "default"],
+  "prepare": ["git reset --hard -q"],
+  "env": {},
+  "config": {"font_size": 20, "rate": 180},
+  "setup": [ ...steps run before recording... ],
+  "steps": [ ...recorded steps... ]
+}
+```
+
+`cwd` expands `~` and `$VARS`, and a relative path is resolved from the lesson
+file. `--cwd` overrides it. `prepare` holds shell commands that run in `cwd`
+before anything else. `config` overrides `DEFAULTS` in `rig.py`: `voice`, `rate`,
+`font`, `font_size`, `bounds`, `inset`, `canvas`, `type_cps`, `lead_in`, `tail`,
+`say_gap` and the colors.
+
+Steps:
+
+| Step | What it does |
+|---|---|
+| `{"say": "text"}` | Narration starts here. By default the driver waits for the line to finish before the next step. `"wait": false` lets the next step run while the voice plays. |
+| `{"type": "text", "enter": true}` | Types the text at `cps` characters per second (default 16), then presses Return. |
+| `{"key": "escape"}` | Sends a key: `enter`, `escape`, `tab`, `shift-tab`, `up`, `down`, `left`, `right`, `backspace`, `space`, `ctrl-c`, `ctrl-o`, `ctrl-t`, and so on. `"repeat": n` sends it n times. |
+| `{"wait_for": "regex", "timeout": 60, "idle": 2}` | Polls the screen text printed since the last `type` or `key` step (ANSI stripped) until the regex matches. With `idle`, it then waits until the screen has been still for that many seconds. It fails the take on timeout unless `"optional": true`. |
+| `{"idle": 2, "timeout": 60}` | Waits until the screen has been still for N seconds. |
+| `{"pause": 2}` | Waits N seconds. |
+| `{"shell": "cmd"}` | Runs a command off camera (in `cwd` unless `"cwd"` is given, with the lesson's `env`) and logs its output. Use it to set up state between beats. |
+| `{"wait_shell": "cmd", "timeout": 600, "interval": 5}` | Runs a command off camera every `interval` seconds until it exits 0, mirroring the screen in between. It fails the take on timeout unless `"optional": true`. Use it to wait on state the screen does not show, such as workers finishing. |
+| `{"wait_exit": 10}` | Waits up to N seconds for the session to exit. |
+
+Any step can take `"when": "regex"`. The step then runs only if the screen text
+since the last action matches. This handles dialogs that appear only sometimes.
+
+## Writing lessons for the rig
+
+- Put dialogs Claude Code might show at startup in `setup`, guarded with `when`:
+  folder trust (this version puts "No, exit" first, so the step is `down`, then
+  `enter`), onboarding, release notes.
+- Start Claude with `--permission-mode default`. In auto mode, Claude Code can
+  pop "Teach auto mode about your environment?", which swallows the next
+  keystrokes. In one take it turned `/exit` into `/auto-mode-setup`.
+- After each prompt, use `wait_for` with something specific to the answer (a
+  file name, "Worked for"), plus `idle` of 2–3 s. The spinner keeps the screen
+  busy while Claude works, so idle means it is done.
+- Narrate after the result appears, not over a variable wait. To talk while
+  Claude works, use `"wait": false`, and keep the line shorter than the fastest
+  answer.
+- Keep prompts small and deterministic, and run them against a demo repo you can
+  reset with `prepare`. Answers vary between takes, so keep narration generic
+  ("Claude lists the files") rather than quoting exact output.
+- Put the demo repo at a short, neutral path such as `/tmp/wavecoord-demo`.
+  Claude Code's header shows the working directory, and a path under your home
+  directory shows your user name.
+- Typing `/` opens the command menu, which lists your own installed skills and
+  plugins. Type full commands without pausing, or use a clean
+  `CLAUDE_CONFIG_DIR` set up for recording.
+
+## One-time setup
+
+Headless takes need only `brew install agg`. The rest of this section is for `--window` takes.
+
+- **Screen recording** for the app that runs the rig (the terminal or IDE that
+  starts `rig.py`): System Settings > Privacy & Security > Screen & System Audio
+  Recording.
+- **Automation** of Terminal for the same app. Granted on first use if macOS
+  asks; no prompt appeared on the machine this was built on.
+- The rig adds a Terminal profile named `wavecoord-course`. Change it in
+  Terminal > Settings > Profiles, or through `font`, `font_size` and the color
+  keys in `config`.
+- Before recording, turn on Do Not Disturb. Banners appear at the top right,
+  outside the default window bounds, but anything that pops up over the window
+  is recorded.
+
+## Limitations
+
+- `--window` only: the recording is the live screen region. Keep the window in front and don't
+  touch it during a take. Keystrokes typed into the window go nowhere (the
+  driver puts its tty in raw mode), but other windows moved over it would show.
+- `--window` only: bounds assume a 1920x1080, non-Retina display with the Dock at the bottom. On
+  a Retina display the scale factor is detected from `system_profiler`, or set
+  `--scale-factor`.
+- `--window` only: video time zero is estimated as the time ffmpeg was stopped minus the clip
+  length. Voice onsets in the proof take matched the step log to within 10 ms.
+- Claude Code's TUI changes between versions. The `wait_for` regexes are what
+  breaks first.
+
+## Building the course
+
+```bash
+python3 scripts/course/build.py --validate         # check every lesson script against this format
+python3 scripts/course/build.py --check            # the prerequisites of a recording
+python3 scripts/course/build.py --lesson 03        # record one lesson
+python3 scripts/course/build.py --all              # record every lesson
+```
+
+Each lesson in `lessons/NN-slug.json` is a rig lesson plus keys the rig ignores:
+
+| Key | Meaning |
+|---|---|
+| `slug` | The file name; the video is `dist/course/course-<slug>.mp4` |
+| `demo` | `{"name", "state", "config"}`: the demo repo to build (`demos/demos.py`) |
+| `plugin` | `dir`: the lead loads `--plugin-dir <repo>/plugin`; `marketplace`: lesson 1 installs it on camera |
+| `server`, `server_env` | Start a coordinator for the demo before the take, with these extra variables |
+| `cards` | `{"intro": [...], "outro": [...]}`: title, bullet, code or diagram cards, each with a `say` |
+| `estimate` | Video and recording minutes, the lead model and the expected cost |
+| `"cut": true` on a wait step | The middle of the wait is cut to a short "later" card, never over a voice line |
+
+Strings may use `${COURSE_DEMO_DIR}`, `${COURSE_PLUGIN}`, `${COURSE_URL}`, `${COURSE_PORT}`, `${COURSE_WAIT}`
+(`wait.py`: `idle`, `running`, `done`), `${COURSE_BUILD}` and the other names in `build.placeholders`.
+
+What a recording needs:
+
+- macOS with `say`, `ffmpeg`, `agg` and `rsvg-convert`. Mermaid diagrams
+  render with `mmdc` (or `npx @mermaid-js/mermaid-cli`) when present, else `build.py` draws them.
+- A dedicated, logged-in Claude Code profile: `CLAUDE_CONFIG_DIR=~/.wavecoord-course/claude claude auth login`
+  once (`COURSE_HOME` moves `~/.wavecoord-course`). Its `projects/` folder gives the cost of each take.
+- A free port for the demo coordinator (18793; `COURSE_PORT` changes it). An existing coordinator on 18741 is
+  never touched.
+
+Each take builds its demo under `/tmp/wavecoord-demo/`, with a bare origin and `demos/bin/gh`, a local stand-in
+for GitHub (`demos/forge.py`), first on the PATH. It resets `$COURSE_HOME/wc` (the isolated `WAVECOORD_HOME`
+with fresh tokens) and the plugin options of the course profile, so the lessons are independent. Lesson 1
+installs the plugin from the `jellologic/wavecoord` marketplace and the CLI from the v0.3.0 release into
+`~/.local/bin`, as a reader does.

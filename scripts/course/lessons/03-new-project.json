@@ -1,0 +1,338 @@
+{
+  "title": "Lesson 3: A new project from scratch",
+  "slug": "03-new-project",
+  "demo": {
+    "name": "fresh"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 10,
+    "real_min": 60,
+    "lead": "sonnet, workers haiku",
+    "cost": "$3 to $8 (lead) plus $0.10 to $0.50 (workers)"
+  },
+  "command": [
+    "claude",
+    "--model",
+    "sonnet",
+    "--permission-mode",
+    "default",
+    "--plugin-dir",
+    "${COURSE_PLUGIN}",
+    "--disallowedTools",
+    "AskUserQuestion",
+    "--allowedTools",
+    "mcp__plugin_wavecoord_wavecoord,Bash(wavecoord *),Bash(git *),Bash(gh *),Bash(python3 -m unittest *),Read,Grep,Glob"
+  ],
+  "timeout": 7200,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "A new project from scratch",
+        "subtitle": "Lesson 3: spec, plan, run, triage, merge",
+        "say": "In this lesson an empty repo becomes a small working app. We go around the whole loop: spec, plan, run, triage and merge, and then a second wave."
+      },
+      {
+        "title": "The loop",
+        "diagram": "loop",
+        "say": "Here is the loop. Spec writes the requirements. Wave plan writes the tasks. Wave run starts workers. Triage opens pull requests and merges them. Then the next wave starts."
+      }
+    ],
+    "outro": [
+      {
+        "title": "Recap",
+        "bullets": [
+          "Two plan PRs: requirements, then tasks. You merge both.",
+          "wave-run starts every ready task that does not overlap, up to wip_cap.",
+          "triage collects, opens PRs and merges through the refinery.",
+          "Merges make the next tasks ready: run the next wave."
+        ],
+        "say": "That is the full loop. Two plan pull requests that you merge. Workers in parallel. Triage to merge. And each merge makes the next tasks ready."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    }
+  ],
+  "steps": [
+    {
+      "say": "An empty repo: just a README with the idea of a bookmarks tool, and the wavecoord config."
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "say": "Step one: the spec. This time we answer the usual questions in the request itself, and we say how to split the requirements: the store first, then one per command. That split is what lets the work run in parallel later."
+    },
+    {
+      "type": "/wavecoord:spec the bookmarks CLI from the README. Users: one person in a terminal. Out of scope: tags and any web page. Make four requirements. One for the store and the entry point: bookmarks live in a JSON file, and python3 -m bookmarks <command> runs bookmarks/cmd_<command>.py. Then one each for add, list and find, each a command module. Each Verify runs one new test module with python3 -m unittest, and the store's test calls the store directly, not the CLI. When the records are right, you may set the requirements to approved and the capability and feature to active in this PR. Do not ask me anything else.",
+      "enter": true
+    },
+    {
+      "say": "The skill reads the README, drafts the records and has a reviewer check them.",
+      "wait": false
+    },
+    {
+      "wait_shell": "gh pr list --state all | grep -q '^#1 '",
+      "timeout": 1500,
+      "interval": 10,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "One plan pull request with the requirements. In a real project, read it first. Here we merge it."
+    },
+    {
+      "type": "! gh pr merge 1 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request #1",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Step two: the tasks. We ask for small tasks on a cheap, fast model, and for a shape that runs in parallel: one foundation task, then one task per command, each in its own files."
+    },
+    {
+      "type": "/wavecoord:wave-plan bookmarks. Make two waves. Wave 1 is one task: the store module and the entry point, which runs the command module bookmarks/cmd_<name>.py for each command name, so no later task edits a shared file. Wave 2 is three parallel tasks, add, list and find, each one command module and its test, needing only the first task. Use model haiku, effort low, max_turns 30, budget_usd 1 and timeout_min 20 for every task. Write each Acceptance command as one plain python3 command, such as python3 -m unittest tests.test_add. Do not ask me anything; if the plan cannot take this shape, pick the closest one and say why.",
+      "enter": true
+    },
+    {
+      "say": "Planner subagents draft the tasks, and reviewer subagents critique them.",
+      "wait": false
+    },
+    {
+      "wait_shell": "gh pr list --state all | grep -q '^#2 '",
+      "timeout": 2400,
+      "interval": 10,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "The second plan pull request holds the tasks, each with its paths, needs, budget and prompt, and the waves they make. We merge it too."
+    },
+    {
+      "type": "! gh pr merge 2 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request #2",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "type": "! wavecoord spec waves",
+      "enter": true
+    },
+    {
+      "wait_for": "wave 1",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Wave one has the task that can start now. The three command tasks wait for it, and then run side by side."
+    },
+    {
+      "say": "Step three: run the wave."
+    },
+    {
+      "type": "/wavecoord:wave-run",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)dispatch",
+      "timeout": 600,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 6,
+      "timeout": 900
+    },
+    {
+      "say": "Each ready task got a lease on its files and a worker in its own worktree. A monitor now brings the workers' events into this session."
+    },
+    {
+      "type": "! wavecoord attempts ls",
+      "enter": true
+    },
+    {
+      "wait_for": "ATTEMPT",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "The worker runs on its own. This takes a few minutes, so we skip ahead.",
+      "wait": false
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} idle --min 1",
+      "timeout": 2700,
+      "interval": 15,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true,
+      "optional": true
+    },
+    {
+      "say": "The worker reported. Step four: triage."
+    },
+    {
+      "type": "/wavecoord:triage",
+      "enter": true
+    },
+    {
+      "say": "Triage collects the result, opens a pull request, and merges it through the refinery, which runs the checks again first.",
+      "wait": false
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} done --min 1",
+      "timeout": 2400,
+      "interval": 15,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 1200,
+      "cut": true
+    },
+    {
+      "say": "Merged. After each merge, wavecoord writes the task's status into the spec tree on the default branch, so we pull first."
+    },
+    {
+      "type": "! git pull -q && wavecoord spec tree",
+      "enter": true
+    },
+    {
+      "wait_for": "bookmarks",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Step five: the next wave. Same command. Now three workers start at once, each with a lease on its own files."
+    },
+    {
+      "type": "/wavecoord:wave-run",
+      "enter": true
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} started --min 4",
+      "timeout": 900,
+      "interval": 5,
+      "optional": true
+    },
+    {
+      "idle": 6,
+      "timeout": 900
+    },
+    {
+      "type": "! wavecoord attempts ls",
+      "enter": true
+    },
+    {
+      "wait_for": "ATTEMPT",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Three workers, three worktrees, no shared file. We skip ahead again.",
+      "wait": false
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} idle --min 4",
+      "timeout": 2700,
+      "interval": 15,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true,
+      "optional": true
+    },
+    {
+      "type": "/wavecoord:triage",
+      "enter": true
+    },
+    {
+      "say": "Triage again. The refinery merges the three pull requests one at a time, and checks each against what is already merged.",
+      "wait": false
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} done --min 4",
+      "timeout": 2400,
+      "interval": 15,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 1800,
+      "cut": true
+    },
+    {
+      "say": "The second wave is merged too."
+    },
+    {
+      "type": "! git pull -q && wavecoord spec tree",
+      "enter": true
+    },
+    {
+      "wait_for": "bookmarks",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "type": "! git log --oneline -14",
+      "enter": true
+    },
+    {
+      "wait_for": "Merge",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "The history shows the plan pull requests, one merge per task, and the status commits. An empty repo became a tested app, and every step is in git."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 20
+    }
+  ]
+}

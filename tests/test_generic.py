@@ -28,6 +28,7 @@ SECRETS = [
     re.compile(r"\bsk-(?:proj-)?[A-Za-z0-9]{20,}"),
     re.compile(r"\bAIza[0-9A-Za-z_-]{35}"),
 ]
+BINARY_MEDIA = (".gif", ".png", ".jpg", ".mp4")
 # One sample per secret pattern, built from parts (test_patterns_catch_samples).
 SAMPLES = ["sk-" + "ant-" + "a" * 20, "sk-" + "or-v1-" + "0" * 20, "gh" + "p_" + "A" * 24,
            "-----BEGIN " + "RSA PRIVATE KEY-----", "AS" + "IA" + "ABCDEFGHIJKLMNOP", "github" + "_pat_" + "1" * 30,
@@ -52,6 +53,8 @@ class GenericTest(unittest.TestCase):
     def test_no_private_names_or_secrets(self):
         bad = []
         for rel in tracked_files():
+            if rel.endswith(BINARY_MEDIA):
+                continue  # compressed pixels: random bytes match the short patterns (docs/img/*.gif)
             path = os.path.join(_paths.ROOT, rel)
             try:
                 with open(path, "rb") as f:

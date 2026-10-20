@@ -1,0 +1,41 @@
+# Narration for spec-to-merge.mp4. One [section] per chapter (see VIDEOS in scripts/docs_video.py).
+# Each sentence is spoken on its own and becomes one subtitle. Keep sentences short.
+
+[intro]
+This video follows one wave of work, from a checked spec to merged code.
+
+[plan]
+We start from a checked spec tree.
+spec waves shows three tasks in the first wave, with no dependencies between them.
+
+[dispatch]
+wavecoord dispatch starts the ready wave.
+Each task gets a worker on a host, in its own worktree and on its own branch.
+The worker holds a lease on the paths its task owns.
+
+[attempts]
+attempts ls shows every attempt.
+Two have reported, with their turns and their cost.
+The index task is still running.
+
+[events]
+The lead follows an events feed.
+Each line is something the lead may act on.
+Here are three reports.
+Two are done, and one is blocked on a question about hyphenated words.
+
+[merge]
+collect gathers the reports and opens a pull request for each attempt.
+Then the refinery merges them one at a time, in dependency order.
+The queue store merged.
+The index was blocked by the fence.
+The tokenizer is blocked because its report was not done.
+
+[gate]
+gate-check shows why the index was blocked.
+Its branch also changed README.md, a file outside its lease.
+The fence keeps that change out of main.
+
+[tree]
+Back in the spec tree, the statuses follow the work.
+The queue store is done, two tasks wait in review, and the next wave has started.

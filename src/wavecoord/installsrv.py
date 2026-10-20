@@ -72,6 +72,15 @@ def parse_env_args(items):
     return out
 
 
+def unit_location(project, platform):
+    """The unit file of the service for `project`: a launchd plist on darwin, a systemd user unit on linux."""
+    name = safe_name(project)
+    if platform == "darwin":
+        return os.path.join(_home(), "Library", "LaunchAgents", LABEL_PREFIX + name + ".plist")
+    return os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(_home(), ".config"),
+                        "systemd", "user", "wavecoord-%s.service" % name)
+
+
 def plan(repo, platform=None, port=None, bind=None, tokens=None, home=None, no_push=False, python=None,
          path_env=None, zipapp_bytes=None, extra_env=None):
     """-> the install plan: {zipapp, zipapp_hash, unit_path, unit, argv, env, start, stop, log}. Pure.
@@ -108,15 +117,14 @@ def plan(repo, platform=None, port=None, bind=None, tokens=None, home=None, no_p
     name = safe_name(project)
     if platform == "darwin":
         label = LABEL_PREFIX + name
-        unit_path = os.path.join(_home(), "Library", "LaunchAgents", label + ".plist")
+        unit_path = unit_location(project, platform)
         unit = launchd_plist(label, argv, repo, env, log)
         domain = "gui/%d" % os.getuid()
         start = [["launchctl", "bootout", "%s/%s" % (domain, label)], ["launchctl", "bootstrap", domain, unit_path]]
         stop = [["launchctl", "bootout", "%s/%s" % (domain, label)]]
     else:
         label = "wavecoord-%s.service" % name
-        unit_path = os.path.join(os.environ.get("XDG_CONFIG_HOME") or os.path.join(_home(), ".config"),
-                                 "systemd", "user", label)
+        unit_path = unit_location(project, platform)
         unit = systemd_unit(project, argv, repo, env, log)
         start = [["systemctl", "--user", "daemon-reload"], ["systemctl", "--user", "enable", label],
                  ["systemctl", "--user", "restart", label]]

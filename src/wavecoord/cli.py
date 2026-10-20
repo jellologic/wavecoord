@@ -3,7 +3,8 @@
 Implemented: `version`, `status`, `hook`, `guard`, the core commands (serve, log, revert,
 rebuild, events, tokens; see corecli.py), `channel` (see docs/feedback.md), the launcher
 (launch, hosts, attempts, gc; see docs/launcher.md) and the lead tools (dispatch, collect,
-refinery, plan; see leadcli.py) and `install-server` (installsrv.py).
+refinery, plan; see leadcli.py), `install-server` (installsrv.py), and the setup commands
+`doctor` (doctor.py) and `init` (initrepo.py).
 """
 
 import argparse
@@ -93,7 +94,9 @@ def cmd_status(args):
     except (urllib.error.URLError, OSError, ValueError) as e:
         print("unreachable: no coordinator answers at %s (%s)" % (url, getattr(e, "reason", e)))
         return 1
-    print("ok: %s version=%s api=%s" % (url, body.get("version"), body.get("api")))
+    ver = str(body.get("version") or "")
+    print("ok: %s version=%s api=%s" % (url, ver[len("wavecoord "):] if ver.startswith("wavecoord ") else ver,
+                                         body.get("api")))
     return 0
 
 
@@ -186,6 +189,9 @@ def build_parser():
     register_spec(sub)
     from wavecoord.installsrv import register as register_install
     register_install(sub)
+    from wavecoord import doctor, initrepo
+    doctor.register(sub)
+    initrepo.register(sub)
 
     for name, helptext in STUBS.items():
         sp = sub.add_parser(name, help=helptext + " (not implemented in P0)")

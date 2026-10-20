@@ -1,0 +1,38 @@
+# Narration for quickstart.mp4. One [section] per chapter (see VIDEOS in scripts/docs_video.py).
+# Each sentence is spoken on its own and becomes one subtitle. Keep sentences short.
+
+[intro]
+This is wavecoord, a Claude Code plugin for plan-driven, parallel agent work.
+In about a minute, we'll check a fresh setup and see which work is ready to run.
+
+[status]
+First, wavecoord status asks the coordinator if it is up.
+It prints the address and the version.
+Then wavecoord hosts probes each machine that can run workers.
+Here, one local host has three free slots and a logged-in Claude.
+
+[tree]
+The plan lives in git, as a tree of specs.
+Features sit at the top, requirements below them, and tasks at the leaves.
+Every task owns the file paths it may change.
+
+[check]
+wavecoord spec check validates the whole tree.
+There are no errors.
+The two warnings say a draft requirement has no task yet.
+That is fine for now.
+
+[waves]
+spec waves groups the tasks into waves.
+Tasks in the same wave do not depend on each other, so they can run side by side.
+It also shows the critical path, the longest chain of work.
+
+[ready]
+Finally, spec ready lists what can start right now.
+Three tasks are ready.
+The others wait for the tasks they need.
+
+[outro]
+That's the setup.
+Next, the lead dispatches the ready wave to workers.
+The next video follows that wave from spec to merge.

@@ -49,10 +49,19 @@ def iso(t=None):
     return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(t if t is not None else now()))
 
 
-def wc_home():
-    """The wavecoord state root on this machine: $WAVECOORD_HOME, else ~/.wavecoord."""
-    h = os.environ.get("WAVECOORD_HOME") or os.path.join(os.path.expanduser("~"), ".wavecoord")
+def wc_home(env=None):
+    """The wavecoord state root on this machine: $WAVECOORD_HOME, else ~/.wavecoord.
+
+    The launcher's meaning of WAVECOORD_HOME (the root: hosts/, attempts/, client/, plugin-*/). The
+    server reads the same variable as one project's state folder (`const.home_dir`; docs/launcher.md)."""
+    env = os.environ if env is None else env
+    h = env.get("WAVECOORD_HOME") or os.path.join(os.path.expanduser("~"), ".wavecoord")
     return os.path.abspath(os.path.expanduser(h))
+
+
+def host_token_file(name, env=None):
+    """The agent token file that the launcher keeps for host `name`: <wc_home>/hosts/<name>.token."""
+    return os.path.join(wc_home(env), "hosts", name + ".token")
 
 
 def ensure_dir(p, mode=0o755):

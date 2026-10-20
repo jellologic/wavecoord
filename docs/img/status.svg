@@ -1,0 +1,15 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="928" height="172" viewBox="0 0 928 172" role="img" aria-label="wavecoord status &amp;&amp; wavecoord hosts">
+<title>wavecoord status &amp;&amp; wavecoord hosts</title>
+<rect width="928" height="172" rx="10" ry="10" fill="#1e1e2e"/>
+<path d="M0 10 a10 10 0 0 1 10 -10 h908 a10 10 0 0 1 10 10 v18 h-928 z" fill="#313244"/>
+<circle cx="18" cy="14" r="6" fill="#f38ba8"/>
+<circle cx="38" cy="14" r="6" fill="#f9e2af"/>
+<circle cx="58" cy="14" r="6" fill="#a6e3a1"/>
+<text x="464" y="18.5" fill="#9399b2" font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="12" text-anchor="middle">wavecoord status &amp;&amp; wavecoord hosts</text>
+<g font-family="ui-monospace, SFMono-Regular, Menlo, Consolas, 'DejaVu Sans Mono', 'Liberation Mono', monospace" font-size="13" fill="#cdd6f4" xml:space="preserve" style="white-space:pre">
+<text x="16" y="52" xml:space="preserve"><tspan fill="#a6e3a1" font-weight="bold">$ </tspan><tspan font-weight="bold">wavecoord status</tspan></text>
+<text x="16" y="70" xml:space="preserve">ok: http://127.0.0.1:18741 version=0.3.0 api=1</text>
+<text x="16" y="106" xml:space="preserve"><tspan fill="#a6e3a1" font-weight="bold">$ </tspan><tspan font-weight="bold">wavecoord hosts</tspan></text>
+<text x="16" y="124" xml:space="preserve">HOST         SLOTS  MEM_GIB  DISK_GIB AUTH             CLAUDE                   PROVIDERS                STATUS</text>
+<text x="16" y="142" xml:space="preserve">local        0/3    32.0     512      logged-in        2.1.0 (Claude Code)      anthropic                ok</text>
+</g></svg>

@@ -1,0 +1,215 @@
+{
+  "title": "Lesson 5: Bring specs from Spec Kit, Kiro or OpenSpec",
+  "slug": "05-import-specs",
+  "demo": {
+    "name": "speckit"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 5,
+    "real_min": 30,
+    "lead": "sonnet",
+    "cost": "$1.50 to $4"
+  },
+  "command": [
+    "claude",
+    "--model",
+    "sonnet",
+    "--permission-mode",
+    "default",
+    "--plugin-dir",
+    "${COURSE_PLUGIN}",
+    "--disallowedTools",
+    "AskUserQuestion",
+    "--allowedTools",
+    "mcp__plugin_wavecoord_wavecoord,Bash(wavecoord *),Bash(git *),Bash(gh *),Bash(python3 -m unittest *),Read,Grep,Glob"
+  ],
+  "timeout": 3600,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "Bring your specs",
+        "subtitle": "Lesson 5: /wavecoord:spec-import",
+        "say": "If you already write specs with GitHub Spec Kit, Amazon Kiro or OpenSpec, you do not start over. In this lesson we import a Spec Kit feature into the spec tree."
+      },
+      {
+        "title": "What an import does",
+        "bullets": [
+          "One capability, with every record as a draft.",
+          "Each record names its source file; the source is never changed.",
+          "Statements become EARS when the rewrite is mechanical; others are flagged.",
+          "None of the tools has Verify: you add it."
+        ],
+        "say": "An import writes one capability, and every record is a draft. Each record names the file it came from, and your source files are never changed. Statements are rewritten in EARS form when that is mechanical. None of these tools has Verify commands, so you add them."
+      }
+    ],
+    "outro": [
+      {
+        "title": "Kiro and OpenSpec",
+        "code": "/wavecoord:spec-import kiro\n/wavecoord:spec-import openspec\nwavecoord spec import --from kiro --dry-run",
+        "say": "Kiro and OpenSpec work the same way: run the skill with their name. The lesson page has the mapping for each tool, and the exercise uses the Kiro and OpenSpec demos."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    }
+  ],
+  "steps": [
+    {
+      "say": "This recipes project uses GitHub Spec Kit. It has a constitution, and one feature folder with a spec, a plan and tasks."
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "type": "! ls .specify/memory specs/001-scale-recipe",
+      "enter": true
+    },
+    {
+      "wait_for": "tasks.md",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "Let's ask the import skill to move it into the spec tree."
+    },
+    {
+      "type": "/wavecoord:spec-import speckit --into recipes",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)specs|spec dir|folder",
+      "timeout": 600,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "It found a clash. Spec Kit keeps its features in specs, and that is also wavecoord's spec folder. The import never writes into a folder that holds its source. There are two ways out: point wavecoord at another folder in the config, or move the Spec Kit folder. We move it, in a commit of our own."
+    },
+    {
+      "type": "! git mv specs speckit && git commit -qm 'Move the Spec Kit files to speckit/' && git push -q && git log --oneline -1",
+      "enter": true
+    },
+    {
+      "wait_for": "[0-9a-f]{7} Move",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "type": "The Spec Kit files are now in speckit/. Import them with --src speckit into the capability recipes. Import both user stories. Rewrite each flagged statement in EARS form. Verify: python3 -m unittest tests.test_scale for us-1, fr-001 and fr-002; python3 -m unittest tests.test_rounding for us-2 and fr-003. Keep the records draft for now.",
+      "enter": true
+    },
+    {
+      "say": "The skill runs the importer as a dry run, adjusts the records to our answers, and opens a plan pull request.",
+      "wait": false
+    },
+    {
+      "wait_shell": "gh pr list --state all | grep -q '^#1 '",
+      "timeout": 1500,
+      "interval": 10,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "say": "Let's review the draft. Each record says where it came from."
+    },
+    {
+      "type": "! gh pr diff 1 | grep -E '^\\+(title|Imported from|The system|When )' | head -24",
+      "enter": true
+    },
+    {
+      "wait_for": "\\+title: ",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "The user stories are now EARS statements, the functional requirements are kept, and each one names its source. The constitution became a decision record. We merge this draft."
+    },
+    {
+      "type": "! gh pr merge 1 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request #1",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Drafts never run. Approving is a separate, deliberate step: a second plan pull request."
+    },
+    {
+      "type": "Open a plan PR that sets every requirement under recipes/scale-recipe to approved and the capability recipes and the feature recipes/scale-recipe to active.",
+      "enter": true
+    },
+    {
+      "wait_shell": "gh pr list --state all | grep -q '^#2 '",
+      "timeout": 1500,
+      "interval": 10,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true
+    },
+    {
+      "type": "! gh pr merge 2 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request #2",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "type": "! wavecoord spec tree",
+      "enter": true
+    },
+    {
+      "wait_for": "recipes",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "The Spec Kit feature is now an approved spec tree, with Verify commands. Next comes wave plan, exactly as in the other lessons."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 20
+    }
+  ]
+}

@@ -129,6 +129,9 @@ def rollup(tree, nid, status=None):
     return {"done": done, "dropped": dropped, "open": len([x for x in st if x not in CLOSED]), "total": len(st)}
 
 
+NAME_COL_MAX = 40
+
+
 def tree_view(tree, root=None, status=None):
     """Nested dicts for --json, and lines for a terminal."""
     def build(nid):
@@ -141,19 +144,21 @@ def tree_view(tree, root=None, status=None):
 
     roots = [root] if root else tree.roots()
     data = [build(r) for r in roots if r in tree.nodes]
-    lines = []
+    rows = []
 
     def walk(d, depth):
         prog = ""
         if "progress" in d:
             p = d["progress"]
             prog = "  %d/%d done" % (p["done"], p["total"] - p["dropped"]) if p["total"] else ""
-        name = d["id"].rsplit("/", 1)[-1]
-        lines.append("%s%-*s %-11s %s%s" % ("  " * depth, max(1, 36 - 2 * depth), name, d["status"] or "?",
-                                             d["title"] or "", prog))
+        rows.append((depth, d["id"].rsplit("/", 1)[-1], d["status"] or "?", (d["title"] or "") + prog))
         for c in d.get("children", []):
             walk(c, depth + 1)
 
     for d in data:
         walk(d, 0)
+    # the name column (indent included) is as wide as its widest entry, up to NAME_COL_MAX
+    width = min(NAME_COL_MAX, max([2 * depth + len(name) for depth, name, _, _ in rows] or [0]))
+    lines = [("%s%-*s  %-11s %s" % ("  " * depth, max(1, width - 2 * depth), name, st, rest)).rstrip()
+             for depth, name, st, rest in rows]
     return data, lines

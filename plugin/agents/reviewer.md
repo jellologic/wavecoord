@@ -20,7 +20,7 @@ Check each item:
 5. **Execution plan.** Model, effort, `max_turns`, `budget_usd`, `timeout_min` and the provider fit the size and the risks. Long builds have time, large files have budget, a non-Anthropic profile gets smaller tasks and strict checks.
 6. **Risks.** Each relevant item of the LLM risk checklist is covered with a concrete mitigation.
 7. **Acceptance.** Each command runs from the repo root, needs no secret, and fails when the work is missing. No command that a worker can make pass by weakening a test.
-8. **Prompt.** Self-contained, imperative, names the files to change and not to change, says when to stop and report `needs_decision`, and says to commit and push.
+8. **Prompt.** Self-contained, imperative, names the files to change and not to change, says when to stop and report `needs_decision`, and says to commit (not to push: the launcher pushes, and a launched worker may not).
 9. **Safety.** No protected path in `paths` unless the plan says the user approves at merge. Class A work starts with a design task.
 
 **Spec mode** (records of the spec tree, `docs/specs.md`; your input says so). Check instead:

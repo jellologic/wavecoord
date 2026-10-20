@@ -300,6 +300,40 @@ class LocalEndToEnd(LauncherTestCase):
         self.assertEqual(len(self.prs()), 1)  # the PR from the first run is kept
         self.assertEqual(r["pr_url"], "https://example.invalid/pull/1")
 
+    def test_continue_keeps_the_exec_plan(self):
+        """A `wavecoord launch --continue` without --model ran the session on Claude Code's default model."""
+        os.environ["FAKE_CLAUDE_COMMIT"] = "1"
+        L = self.launcher()
+        L.launch(self.opts(model="haiku", effort="low", max_turns=7))
+        self.wait_state(L, "t1-1", ("reported",))
+        dump = os.path.join(self.tmp, "dump-keep.json")
+        os.environ["FAKE_CLAUDE_DUMP"] = dump
+        L.launch(self.opts(prompt="Write the report.", max_turns=12, **{"continue": True}))
+        self.wait_state(L, "t1-1", ("reported", "failed", "timed_out"))
+        argv = load(dump)["argv"]
+        flags = {f: argv[argv.index(f) + 1] for f in ("--model", "--effort", "--max-turns")}
+        self.assertEqual(flags, {"--model": "haiku", "--effort": "low", "--max-turns": "12"})
+
+    def test_continue_resumes_through_a_symlinked_worktree_path(self):
+        """The first run recorded /tmp/..., git names the worktree /private/tmp/...: the same worktree."""
+        os.environ["FAKE_CLAUDE_COMMIT"] = "1"
+        L = self.launcher()
+        rec = L.launch(self.opts())
+        self.wait_state(L, "t1-1", ("reported",))
+        f = os.path.join(os.environ["WAVECOORD_HOME"], "attempts", "demo", "t1-1", "task.json")
+        t = load(f)
+        alias = os.path.join(self.tmp, "wt-alias")
+        os.symlink(os.path.dirname(os.path.realpath(t["worktree"])), alias)
+        t["worktree"] = os.path.join(alias, os.path.basename(t["worktree"]))
+        with open(f, "w") as fh:
+            json.dump(t, fh)
+        dump = os.path.join(self.tmp, "dump-alias.json")
+        os.environ["FAKE_CLAUDE_DUMP"] = dump
+        L.launch(self.opts(prompt="Fix it.", **{"continue": True}))
+        self.wait_state(L, "t1-1", ("reported", "failed", "timed_out"))
+        argv = load(dump)["argv"]
+        self.assertEqual(argv[argv.index("--resume") + 1], rec["session_id"])
+
     # -- the session of a --continue run (0.1.5)
     def transcripts(self):
         root = os.path.join(self.home, ".claude", "projects")

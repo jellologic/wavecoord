@@ -1,0 +1,201 @@
+{
+  "title": "Lesson 7: Running waves",
+  "slug": "07-running-waves",
+  "demo": {
+    "name": "brownfield",
+    "state": "planned"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 5,
+    "real_min": 25,
+    "lead": "haiku, workers haiku",
+    "cost": "$0.10 to $0.40 (lead) plus $0.05 to $0.30 (workers)"
+  },
+  "command": [
+    "claude",
+    "--model",
+    "haiku",
+    "--permission-mode",
+    "default",
+    "--plugin-dir",
+    "${COURSE_PLUGIN}",
+    "--disallowedTools",
+    "AskUserQuestion",
+    "--allowedTools",
+    "mcp__plugin_wavecoord_wavecoord,Bash(wavecoord *),Bash(git *),Bash(gh *),Bash(python3 -m unittest *),Read,Grep,Glob"
+  ],
+  "timeout": 3600,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "Running waves",
+        "subtitle": "Lesson 7: /wavecoord:wave-run",
+        "say": "In this lesson we run a wave: what wave run picks, what the workers do, and the settings that keep a wave safe."
+      },
+      {
+        "title": "The knobs",
+        "bullets": [
+          "wip_cap: the most attempts in flight. Start with 2 or 3.",
+          "exec: model, effort, max_turns, budget_usd, timeout_min per task.",
+          "claude_flags: what an unattended worker may run.",
+          "check_cmd: your tests, run before each merge."
+        ],
+        "say": "A few settings control a wave. W I P cap limits the workers in flight. Each task's exec block sets its model, turns, budget and timeout. The host's claude flags decide what a worker may run. And the check command runs your tests before each merge."
+      }
+    ],
+    "outro": [
+      {
+        "title": "The fence, in stages",
+        "diagram": "fence",
+        "say": "The edit fence checks that a worker writes only the paths of its lease, at five points from the edit to the merge. Start in advisory mode. After a few clean waves, set push and merge to enforce, then edit. Protected paths always wait for your yes."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    }
+  ],
+  "steps": [
+    {
+      "say": "The to-do app again, with the due-dates plan merged: three tasks in two waves."
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "type": "! cat .claude/wavecoord.json",
+      "enter": true
+    },
+    {
+      "wait_for": "wip_cap",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "This is the config. One local host with two slots, a W I P cap of two, the fence in advisory mode, and the test suite as the check command. Workers may edit files, commit, and run Python."
+    },
+    {
+      "type": "! wavecoord spec show todo/due-dates/overdue/dates | sed -n '/^paths:/,/^---/p'",
+      "enter": true
+    },
+    {
+      "wait_for": "timeout_min",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "A task. It owns two paths, the module and its test. Its exec block runs it on haiku, with at most thirty turns, one dollar and twenty minutes."
+    },
+    {
+      "type": "/wavecoord:wave-run",
+      "enter": true
+    },
+    {
+      "say": "Wave run checks the coordinator, reads the ready tasks, and picks the ones whose paths do not overlap.",
+      "wait": false
+    },
+    {
+      "wait_for": "(?i)dispatch",
+      "timeout": 600,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 6,
+      "timeout": 900
+    },
+    {
+      "say": "Two tasks started. The third needs both, so it waits for the next wave."
+    },
+    {
+      "type": "! wavecoord attempts ls",
+      "enter": true
+    },
+    {
+      "wait_for": "ATTEMPT",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "type": "! git worktree list",
+      "enter": true
+    },
+    {
+      "wait_for": "wave/",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "Each worker runs in its own git worktree, on its own branch. It cannot push: when it ends, the launcher pushes the branch and the worker posts one report."
+    },
+    {
+      "type": "! wavecoord fence status",
+      "enter": true
+    },
+    {
+      "wait_for": "modes",
+      "timeout": 30,
+      "idle": 2
+    },
+    {
+      "say": "The fence is in advisory mode: a write outside the lease is a warning, not a stop."
+    },
+    {
+      "say": "Now we wait for the workers. We skip ahead.",
+      "wait": false
+    },
+    {
+      "wait_shell": "${COURSE_WAIT} idle --min 2",
+      "timeout": 2700,
+      "interval": 15,
+      "cut": true
+    },
+    {
+      "idle": 8,
+      "timeout": 900,
+      "cut": true,
+      "optional": true
+    },
+    {
+      "type": "! wavecoord attempts ls",
+      "enter": true
+    },
+    {
+      "wait_for": "reported|failed",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "say": "Both workers reported, with their turns and cost. Their branches are pushed. Opening the pull requests and merging is triage, in lesson nine."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 20
+    }
+  ]
+}

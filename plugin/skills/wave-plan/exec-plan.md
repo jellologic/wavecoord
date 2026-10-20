@@ -51,5 +51,5 @@ The worker sees the prompt, the spec and the repo, nothing from this conversatio
 3. The tests to write first.
 4. The acceptance commands, and "list each one you ran in `checks_run`".
 5. When to stop: `split_if`, an ambiguous requirement (report `needs_decision` with the question), a needed change outside `paths` (send a message to the lead).
-6. "Commit and push your branch before you end. Do not merge."
+6. "Commit your work before you end. Do not push and do not merge: the launcher pushes your branch." (A launched worker is denied `git push`; a prompt that asks for a push makes it report `blocked`.)
 7. For a turn budget: "Batch shell commands into one call. Do not read a file again that you already read." The worker rules of the launcher also tell the worker to stop, commit and write the report when fewer than 15% of its turns remain.

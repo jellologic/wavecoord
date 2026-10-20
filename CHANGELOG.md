@@ -2,7 +2,23 @@
 
 All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.json`; users stay on a version until it changes.
 
-## Unreleased
+## 0.3.0
+
+Two adversarial reviews of 0.2.0, fixed: the spec workflow (#27-#30) and the whole plugin (#32-#36). The trust boundary between workers and the lead is tighter, the refinery merges only work that should land, and the launcher, steering and hooks survive restarts, retries and stops. Some changes need action on upgrade.
+
+### Upgrading
+
+- Set the plugin option `coord_url` (it has no default now). A remote coordinator gets the token only through `coord_url` or `WAVECOORD_URL`, never from a repo's `.claude/wavecoord.json`; set one of them for `gate-check` in CI too.
+- The fence mode and `spec.verify_at_merge` count only on the default branch's `.claude/wavecoord.json`, not in the lead's working copy.
+- Task PRs may no longer change Claude Code config (any settings key, anything under `.claude/` or `.claude-plugin/`, `.mcp.json`, `CLAUDE.local.md`), in advisory mode too. Make these changes in a lead or plan PR.
+- A submodule change is a changed path: its lease must cover the submodule path itself (`vendor/sub` or `vendor/**`).
+- Agent tokens can no longer create leases, and their hot marks are literal paths. `watchdog` and `server` are reserved sender ids.
+- The spool and the lead cursor are kept per coordinator. An old `spool.jsonl` is not replayed, and a lead session starts at the head of the log.
+- `migrate-plan` needs the coordinator, `--states FILE` or `--no-coord`.
+- Requirements whose inputs have `from` change fingerprint, so their tasks are suspect once (`wavecoord spec rebase-basis`).
+- Plan changes can no longer set `in_progress`, `in_review` or `done`. In CI, `spec check --base` accepts the status writer's commits by their `Wavecoord-Status:` lines; give the `wavecoord/status` branch the same review rules as other bot branches.
+- Skills pre-approve only read-only `wavecoord` commands; the others ask each time.
+- The plugin option `project` is gone. Workers get the new `pre-merge-commit` guard in each new worktree.
 
 ### Security
 
@@ -36,8 +52,26 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - When the worker pushed its branch itself, the launcher still runs the fetch, merge-tree and E3 on it, so the report has its E4 fields and an E3 refusal fails the attempt.
 - A zipapp upload is checked against its hash before it takes the build's name; a cut transfer no longer leaves a broken build that is never uploaded again.
 
+### Added
+
+- **Setup in two commands.** `wavecoord init` sets up a repo: it writes `.claude/wavecoord.json` (or adds only the missing keys to an existing one), makes the lead token and the local host's agent token when their files are missing (never over an existing file), and on request installs the server service (`--server`), creates the spec folder (`--specs`), sets the plugin options with `claude plugin configure` (`--configure-plugin`; the token is never printed unless `--show-token`) and opens a config PR on `wavecoord/setup` (`--pr`). `--dry-run` writes nothing; `--interactive` asks on a terminal. It ends with `wavecoord doctor --quick`.
+- `wavecoord doctor` checks every prerequisite, one line each (`ok`, `warn`, `fail`) with the command that fixes it: Python, git, origin and its default branch, `gh` and its login (or a custom `pr_cmd`), the claude version and login (`claude auth status`, no model call), the plugin and its options, the config (valid, committed on the default branch), `coord_url`, the coordinator (reachable, same version, the token accepted), the token files and their modes, the hosts (the `hosts` probe; `--quick` skips it), the server service and its pinned build, and the plan store with the reason. `--json` prints the checks; the exit code is 1 when one fails.
+- The `/wavecoord:setup` skill runs doctor, explains each problem, runs `wavecoord init` after asking, re-checks and points to `/wavecoord:spec`. It pre-approves only `wavecoord doctor`, `wavecoord init`, `wavecoord status` and read-only git.
+- The quickstart starts with `wavecoord init` and `/wavecoord:setup`; the manual steps moved to its end.
+- `wavecoord lease release <task|id>` and the lead tool `lease_release`: release a stale or parked lease so the task can be dispatched again (a lost worker's lease used to hold its task for good). The triage skill uses it.
+- `wavecoord spec import --from <speckit|kiro|openspec>`: reads GitHub Spec Kit, Amazon Kiro or OpenSpec files and writes them as draft records under one capability, through the op API, so the result passes `spec check`. Statements become EARS where the rewrite is mechanical; task items with file paths become tasks with `paths` and `needs`; each record names its source file, which is never changed. It reports what needs a person (statements that are not EARS, tasks without paths, unknown sections) and a Verify warning per requirement. `--dry-run` prints the diff, `--dry-run --json` the ops for `spec_edit`; a re-import changes nothing or is refused. `docs/import.md` has the mappings and their gaps.
+- **The course** (`docs/course/`): spec-driven development with wavecoord for beginners, in eleven lessons (what SDD is, install, first spec, a new project, an existing project, importing Spec Kit, Kiro or OpenSpec, good specs, running, steering, triage and recovery), each a short page, a narrated video of a real Claude Code session and an exercise, with a choose-your-path map. `scripts/course/` has the demo projects (`demos/demos.py`: `fresh`, `brownfield` in four states, `speckit`, `kiro`, `openspec`, each with a local bare origin), a local stand-in for GitHub (`demos/bin/gh`), the lesson scripts and `build.py`, which builds the demo, records the lesson with the rig, adds title and diagram cards, cuts long waits and writes the MP4 and SRT to `dist/course/`. `build.py --validate` checks every lesson against the rig's format. The rig gains a `wait_shell` step and a `check` command, gives `shell` steps the lesson's environment, and reads token usage from the lesson's `CLAUDE_CONFIG_DIR`. The guide's triage table adds the `branch_missing` and `merge_failed` holds, and the `spec new` example in `docs/specs.md` gives the Statement a requirement needs.
+- The skill `/wavecoord:spec-import`: finds Spec Kit, Kiro, OpenSpec or free-form specs (PRDs, BMAD documents, ADRs) in the repo, shows the mapping, asks about granularity and scope, and opens one plan PR with `spec_edit`. `/wavecoord:spec` points to it when it finds such files.
+
 ### Fixed
 
+- Task prompts from `/wavecoord:wave-plan` no longer tell workers to push. A launched worker may not push (the launcher does), so such a prompt made it report `blocked`. The reviewer agent, the risk table and the watchdog nudge say the same.
+- `wavecoord init` lets workers run `git merge` and `git log`. A resolver merges the default branch into its branch, and was denied before.
+- `wavecoord attempts ls` shows costs as `$0.0097` or `$1.23`, not as raw floats.
+- `wavecoord launch --continue` keeps the earlier run's model, effort, turn and budget limits when they are not given; it ran on Claude Code's default model before.
+- `--continue` resumes the earlier session when the recorded worktree path and git's differ only by a symlink (`/tmp` and `/private/tmp` on macOS); it started a fresh session before.
+- A usage warning from Claude Code (`rate_limit_event` with status `allowed_warning`) no longer counts as a rate limit, so it does not back off the provider and hold the next wave.
+- `/wavecoord:spec` and `/wavecoord:wave-plan` write spec ops to a file for `wavecoord spec apply --dry-run`, instead of a heredoc that made Claude Code ask for permission.
 - Verify and Acceptance run on the merge of the default branch and the PR head, not on the head alone, so work merged since the branch started is in the checked tree.
 - Verification fails closed: a task or requirement record that is missing or does not parse at merge blocks with `verify_unavailable`. `verified` is recorded only when a Verify command ran.
 - A `dropped` or `on_hold` sibling no longer defers a requirement's Verify: the last merging task runs it.
@@ -126,6 +160,13 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
   - The `Stop` hook no longer tells a launched worker to push.
   - Injected text is fitted before anything is acked: a message that does not fit stays unacked, and the lead cursor moves only past the event lines that went in.
   - Hook state, the relay files and the lead cursor are per coordinator (`<state dir>/coord-<sha(url)>/`), so a second coordinator's message ids are not taken as shown.
+- **Setup** (found while writing the course).
+  - `wavecoord init` and `wavecoord doctor` put and look for host tokens where the launcher reads them, `$WAVECOORD_HOME/hosts/` when it is set (one function, `launcher.common.host_token_file`), not always `~/.wavecoord/hosts/`.
+  - `init --server` starts the service on the port of the config's `coord_url` (`serve --port`), not always on 18741; for a `coord_url` with another host it prints the `install-server --bind` command instead of widening the bind.
+  - `WAVECOORD_HOME` is the launcher's root folder but one project's state folder for the server; `docs/launcher.md` says so, and doctor's new `homes` line names both folders.
+  - A `claude --plugin-dir` session's plugin (`wavecoord@inline`) is no longer reported as not installed: doctor finds it through `CLAUDE_PLUGIN_ROOT` or `--plugin-id`, and `init --configure-plugin --plugin-id <id>` configures that id (in a `--plugin-dir` session it picks `wavecoord@inline` by itself).
+  - doctor no longer says `gh` is "not needed" when `pr_cmd`, `merge_cmd` and `pr_state_cmd` are set: the refinery's fence check, a resolver's `Lease:` line and plan PR bodies still use `gh` (`warn`; `fail` in fence merge mode `enforce`). `docs/adapters.md`, "Other forges", lists these calls.
+  - The refinery's merge order between tasks that unblock the same amount of work is the attempt that finished first, then the task id (unchanged, now documented and tested).
 
 ### Changed
 
@@ -137,6 +178,8 @@ All notable changes to wavecoord. Versions follow `plugin/.claude-plugin/plugin.
 - The lead cursor moved to `<state dir>/coord-<sha(url)>/lead-cursor.json`. After the upgrade a lead session starts at the head, without the old backlog. `wavecoord events --for lead --state-dir` takes the same base dir and finds the subdirectory from `--url`. Run one lead session per coordinator.
 - The plugin option `coord_url` must be set (it had the default `http://127.0.0.1:18741`).
 - Hints (plain messages) to a task still reach every later run of the task that has not seen them; this is now documented (`launcher.md`, "Listen and steer").
+- CLI text output (the `--json` outputs are unchanged): `attempts ls` sizes its columns to the content and shows the PR that `collect` opened; `refinery merge` adds a short detail to a blocked line (the paths outside the lease, or the report status) and drops the trailing space after `merged`; `refinery status` and `spec tree` size their name columns to the content; `plan` points to `wavecoord spec ready` / `spec waves` when the spec tree is the plan; `hint` says "within a few seconds" for a short `INBOX_POLL_S`; `gate-check` prints its verdict on stdout too, in words (`fail: 1 path outside the lease: README.md`). The refinery's fence hold detail lists the E5 paths first.
+- Docs: the README is rewritten as the front door, with an architecture diagram and a wave sequence. The new `docs/guide.md` teaches the workflow (the model, one feature from idea to merge, writing specs, safe waves, steering, triage, recovery, upgrade notes), and `docs/README.md` maps the pages. The quickstart config sets `coord_url`, which the terminal CLI needs now that nothing has a default URL.
 
 ## 0.2.0
 

@@ -105,20 +105,74 @@ def cmd_collect(args):
     return 0
 
 
+DETAIL_MAX = 100
+
+
+def short_detail(r):
+    """A short detail of a blocked refinery item for one line of text: the first line of its detail (cut at its
+    first "; " when it is long, then at DETAIL_MAX chars), else the files it names (a conflict)."""
+    lines = [ln.strip() for ln in str(r.get("detail") or "").splitlines() if ln.strip()]
+    if lines:
+        d = lines[0]
+        if len(d) > DETAIL_MAX and "; " in d:
+            d = d.split("; ", 1)[0]
+        return d if len(d) <= DETAIL_MAX else d[:DETAIL_MAX - 3].rstrip() + "..."
+    files = r.get("files") or []
+    if files:
+        return "files: %s%s" % (", ".join(files[:5]), " and %d more" % (len(files) - 5) if len(files) > 5 else "")
+    return ""
+
+
+def _merge_line(r):
+    line = "%s/%s #%s: %s" % (r["task"], r["attempt"], r["pr"], r["state"])
+    if r.get("reason"):
+        line += " " + r["reason"]
+    if r.get("state") == "blocked":
+        d = short_detail(r)
+        if d:
+            line += " (%s)" % d
+    return line
+
+
 def cmd_refinery(args):
     if args.action == "status":
         out = _show(_call("GET", "/api/refinery"), args.json)
         if not args.json:
-            for i in out.get("queue") or []:
-                print("%-24s #%-6s %-8s unblocks=%-3s %s" % ("%s/%s" % (i["task"], i["attempt"]), i["pr"], i["state"],
-                                                            i["unblocks"], i.get("reason") or ""))
+            q = out.get("queue") or []
+            w = max([len("%s/%s" % (i["task"], i["attempt"])) for i in q] + [8])
+            for i in q:
+                print(("%-*s #%-6s %-8s unblocks=%-3s %s" % (w, "%s/%s" % (i["task"], i["attempt"]), i["pr"],
+                                                            i["state"], i["unblocks"], i.get("reason") or "")).rstrip())
         return 0
     out = _show(_call("POST", "/api/refinery/merge", {"pr": args.pr, "approved_protected": args.approved_protected}),
                 args.json)
     if not args.json:
         for r in out.get("results") or []:
-            print("%s/%s #%s: %s %s" % (r["task"], r["attempt"], r["pr"], r["state"], r.get("reason") or ""))
+            print(_merge_line(r))
     return 0 if not out.get("blocked") else 1
+
+
+def spec_tree_hint(root, cfg_plan, plan):
+    """A one-line pointer to `wavecoord spec` when the working tree's plan is the spec tree: plan.adapter
+    "specs", or no adapter and spec records in the spec folder (the lead's rule, lead/base.py plan_store), or
+    an empty flat plan next to spec records. Else None. It never fails the plan command."""
+    try:
+        from wavecoord.lead.base import LeadBase
+        from wavecoord.specs import source
+        from wavecoord.specs.cli import spec_dir
+        adapter = (cfg_plan or {}).get("adapter") if isinstance(cfg_plan, dict) else None
+        d = spec_dir(root)
+        if adapter == "commands":
+            return None
+        if adapter != "specs":
+            if not LeadBase.has_records(source.read_tree(root, d)):
+                return None
+            if adapter == "builtin" and plan.validate().get("tasks"):
+                return None
+        return ("wavecoord plan: the plan of this repo is the spec tree in %s/; use `wavecoord spec ready` or"
+                " `wavecoord spec waves`" % d)
+    except Exception:  # noqa: BLE001 - only a hint
+        return None
 
 
 def cmd_plan(args):
@@ -130,6 +184,9 @@ def cmd_plan(args):
         from wavecoord.core import load_consumer_config
         cfg_plan = load_consumer_config(root).get("plan")
     plan = builtin_from_tree(root, cfg_plan)
+    hint = spec_tree_hint(root, cfg_plan, plan)
+    if hint:
+        sys.stderr.write(hint + "\n")
     try:
         if args.action == "validate":
             out = plan.validate()
@@ -179,9 +236,24 @@ def cmd_hint(args):
     if not text.strip():
         raise SystemExit("wavecoord: an empty hint")
     mid = _send_task(args.task, text.strip())
-    print("hint #%s to task %s: the running worker reads it within about %ss" % (
-        mid, args.task, int(_const("INBOX_POLL_S"))))
+    print("hint #%s to task %s: the running worker reads it %s" % (mid, args.task, within(_const("INBOX_POLL_S"))))
     return 0
+
+
+def within(seconds):
+    """When a worker reads a message, in words: `within a few seconds` for a short (or sub-second) poll, else
+    `within about 4.5s`, `within about 5s` or `within about 2m`."""
+    try:
+        s = float(seconds)
+    except (TypeError, ValueError):
+        return "soon"
+    if s < 3:
+        return "within a few seconds"
+    if s < 10 and s != int(s):
+        return "within about %.1fs" % s
+    if s < 120:
+        return "within about %ds" % round(s)
+    return "within about %dm" % round(s / 60.0)
 
 
 def cmd_steer(args):
@@ -190,6 +262,20 @@ def cmd_steer(args):
         raise SystemExit("wavecoord: steer model needs a model name")
     mid = _send_task(args.task, action_body(args.action, args.model, args.note))
     print("steer #%s to task %s: %s%s" % (mid, args.task, args.action, " " + args.model if args.model else ""))
+    return 0
+
+
+def cmd_lease(args):
+    from wavecoord.core import ApiError
+    from wavecoord.mcp import pick_lease
+    leases = _call("GET", "/api/leases").get("leases") or []
+    lid = int(args.target) if args.target.isdigit() else None
+    try:
+        l = pick_lease(leases, lid, None if lid is not None else args.target, args.force)
+    except ApiError as e:
+        raise SystemExit("wavecoord: %s" % e)
+    _call("POST", "/api/leases/%d/release" % l["id"], {"reason": args.reason or "released by the lead"})
+    print("released lease %s of task %s (was %s); the task can be dispatched again" % (l["id"], l["task"], l["state"]))
     return 0
 
 
@@ -235,6 +321,13 @@ def register(sub):
     sp.add_argument("model", nargs="?", help="model: the model to switch to")
     sp.add_argument("--note", help="a hint the worker reads with the action")
     sp.set_defaults(func=cmd_steer)
+
+    sp = sub.add_parser("lease", help="release a stale or parked lease so its task can be dispatched again")
+    sp.add_argument("action", choices=["release"])
+    sp.add_argument("target", help="a lease id or a task id")
+    sp.add_argument("--reason", help="why (logged with lease.release)")
+    sp.add_argument("--force", action="store_true", help="also an active lease (a worker holds it; prefer steer stop)")
+    sp.set_defaults(func=cmd_lease)
 
     sp = sub.add_parser("plan", help="read the built-in plan store of the working tree (offline)")
     sp.add_argument("action", choices=["validate", "ready", "get", "graph"])

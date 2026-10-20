@@ -16,6 +16,8 @@ import re
 
 # api_retry error categories that mean the account or the API is throttled.
 THROTTLE_ERRORS = ("rate_limit", "overloaded")
+# rate_limit_event statuses that still let the session run ("allowed_warning": past a usage threshold).
+RATE_OK = ("allowed", "allowed_warning")
 THROTTLE_RE = re.compile(r"rate.?limit|overloaded|\b(429|529)\b", re.I)
 LOOP_N = 3  # the same tool calls in this many assistant messages in a row is a loop
 FAIL_N = 3  # the same command failing this many times in a row (no success and no edit in between)
@@ -115,7 +117,7 @@ class StreamStats(object):
             ev = {k: info.get(k) for k in ("status", "resetsAt", "rateLimitType", "utilization",
                                             "overageStatus") if k in info}
             self.rate_limits.append(ev)
-            if (info.get("status") or "allowed") != "allowed":
+            if (info.get("status") or "allowed") not in RATE_OK:
                 notable.append(("rate_limit", ev))
         elif t == "assistant":
             if e.get("parent_tool_use_id") is None:
@@ -248,7 +250,7 @@ class StreamStats(object):
         n = len([r for r in self.api_retries if r.get("error") in THROTTLE_ERRORS])
         if n:
             why.append("api_retry:%d" % n)
-        if [r for r in self.rate_limits if (r.get("status") or "allowed") != "allowed"]:
+        if [r for r in self.rate_limits if (r.get("status") or "allowed") not in RATE_OK]:
             why.append("rate_limit_event")
         if self.stop_failures:
             why.append("stop_failure")

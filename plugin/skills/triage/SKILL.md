@@ -8,6 +8,7 @@ allowed-tools:
   - mcp__plugin_wavecoord_wavecoord__inbox
   - mcp__plugin_wavecoord_wavecoord__ack
   - mcp__plugin_wavecoord_wavecoord__send
+  - mcp__plugin_wavecoord_wavecoord__lease_release
   - mcp__plugin_wavecoord_wavecoord__attempts
   - mcp__plugin_wavecoord_wavecoord__attempt_get
   - mcp__plugin_wavecoord_wavecoord__plan_get
@@ -65,7 +66,7 @@ Details and the retry rules: [actions.md](actions.md).
 | Notice `handoff` | Note it; act only when the attempt then fails |
 | Notice `progress` (a running worker's digest) | Nothing, unless it shows the worker off its task: then steer (actions.md, "Steer a running worker") |
 | Notice `stuck` (`loop`, `failing`, `waiting`, `budget`, `quiet`) | Steer by `auto_steer` of `config` (actions.md, "Steer a running worker") |
-| `lease.stale` (by `watchdog` or TTL) | The worker is idle. Check `attempt_get`; send a message, or steal and redispatch after you tell the user |
+| `lease.stale` (by `watchdog` or TTL) | The worker is idle. Check `attempt_get`; send a message; if the worker is gone (attempt `lost`), `lease_release` the task's stale lease and redispatch, after you tell the user |
 | Refinery hold `report_not_done` | The report is `failed`, `blocked` or `needs_decision` but the branch has a PR. Handle it by its report status (rows above); the refinery never merges it. To retry, continue the attempt or abandon it (actions.md, "Retry an attempt that has a PR") |
 | Refinery hold `held` | The task is `dropped`, `on_hold` or `draft` on the default branch (or not in the flat plan). Ask the user: close the PR (actions.md, "Retry an attempt that has a PR"), or restore the task with `/wavecoord:revise` |
 | Refinery hold `unavailable` | A check could not run (git, a command, the plan). Report the detail; the next `refinery_merge` tries again |

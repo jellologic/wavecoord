@@ -77,6 +77,15 @@ Environment:
                            while the transcript stays under the resumed id
   FAKE_CLAUDE_STDIN_LOG=<p>  with --input-format stream-json: append every stdin line after the prompt
 
+Setup commands (for `wavecoord doctor` and `init`; no model, like the real ones):
+  claude auth status [--json]       {"loggedIn", "authMethod"}; logged in unless FAKE_CLAUDE_LOGGED_IN=0
+                                    (then exit 1)
+  claude plugin list --json         the JSON file $FAKE_CLAUDE_PLUGINS, else []
+  claude plugin configure <id> --json          {"pluginId", "inputs", "configured", "unconfigured"} from
+                                    the JSON file $FAKE_CLAUDE_PLUGIN_OPTIONS ({option: value}; absent: none set)
+  claude plugin configure <id> --values-stdin  merges the stdin object into that file
+                                    (each configure call appends its arguments to $FAKE_CLAUDE_CONFIGURE_LOG)
+
 --input-format stream-json (as the launcher runs workers): the first stdin line is the prompt, a
 user message. Later lines are read in a thread while the run goes on: a control_request gets a
 control_response on stdout (get_context_usage answers percentage 42); a user message is "read".
@@ -416,7 +425,46 @@ def run_pre_tool_use(plugin_dir, tool, file_path, session_id):
     return "allow", reasons
 
 
+def setup_command(argv):
+    """`auth status`, `plugin list`, `plugin configure`: -> exit code, or None for a normal run."""
+    if argv[:2] == ["auth", "status"]:
+        on = os.environ.get("FAKE_CLAUDE_LOGGED_IN", "1") != "0"
+        print(json.dumps({"loggedIn": on, "authMethod": "claude.ai" if on else "none"}))
+        return 0 if on else 1
+    if argv[:2] == ["plugin", "list"]:
+        path = os.environ.get("FAKE_CLAUDE_PLUGINS")
+        print(open(path).read() if path and os.path.isfile(path) else "[]")
+        return 0
+    if argv[:2] == ["plugin", "configure"] and len(argv) > 2:
+        path = os.environ.get("FAKE_CLAUDE_PLUGIN_OPTIONS")
+        opts = {}
+        if path and os.path.isfile(path):
+            with open(path) as f:
+                opts = json.load(f)
+        names = ["coord_url", "token", "lead"]
+        log = os.environ.get("FAKE_CLAUDE_CONFIGURE_LOG")
+        if log:
+            with open(log, "a") as f:
+                f.write(" ".join(argv[2:]) + "\n")
+        if "--values-stdin" in argv:
+            opts.update(json.loads(sys.stdin.read()))
+            if path:
+                with open(path, "w") as f:
+                    json.dump(opts, f)
+            print("Saved options for %s" % argv[2])
+            return 0
+        print(json.dumps({"pluginId": argv[2], "inputs": {k: ("" if k == "token" else str(opts.get(k, "")))
+                                                           for k in names},
+                          "configured": [k for k in names if opts.get(k) not in (None, "")],
+                          "unconfigured": [k for k in names if opts.get(k) in (None, "")]}))
+        return 0
+    return None
+
+
 def main(argv):
+    rc = setup_command(argv)
+    if rc is not None:
+        return rc
     args = parse(argv)
     if args.version:
         print(VERSION)

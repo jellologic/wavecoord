@@ -1,0 +1,183 @@
+{
+  "title": "Lesson 0: What SDD is, and how wavecoord does it",
+  "slug": "00-what-is-sdd",
+  "demo": {
+    "name": "fresh"
+  },
+  "plugin": "dir",
+  "server": true,
+  "estimate": {
+    "video_min": 4,
+    "real_min": 3,
+    "lead": "haiku",
+    "cost": "$0 (no prompt is sent)"
+  },
+  "command": [
+    "claude",
+    "--model",
+    "haiku",
+    "--permission-mode",
+    "default",
+    "--plugin-dir",
+    "${COURSE_PLUGIN}"
+  ],
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "What SDD is, and how wavecoord does it",
+        "subtitle": "Lesson 0 of the wavecoord course",
+        "say": "Welcome to the wavecoord course. This first lesson has no code. It explains the idea behind everything else: spec-driven development, or SDD, and how wavecoord does it."
+      },
+      {
+        "title": "The problem",
+        "bullets": [
+          "One agent and a chat work well for a small change.",
+          "Many agents at once guess, overlap and drift.",
+          "Nobody can say when the work is done.",
+          "Vague requests cost: ambiguous requirements cut agent pass rates by about 7 points."
+        ],
+        "say": "When you ask Claude for a small change, a chat is fine. You watch it, and you correct it. Now picture five agents working at once. Each one guesses what you meant. Two of them edit the same file. Nobody can say when the work is done. Research on coding agents agrees: unclear requirements make agents fail more often."
+      },
+      {
+        "title": "Specs are the source of truth",
+        "bullets": [
+          "You write down what must be true, before any code.",
+          "The spec lives in git, next to the code, and changes only by pull request.",
+          "Agents build from the spec. Checks prove the result against it.",
+          "Keep it small: specify the next feature, not the whole world."
+        ],
+        "say": "Spec-driven development turns this around. First you write down what must be true. That is the spec. It lives in git, next to the code, and it changes only through a pull request that you review. Agents build from the spec, and checks prove the result against it. Keep it small. You specify the next feature, not the whole product."
+      },
+      {
+        "title": "The spec tree",
+        "diagram": "tree",
+        "say": "In wavecoord the spec is a tree of small Markdown files. A capability is a product area. A feature is one behaviour a user can see. A requirement is one rule that a test can check. A task is the work for one agent: the files it may change, its model and budget, and its prompt."
+      },
+      {
+        "title": "EARS: one testable sentence",
+        "code": "The <system> shall <response>.\nWhen <trigger>, the <system> shall <response>.\nWhile <state>, the <system> shall <response>.\nIf <condition>, then the <system> shall <response>.\nWhere <feature>, the <system> shall <response>.",
+        "say": "Each requirement has one statement in a form called EARS. It is one sentence, with the word shall exactly once. When an item is added with a due date, the store shall save the date. One behaviour, and a response you can measure."
+      },
+      {
+        "title": "Scenarios and Verify",
+        "bullets": [
+          "Scenarios: Given, When, Then. The main path and the failure path.",
+          "Verify: commands that fail today and pass when the work is done.",
+          "The merge queue runs Verify itself. The agent never grades its own work."
+        ],
+        "say": "Each requirement also has scenarios, in Given, When, Then form. And it has Verify: commands that fail today, and pass only when the work is done. wavecoord runs them again before it merges, so an agent never grades its own work."
+      },
+      {
+        "title": "Waves",
+        "diagram": "waves",
+        "say": "Tasks say which files they own, and which other tasks they need. From that, wavecoord computes waves. Tasks in the same wave touch different files and need nothing from each other, so they run at the same time. You never write the waves by hand."
+      },
+      {
+        "title": "A lead and its workers",
+        "diagram": "lead-workers",
+        "say": "Your own Claude Code session is the lead. It plans, starts workers and merges. Each worker is another Claude Code, running alone in its own git worktree, with a lease on its files. A small coordinator hands out the leases and records every event."
+      },
+      {
+        "title": "Why git",
+        "bullets": [
+          "The plan is files on your default branch: reviewed like code.",
+          "Every coordination event is a commit on the coord/log branch.",
+          "Anything can be undone: revert a plan PR, or roll the log back."
+        ],
+        "say": "Everything lives in git. The plan is files on your default branch. Every coordination event is a commit on a branch called coord log. So you can always see what happened, and undo it."
+      },
+      {
+        "title": "Other SDD tools",
+        "bullets": [
+          "GitHub Spec Kit: a constitution, then specify, plan, tasks and implement.",
+          "Amazon Kiro: requirements in EARS, a design and tasks, run in waves.",
+          "OpenSpec: living specs plus change proposals with deltas.",
+          "wavecoord adds parallel workers, leases, a merge queue and checks it runs itself.",
+          "Already use one? Lesson 5 imports its files."
+        ],
+        "say": "wavecoord is not the only SDD tool. GitHub Spec Kit, Amazon Kiro and OpenSpec all write specs before code, and each does it well. wavecoord's focus is running many workers safely in parallel: leases, a merge queue, and checks it runs itself. If you already use one of them, lesson five shows how to import your files."
+      }
+    ],
+    "outro": [
+      {
+        "title": "Next: install wavecoord",
+        "bullets": [
+          "Lesson 1: install the plugin and the CLI, then check the setup.",
+          "New project: lessons 2 and 3. Existing code: lessons 2 and 4.",
+          "Spec Kit, Kiro or OpenSpec: lesson 5. Then everyone: lessons 6 to 10."
+        ],
+        "say": "That is the whole idea. Next, lesson one installs wavecoord. Then pick your path: a new project, existing code, or another SDD tool."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    }
+  ],
+  "steps": [
+    {
+      "say": "Here is Claude Code, with the wavecoord plugin loaded."
+    },
+    {
+      "type": "/wavecoord:",
+      "enter": false
+    },
+    {
+      "wait_for": "wavecoord:setup",
+      "timeout": 20,
+      "idle": 1.5
+    },
+    {
+      "say": "Type a slash and wavecoord, and you see its skills. Setup checks your install. Spec writes requirements. Spec import brings in files from other tools. Wave plan, wave run, triage, revise, resolve and coord status run the work. You will use each of them in this course.",
+      "wait": false
+    },
+    {
+      "pause": 1.5
+    },
+    {
+      "key": "down",
+      "repeat": 8,
+      "gap": 1.7
+    },
+    {
+      "pause": 2.5
+    },
+    {
+      "key": "backspace",
+      "repeat": 11,
+      "gap": 0.05
+    },
+    {
+      "idle": 1,
+      "timeout": 10,
+      "optional": true
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 20
+    }
+  ]
+}

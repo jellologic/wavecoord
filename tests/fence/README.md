@@ -66,20 +66,20 @@ Each defect is a small patch (a monkeypatch of one function or constant) on the 
 | D23 | The override journal flush removes the whole batch on a deduplicated ack (the first send was logged, its answer lost, and the retry with the same key carries more entries) | override log, and the table test `journal_retry_check` (0.1.3) |
 | D24 | A task PR that changes the lead config (`fence`, `merge_cmd`, `providers`, `hosts[].claude_flags`, the settings hook keys, a `hooks/hooks.json`) passes the merge check | the table test `config_change_check` (0.1.4; design section 8) |
 | D25 | A task PR that changes the spec tree (`spec.dir`) passes the merge check | the table test `spec_change_check` (P8; design section 8.1) |
-| D26 | A PR body with two `Lease:` lines (or none) skips the config and spec checks | the table test `config_change_check` (0.2.1; design section 8) |
-| D27 | The 0.2.0 lead config keys: a task PR that changes `pr_cmd`, `coord_url`, `hosts[].prepare_cmd` or `hosts[].ssh` passes the merge check | the table test `config_change_check` (0.2.1; design section 8) |
-| D28 | `spec.dir` not normalized: with `./specs` no path is under the tree | the table test `spec_change_check` (0.2.1; design section 8.1) |
-| D29 | The spec dir only from the base side: an edit of a tree that the base side moved passes | the table test `spec_change_check` (0.2.1; design section 8.1) |
-| D30 | Spec paths compared case-sensitively: `SPECS/x` passes | the table test `spec_change_check` (0.2.1; design section 8.1) |
-| D31 | Lead-config paths matched by exact case at the root only: `.claude/Settings.json`, `plugin/Hooks/hooks.json` and a nested `pkg/.claude/settings.json` pass | the table test `config_change_check` (0.2.1; design section 8) |
-| D32 | The settings rule as a list of five keys: `permissions`, `statusLine`, `apiKeyHelper`, `.mcp.json` and `.claude/agents/` pass | the table test `config_change_check` (0.2.1; design section 8) |
-| D33 | Diffs that honor `submodule.<name>.ignore` and `diff.ignoreSubmodules`: a gitlink change is no path at E2, E3 and E5 | the table test `submodule_check` (0.2.1; design section 3.2) |
-| D34 | E1 checks a file of a nested repo (a submodule) by the nested repo's own path, so `src/**` covers `vendor/sub/src/x` | the table test `nested_repo_check` (0.2.1; design section 3.6) |
-| D35 | Protected local folders compared case-sensitively: `~/.CLAUDE/settings.json` passes on a folding disk | the table test `protected_case_check` (0.2.1; design section 3.6; the fold probe is patched on a case-sensitive disk) |
-| D36 | The override journal sent in batches by count: a journal of long entries never fits one request (413), and E3 refuses forever | the table test `journal_size_check` (0.2.1; design section 4.4) |
-| D37 | The pre-push guard reads a git error as "no paths" and passes in enforce mode | the table test `push_git_error_check` (0.2.1; design section 3.2) |
-| D38 | An agent token can add a wildcard hot mark (`**`) | the agent step (`widen`) and the table test (0.2.1; design section 2.3) |
-| D39 | An agent token can claim a lease the lead never granted, or resume one with other grants | the agent step (`widen`) and the table test (0.2.1; design section 2.3) |
+| D26 | A PR body with two `Lease:` lines (or none) skips the config and spec checks | the table test `config_change_check` (0.3.0; design section 8) |
+| D27 | The 0.2.0 lead config keys: a task PR that changes `pr_cmd`, `coord_url`, `hosts[].prepare_cmd` or `hosts[].ssh` passes the merge check | the table test `config_change_check` (0.3.0; design section 8) |
+| D28 | `spec.dir` not normalized: with `./specs` no path is under the tree | the table test `spec_change_check` (0.3.0; design section 8.1) |
+| D29 | The spec dir only from the base side: an edit of a tree that the base side moved passes | the table test `spec_change_check` (0.3.0; design section 8.1) |
+| D30 | Spec paths compared case-sensitively: `SPECS/x` passes | the table test `spec_change_check` (0.3.0; design section 8.1) |
+| D31 | Lead-config paths matched by exact case at the root only: `.claude/Settings.json`, `plugin/Hooks/hooks.json` and a nested `pkg/.claude/settings.json` pass | the table test `config_change_check` (0.3.0; design section 8) |
+| D32 | The settings rule as a list of five keys: `permissions`, `statusLine`, `apiKeyHelper`, `.mcp.json` and `.claude/agents/` pass | the table test `config_change_check` (0.3.0; design section 8) |
+| D33 | Diffs that honor `submodule.<name>.ignore` and `diff.ignoreSubmodules`: a gitlink change is no path at E2, E3 and E5 | the table test `submodule_check` (0.3.0; design section 3.2) |
+| D34 | E1 checks a file of a nested repo (a submodule) by the nested repo's own path, so `src/**` covers `vendor/sub/src/x` | the table test `nested_repo_check` (0.3.0; design section 3.6) |
+| D35 | Protected local folders compared case-sensitively: `~/.CLAUDE/settings.json` passes on a folding disk | the table test `protected_case_check` (0.3.0; design section 3.6; the fold probe is patched on a case-sensitive disk) |
+| D36 | The override journal sent in batches by count: a journal of long entries never fits one request (413), and E3 refuses forever | the table test `journal_size_check` (0.3.0; design section 4.4) |
+| D37 | The pre-push guard reads a git error as "no paths" and passes in enforce mode | the table test `push_git_error_check` (0.3.0; design section 3.2) |
+| D38 | An agent token can add a wildcard hot mark (`**`) | the agent step (`widen`) and the table test (0.3.0; design section 2.3) |
+| D39 | An agent token can claim a lease the lead never granted, or resume one with other grants | the agent step (`widen`) and the table test (0.3.0; design section 2.3) |
 
 ## 3. Table tests (`test_fence_points.py`)
 

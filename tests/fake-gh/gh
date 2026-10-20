@@ -2,7 +2,8 @@
 """A fake `gh` for tests: `gh pr create|view|edit|merge`, against the repo's origin. Stdlib only.
 
   gh pr view <n|url|branch> --json body
-                                      prints {"body", "baseRefName", "headRefName", "state", "mergedAt", "url", ...}
+                                      prints {"body", "baseRefName", "headRefName", "headRefOid", "state",
+                                      "mergedAt", "url"} (headRefOid: the head branch's commit on origin)
                                       (state OPEN, MERGED or CLOSED; a test may set "state" in the file)
   gh pr edit <n|url> --body-file F    replaces the PR body
 
@@ -13,7 +14,10 @@
       fails unless origin's B is at <sha>; merges B into the base in a temp clone of
       origin (git merge --no-ff) and pushes the base; fails on a conflict
 
-$FAKE_GH_STATE is a JSON file {"prs": [...], "calls": [...]}."""
+  gh auth status                      exit 0, or 1 ("not logged in") with FAKE_GH_AUTH=0
+  gh --version                        prints a version line
+
+$FAKE_GH_STATE is a JSON file {"prs": [...], "calls": [...]}; `auth status` and `--version` do not need it."""
 
 import json
 import os
@@ -52,6 +56,15 @@ def number(st, arg):
 
 
 def main(argv):
+    if argv[:2] == ["auth", "status"]:
+        if os.environ.get("FAKE_GH_AUTH", "1") == "0":
+            sys.stderr.write("You are not logged into any GitHub hosts. To log in, run: gh auth login\n")
+            return 1
+        print("github.com\n  Logged in to github.com account fake (keyring)")
+        return 0
+    if argv[:1] == ["--version"]:
+        print("gh version 0.0.0 (fake-gh)")
+        return 0
     path = os.environ["FAKE_GH_STATE"]
     st = load(path)
     st["calls"].append(argv)
@@ -79,7 +92,13 @@ def main(argv):
                 return 1
             pr = st["prs"][n - 1]
             if argv[1] == "view":
-                print(json.dumps({"body": pr["body"], "baseRefName": pr["base"], "headRefOid": pr.get("sha", ""),
+                sha = pr.get("sha", "")
+                if not sha and pr["state"] == "open":  # as gh: the head branch's commit on origin
+                    origin = git(["remote", "get-url", "origin"], os.getcwd(), check=False).stdout.strip()
+                    ls = git(["ls-remote", origin, "refs/heads/" + pr["head"]], os.getcwd(),
+                             check=False).stdout.split() if origin else []
+                    sha = ls[0] if ls else ""
+                print(json.dumps({"body": pr["body"], "baseRefName": pr["base"], "headRefOid": sha,
                                   "headRefName": pr["head"], "state": pr["state"].upper(),
                                   "url": "https://example.invalid/pull/%d" % n,
                                   "mergedAt": pr.get("merged_at") or (

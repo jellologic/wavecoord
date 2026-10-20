@@ -10,7 +10,7 @@ import zipfile
 
 import _paths
 from wavecoord import zipapp
-from wavecoord.launcher import client, config, coord, stream
+from wavecoord.launcher import cli, client, config, coord, stream
 from wavecoord.launcher.common import LauncherError
 from wavecoord.launcher.worktrees import check_branch
 from wavecoord.launcher.wrapper import continue_cut, synthetic_report, validate_report
@@ -19,6 +19,12 @@ from wavecoord.launcher.wrapper import continue_cut, synthetic_report, validate_
 def probe(free=1, mem=8.0, ok=True, auth="logged-in", installed=True, repo_ok=True, slots=2):
     return {"ok": ok, "free": free, "active": slots - free, "slots": slots, "mem_avail_gib": mem,
             "repo_ok": repo_ok, "claude": {"installed": installed, "auth": auth}, "error": None if ok else "down"}
+
+
+class UsdTest(unittest.TestCase):
+    def test_cost_column(self):
+        self.assertEqual([cli._usd(v) for v in (0.009694669999999999, 0.35, 2, None)],
+                         ["$0.0097", "$0.35", "$2.00", "-"])
 
 
 class PlacementTest(unittest.TestCase):
@@ -73,6 +79,7 @@ class StreamTest(unittest.TestCase):
             {"type": "system", "subtype": "api_retry", "attempt": 1, "max_retries": 5, "retry_delay_ms": 10,
              "error_status": 529, "error": "overloaded"},
             {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed"}},
+            {"type": "rate_limit_event", "rate_limit_info": {"status": "allowed_warning", "utilization": 0.53}},
             {"type": "rate_limit_event", "rate_limit_info": {"status": "rejected", "rateLimitType": "five_hour"}},
             {"type": "result", "subtype": "success", "is_error": False, "num_turns": 4, "total_cost_usd": 0.5,
              "session_id": "s1", "structured_output": {"status": "done"}},
@@ -90,6 +97,13 @@ class StreamTest(unittest.TestCase):
         self.assertFalse(s.is_error)
         self.assertEqual(s.structured_output, {"status": "done"})
         self.assertEqual(s.bad_lines, 1)
+
+    def test_a_usage_warning_is_not_throttling(self):
+        s = stream.StreamStats()
+        notable = s.feed(json.dumps({"type": "rate_limit_event", "rate_limit_info": {
+            "status": "allowed_warning", "rateLimitType": "seven_day", "utilization": 0.53}}))
+        self.assertEqual(notable, [])
+        self.assertEqual(s.throttle(), [])
 
     def test_no_result_is_error(self):
         s = stream.StreamStats()

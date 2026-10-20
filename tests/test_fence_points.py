@@ -207,6 +207,16 @@ class FailureTableTest(FenceWorld):
         self.assertEqual((res["ok"], res["kind"]), (False, "violation"))
         sha = git(self.a.wt, "rev-parse", "HEAD").strip()
         self.assertEqual(self.gate(self.a, sha), 1)
+        # the human verdict on stdout (and the verdict line on stderr, a different file here)
+        out, err = io.StringIO(), io.StringIO()
+        self.assertEqual(gatecheck.run(None, self.a.task, self.a.attempt, "origin/main..%s" % sha, None,
+                                       "%s@%d" % (self.a.task, self.a.epoch), self.w.repo,
+                                       env=self.w.base_env("gate"), out=out, err=err), 1)
+        lines = out.getvalue().splitlines()
+        self.assertEqual(lines[0], "fail: 1 path outside the lease: docs/api.md; 1 path reserved by another task:"
+                                   " docs/api.md")
+        self.assertIn("  docs/api.md: foreign_exclusive", "\n".join(lines[1:]))
+        self.assertEqual(err.getvalue(), "wavecoord gate-check: " + lines[0] + "\n")
         self.reset(self.a)
 
     def test_hook_crash_denies_and_backstop(self):

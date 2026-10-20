@@ -47,7 +47,7 @@ The `wave-run` skill starts this with the Monitor tool and fills in the URL and 
 - Each stdout line is one Monitor notification.
 - The command reconnects with `Last-Event-ID` after a drop, and resumes from the cursor after a restart. A Monitor expires after at most 30 minutes; start it again, and it misses nothing.
 - The token comes from `WAVECOORD_TOKEN`, `WAVECOORD_TOKEN_FILE` or `~/.wavecoord/token`. A Bash or Monitor command does not get the sensitive plugin option. Make a lead token file with `wavecoord tokens provision --role lead --out ~/.wavecoord/token`.
-- `--json` prints the filtered events as JSON instead of lines. `--no-cursor` neither reads nor moves the cursor.
+- `--json` prints the filtered events as JSON instead of lines. `--no-cursor` neither reads nor moves the cursor; it starts at the next event unless you add `--since <seq>` (`--since 0` reads the whole log).
 - Without `--for`, `wavecoord events --follow` prints every event as JSON, as before.
 
 ## 2. Inbox injection

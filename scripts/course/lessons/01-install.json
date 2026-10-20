@@ -1,0 +1,283 @@
+{
+  "title": "Lesson 1: Install wavecoord",
+  "slug": "01-install",
+  "demo": {
+    "name": "fresh",
+    "config": false
+  },
+  "plugin": "marketplace",
+  "server": false,
+  "estimate": {
+    "video_min": 5,
+    "real_min": 15,
+    "lead": "haiku",
+    "cost": "$0.02 to $0.10 (one /wavecoord:setup)"
+  },
+  "command": [
+    "bash",
+    "--noprofile",
+    "--norc",
+    "-i"
+  ],
+  "timeout": 1800,
+  "config": {
+    "rate": 180,
+    "font_size": 20
+  },
+  "cards": {
+    "intro": [
+      {
+        "title": "Install wavecoord",
+        "subtitle": "Lesson 1: macOS and Linux",
+        "say": "In this lesson you install wavecoord, set it up in a repo, and check that everything works."
+      },
+      {
+        "title": "What you need",
+        "bullets": [
+          "Claude Code, logged in.",
+          "git and python3 (3.9 or later).",
+          "A repo with an origin remote and a default branch.",
+          "The GitHub CLI gh, logged in once with gh auth login."
+        ],
+        "say": "You need four things. Claude Code, logged in. Git and Python three. A repo with an origin remote. And the GitHub command line, gh, logged in once with gh auth login."
+      }
+    ],
+    "outro": [
+      {
+        "title": "When something fails",
+        "bullets": [
+          "Run wavecoord doctor: every fail line has a fix line.",
+          "not configured: wavecoord init adds coord_url.",
+          "unreachable: start the coordinator (wavecoord init --server).",
+          "plugin options: restart Claude Code after init --configure-plugin."
+        ],
+        "say": "If something fails, run wavecoord doctor. Every problem has a fix line under it. The lesson page lists the common failures and what to do about each."
+      }
+    ]
+  },
+  "setup": [
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 20,
+      "idle": 1
+    }
+  ],
+  "steps": [
+    {
+      "say": "We start in a terminal, in a small demo repo. First, the tools wavecoord needs."
+    },
+    {
+      "type": "claude --version && git --version && python3 --version",
+      "enter": true
+    },
+    {
+      "wait_for": "Python 3",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "say": "Claude Code, git and Python are here. Next, gh."
+    },
+    {
+      "type": "gh auth status",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)logged in",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "say": "This demo has no GitHub account. Its origin is a folder on this machine, and gh talks to a local stand-in for GitHub, so the commands look the same as on GitHub."
+    },
+    {
+      "type": "git remote -v",
+      "enter": true
+    },
+    {
+      "wait_for": "origin",
+      "timeout": 20,
+      "idle": 1.5
+    },
+    {
+      "say": "Now the plugin. We start Claude Code, and add the wavecoord marketplace."
+    },
+    {
+      "type": "claude --model haiku --permission-mode default",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)trust this folder|Claude Code v",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "key": "down",
+      "when": "(?i)trust this folder"
+    },
+    {
+      "key": "enter",
+      "when": "❯ Yes, I trust"
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 45,
+      "idle": 3
+    },
+    {
+      "type": "/plugin marketplace add jellologic/wavecoord",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)success|added|already",
+      "timeout": 180,
+      "idle": 3
+    },
+    {
+      "say": "The marketplace is added. Now install the plugin from it."
+    },
+    {
+      "type": "/plugin install wavecoord@wavecoord",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)scope|installed|restart",
+      "timeout": 120,
+      "idle": 2
+    },
+    {
+      "key": "enter",
+      "when": "(?i)user scope|install for you|❯ Install"
+    },
+    {
+      "wait_for": "(?i)installed|restart",
+      "timeout": 120,
+      "idle": 3,
+      "optional": true
+    },
+    {
+      "say": "Installed. Claude Code loads a new plugin when it starts, so we exit for now."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "say": "Next, the wavecoord command line. It is the same program as the plugin. We put a copy in a folder on the PATH."
+    },
+    {
+      "type": "mkdir -p ~/.local/bin && curl -fsSL -o ~/.local/bin/wavecoord https://raw.githubusercontent.com/jellologic/wavecoord/v0.3.0/plugin/bin/wavecoord",
+      "enter": true
+    },
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 120,
+      "idle": 1.5
+    },
+    {
+      "type": "chmod +x ~/.local/bin/wavecoord && wavecoord version",
+      "enter": true
+    },
+    {
+      "wait_for": "wavecoord 0\\.\\d",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "say": "Now set up this repo. wavecoord init writes the config file, makes the tokens, and sets the plugin options in Claude Code. With dash dash p r, it opens a pull request with the config. We also pass a coordinator URL, because the default port is busy on this machine. You can leave it out."
+    },
+    {
+      "type": "wavecoord init --coord-url ${COURSE_URL} --configure-plugin --pr --no-doctor",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)PR: |pull/\\d",
+      "timeout": 120,
+      "idle": 3
+    },
+    {
+      "say": "init wrote dot claude slash wavecoord dot json, made a lead token and a worker token, set the plugin options, and opened a pull request. The workers and the merge queue read the config from the default branch, so we merge it."
+    },
+    {
+      "type": "gh pr merge 1 --merge && git pull -q",
+      "enter": true
+    },
+    {
+      "wait_for": "Merged pull request",
+      "timeout": 60,
+      "idle": 2
+    },
+    {
+      "shell": "${COURSE_BUILD} --start-server"
+    },
+    {
+      "say": "On your machine, add dash dash server to init, and the coordinator runs as a service that starts at login. For this demo, we just started it in the background, on its own port."
+    },
+    {
+      "say": "Now check everything with wavecoord doctor."
+    },
+    {
+      "type": "wavecoord doctor",
+      "enter": true
+    },
+    {
+      "wait_for": "\\d+ failed, \\d+ warnings, \\d+ ok",
+      "timeout": 180,
+      "idle": 2
+    },
+    {
+      "say": "Doctor checks each prerequisite: the tools, the repo, the plugin and its options, the config, the coordinator, the tokens and the worker host. An ok line is fine. A warn or fail line has a fix line under it, with the command to run. Here, lines about the service or the host token may complain, because this recording keeps its coordinator and tokens apart from the rest of the machine. On your machine, run each fix line until nothing fails."
+    },
+    {
+      "say": "The same check runs inside Claude Code, with the setup skill. Let's start Claude again."
+    },
+    {
+      "type": "claude --model haiku --permission-mode default",
+      "enter": true
+    },
+    {
+      "wait_for": "Claude Code v",
+      "timeout": 60,
+      "idle": 3
+    },
+    {
+      "type": "/wavecoord:setup",
+      "enter": true
+    },
+    {
+      "wait_for": "(?i)doctor",
+      "timeout": 120,
+      "idle": 0.5,
+      "optional": true
+    },
+    {
+      "idle": 6,
+      "timeout": 600,
+      "cut": true
+    },
+    {
+      "say": "The setup skill ran doctor, and explained each problem in plain words. It never writes anything without asking you first."
+    },
+    {
+      "type": "/exit",
+      "enter": true
+    },
+    {
+      "wait_for": "\\$ ?$",
+      "timeout": 30,
+      "idle": 1.5
+    },
+    {
+      "type": "exit",
+      "enter": true
+    },
+    {
+      "wait_exit": 10
+    }
+  ]
+}

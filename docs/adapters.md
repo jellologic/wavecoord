@@ -4,7 +4,7 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 
 | Key | Default | Meaning |
 |---|---|---|
-| `coord_url` | `http://127.0.0.1:18741` | Server URL. `WAVECOORD_URL` and the plugin option `coord_url` take priority. A non-loopback URL here gets no user token: set it in the plugin option or `WAVECOORD_URL` (`security.md`) |
+| `coord_url` | none | Server URL for the terminal CLI and the hooks. `WAVECOORD_URL` and the plugin option `coord_url` take priority; with none of the three set, `wavecoord status` prints `not configured`. The server itself does not need it: it gives workers its own address. A non-loopback URL here gets no user token: set it in the plugin option or `WAVECOORD_URL` (`security.md`) |
 | `project` | required | Project name on the server |
 | `log_branch` | `coord/log` | Orphan branch for events |
 | `plan` | the spec tree when `spec.dir` on the default branch holds at least one valid record (a `_node.md` or a task that parses), else `{"adapter": "builtin", "dir": "plan/tasks"}` | Plan store (below). `{"adapter": "specs"}` names the spec tree (`specs.md`). Other files in that folder (an `openapi.yaml`, a README) never select it, and the working tree never counts. The `config` tool shows the store in use and why (`selected_by`). When the spec tree on the default branch cannot be read, the lead fails closed (`unavailable`) rather than fall back to `plan/tasks` (a repo whose origin has no default branch plans from `plan/tasks`); name an adapter to choose without reading it. The first plan PR that adds spec records switches the store when it merges: `spec_edit` warns (`switch:`), and `wavecoord spec migrate-plan` in that PR keeps the flat tasks and their attempts. Any other adapter (`builtin`, `commands`) ignores the spec tree: `spec_tree` and `spec_waves` say so (`plan_note`) |
@@ -14,6 +14,7 @@ A consumer repo configures wavecoord in `.claude/wavecoord.json` (git-tracked, n
 | `pr_state_cmd` | `gh pr view {pr} --json state,mergedAt,url` | How `collect` reads the state of a parked attempt's PR (below, "PR state command") |
 | `check_cmd` | none | Command the refinery runs before a merge |
 | `protected_paths_cmd` | none | Prints protected globs, one per line. A PR that touches one stops in the refinery until the user approves it in the lead session |
+| `fence` | `advisory` for every point, `ask` for `lead` | The edit fence modes: a mode word (`off`, `advisory`, `enforce`) for every point, or `{"edit", "commit", "push", "merge": <mode>, "lead": "warn" \| "ask" \| "deny"}`. Read from the default branch only (`hooks.md`, "The edit fence"; `guide.md`, section 4) |
 | `providers` | none | Provider profiles for workers: `{<name>: {env_file, models?, cost_basis?}}`. See `providers.md` |
 | `default_provider` | `anthropic` | Profile when the task and the launch name none |
 | `wip_cap` | number of slots | Maximum attempts in flight |
@@ -90,3 +91,13 @@ Each change is logged once (idempotency keys `pr-merged:<task>/<n>`, `pr-abandon
 ## Merge command
 
 `merge_cmd` runs on the lead machine in the consumer repo root, one PR at a time (the refinery loop). In an array command these placeholders are replaced: `{pr}` (the PR number, from the last `/pull/<n>` of the URL), `{pr_url}`, `{sha}` (the head the refinery checked), `{branch}`, `{base}`, `{task}`, `{attempt}`. An array with neither `{pr}` nor `{pr_url}` gets the PR number as the last argument. Every command also gets `WAVECOORD_PR`, `WAVECOORD_PR_URL`, `WAVECOORD_SHA`, `WAVECOORD_BRANCH`, `WAVECOORD_BASE`, `WAVECOORD_TASK` and `WAVECOORD_ATTEMPT`. Use the sha (for example `--match-head-commit`), so a push after the checks cannot merge unchecked. `check_cmd` runs before it in a temporary detached worktree of that sha, with the same variables. `protected_paths_cmd` runs in the repo root; the files that the PR changes are matched against its globs.
+
+## Other forges
+
+`pr_cmd`, `merge_cmd` and `pr_state_cmd` cover opening, merging and reading the state of a PR. Three calls still use the GitHub CLI `gh` directly, on the lead machine, whatever these keys say:
+
+- The refinery's fence check (E5) reads the PR body with `gh pr view <pr> --json body`, for the `Lease:` line. When it cannot, fence merge mode `advisory` notes `cannot read the PR body` on the merge, and `enforce` holds every merge (`fence`). `wavecoord gate-check <pr number or URL>` reads it the same way; for another forge, pass the range and the body (`gate-check origin/main..<sha> --pr-body <file>`).
+- After a resolver run, `collect` sets the PR's `Lease:` line to the resolver's lease with `gh pr view` and `gh pr edit`. Without `gh`, the result has `pr_lease_error` and the refinery then sees a stale lease: edit the line by hand.
+- A later `plan_edit` or `spec_edit` on an existing plan branch rewrites its PR body with `gh pr edit` (`pr_body_error` without it). The commit is pushed either way.
+
+So for another forge, keep `gh` installed and logged in for these calls if your forge serves the GitHub API, or set the fence merge mode to `advisory` or `off` and fix the `Lease:` lines by hand. `wavecoord doctor` reports `gh` as `warn` (`fail` in merge mode `enforce`) when the three keys are set but `gh` cannot run.
