@@ -88,6 +88,8 @@ Merge and look at the waves:
 ! wavecoord spec waves
 ```
 
+When several tasks change one file (here `todo/cli.py`, which every command goes through), the planner chains them and each wave holds one task. That is common in an existing project. Split such a file first (lesson 3 gives each command its own module), and later features can run side by side.
+
 ## Common mistakes
 
 - **Specifying the existing code.** Describe only the behaviour you are adding or changing.

@@ -63,7 +63,7 @@ For each requirement (templates in [spec-templates.md](spec-templates.md)):
 
 ## 4. Check with a reviewer
 
-Write your ops as JSON to a file in your scratchpad with the Write tool (not a heredoc: a shell command full of quotes and braces makes Claude Code ask for permission), then run `wavecoord spec apply <file> --dry-run --ref origin/<default>` (or `--ref origin/<plan branch>` when you add to a plan branch) to see the diff against what `spec_edit` will change, or check them in your head against [spec-templates.md](spec-templates.md). Then start one `wavecoord:reviewer` subagent in spec mode with the records and the user's goal. Fix every `must` finding.
+Write your ops as JSON to a file in your scratchpad with the Write tool and change it with the Edit tool (not a heredoc or a script: a shell command full of quotes and braces makes Claude Code ask for permission), then run `wavecoord spec apply <file> --dry-run --ref origin/<default>` (or `--ref origin/<plan branch>` when you add to a plan branch) to see the diff against what `spec_edit` will change, or check them in your head against [spec-templates.md](spec-templates.md). Then start one `wavecoord:reviewer` subagent in spec mode with the records and the user's goal. Fix every `must` finding.
 
 ## 5. Open the plan PR
 

@@ -174,7 +174,7 @@
       "idle": 2
     },
     {
-      "say": "Each task owns a module and its test: the store task owns the store and a new test file. Tasks in the same wave never share a file. That is what lets them run at the same time."
+      "say": "Each task lists the files it may change: a module and its test. Two tasks that change the same file never run at the same time."
     },
     {
       "type": "! gh pr merge 2 --merge && git pull -q",
@@ -193,6 +193,14 @@
       "wait_for": "wave 1",
       "timeout": 60,
       "idle": 2
+    },
+    {
+      "when": "max width: 1\\b",
+      "say": "Here the tasks share the command line file, so the planner chained them: one task per wave. That is common in an existing project. Split such a file first, and later features can run side by side."
+    },
+    {
+      "when": "max width: [2-9]",
+      "say": "Tasks that change different files share a wave and run side by side. Tasks that share a file are chained."
     },
     {
       "say": "The plan is merged and ready to run. Running it is lesson seven."
