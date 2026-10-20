@@ -17,6 +17,7 @@ States of `brownfield` (the spec tree is merged on main, as after a plan PR):
 
 - `plain`: no specs (the default);
 - `planned`: the feature todo/due-dates with two approved requirements and three planned tasks in two waves;
+- `watch`: `planned` with sonnet workers, so they still run while the lesson steers them;
 - `flawed`: `planned` with mistakes to fix: overlapping paths, a weak Acceptance, a vague draft requirement,
   and a requirement changed after planning (a suspect task);
 - `triage`: `planned`, plus a CHANGELOG.md that the two wave-1 tasks share and that is a protected path:
@@ -43,6 +44,8 @@ GIT_DATE = "2026-10-01T09:00:00+00:00"
 WORKER_TOOLS = ("Bash(git add *),Bash(git commit *),Bash(git status *),Bash(git diff *),Bash(git log *),"
                 "Bash(python3 *)")
 HAIKU = {"model": "haiku", "effort": "low", "max_turns": 30, "budget_usd": 1, "timeout_min": 20}
+# workers that are still running a minute later, for the lesson that steers them
+SONNET = {"model": "sonnet", "effort": "medium", "max_turns": 30, "budget_usd": 2, "timeout_min": 20}
 CHECK_CMD = "python3 -m unittest discover -s tests"
 
 
@@ -351,7 +354,7 @@ TODO_CHANGELOG = """
 """
 
 
-def todo_ops(shared_changelog=False):
+def todo_ops(shared_changelog=False, exec_plan=None):
     """The due-dates feature: two requirements, three tasks in two waves (store and dates, then the CLI)."""
     due_api = {"id": "todo.store.due", "kind": "interface",
                "contract": "Store.add(text, due=None) -> dict; item['due'] is an ISO date string (YYYY-MM-DD) or None"}
@@ -364,7 +367,7 @@ def todo_ops(shared_changelog=False):
 
     def task(tid, title, paths, outputs, context, acceptance, prompt, needs=(), inputs=(), size="S"):
         fields = {"title": title, "status": "planned", "paths": list(paths), "class": "C", "size": size,
-                  "exec": dict(HAIKU), "outputs": list(outputs) + files(*paths)}
+                  "exec": dict(exec_plan or HAIKU), "outputs": list(outputs) + files(*paths)}
         if shared_changelog and not needs:
             fields["shared_paths"] = ["CHANGELOG.md"]
             prompt = prompt + ["Then add one line under '## Unreleased' in CHANGELOG.md that says what you added."]
@@ -460,7 +463,8 @@ def build_brownfield(repo, port, state, with_config):
         commit(repo, config("todo", port, **extra), "Add the wavecoord config")
     if state == "plain":
         return
-    spec_apply(repo, todo_ops(shared_changelog=(state == "triage")), "Plan: due dates (todo/due-dates)")
+    spec_apply(repo, todo_ops(shared_changelog=(state == "triage"), exec_plan=SONNET if state == "watch" else None),
+               "Plan: due dates (todo/due-dates)")
     if state == "flawed":
         base = "specs/todo/due-dates"
         # a vague draft: no EARS form, no scenario, no Verify (check allows it while it is a draft)
@@ -981,7 +985,7 @@ def build_openspec(repo, port, state, with_config):
 
 DEMOS = {
     "fresh": ("bookmarks", build_fresh, ("plain",)),
-    "brownfield": ("todo", build_brownfield, ("plain", "planned", "flawed", "triage")),
+    "brownfield": ("todo", build_brownfield, ("plain", "planned", "watch", "flawed", "triage")),
     "speckit": ("recipes", build_speckit, ("plain",)),
     "kiro": ("habits", build_kiro, ("plain",)),
     "openspec": ("glossary", build_openspec, ("plain",)),

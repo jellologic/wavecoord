@@ -3,7 +3,7 @@
   "slug": "08-watching-steering",
   "demo": {
     "name": "brownfield",
-    "state": "planned"
+    "state": "watch"
   },
   "plugin": "dir",
   "server": true,
@@ -13,8 +13,8 @@
   "estimate": {
     "video_min": 6,
     "real_min": 20,
-    "lead": "haiku, workers haiku",
-    "cost": "$0.10 to $0.40 (lead) plus $0.05 to $0.30 (workers)"
+    "lead": "haiku, workers sonnet",
+    "cost": "$0.10 to $0.40 (lead) plus $0.20 to $1 (workers)"
   },
   "command": [
     "claude",
