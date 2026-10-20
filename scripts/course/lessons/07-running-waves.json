@@ -97,11 +97,11 @@
       "say": "This is the config. One local host with two slots, a W I P cap of two, the fence in advisory mode, and the test suite as the check command. Workers may edit files, commit, and run Python."
     },
     {
-      "type": "! wavecoord spec show todo/due-dates/overdue/dates",
+      "type": "! wavecoord spec show todo/due-dates/overdue/dates | sed -n '/^paths:/,/^---/p'",
       "enter": true
     },
     {
-      "wait_for": "exec",
+      "wait_for": "timeout_min",
       "timeout": 30,
       "idle": 2
     },

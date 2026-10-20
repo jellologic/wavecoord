@@ -56,7 +56,7 @@ The wave-plan skill sets these by task size (XS: 25 turns, $1, 20 min; S: 50, $2
 
 ```
 ! cat .claude/wavecoord.json
-! wavecoord spec show todo/due-dates/overdue/dates
+! wavecoord spec show todo/due-dates/overdue/dates | sed -n '/^paths:/,/^---/p'
 ```
 
 ### 2. Run the wave
